@@ -110,6 +110,10 @@ struct Application {
     /// Per-tab mute state (prefix+m). A muted tab's busy nudge + badge are suppressed so a noisy
     /// pane a diver doesn't care about stops nagging. Grows/shrinks with the tab set.
     muted: Vec<bool>,
+    /// Per-tab count of new scrollback lines produced since we last looked (output delta). Populated
+    /// by `activity_flags`; the tab bar shows it as the badge magnitude so a diver reads how hot a
+    /// pane is, not just *that* it moved.
+    grew_delta: Vec<usize>,
     /// The currently-focused search match (absolute line, col, width); recomputed on each query
     /// change / Enter and passed to draw_grid for highlighting.
     find_hit: Option<crate::render::Find>,
@@ -222,6 +226,7 @@ impl Application {
             broadcast_targets: vec![true; tab_count],
             broadcast_sel: 0,
             muted,
+            grew_delta: vec![0; tab_count],
             find_hit: None,
             find_all: Vec::new(),
             find_index: 0,
@@ -283,16 +288,19 @@ impl Application {
         self.seen_history.resize(n, usize::MAX);
         self.notified.resize(n, false);
         self.muted.resize(n, false);
+        self.grew_delta.resize(n, 0);
         let mut flags = vec![false; n];
         for (i, s) in self.app.tabs.iter().enumerate() {
             if i == self.app.active {
                 // We're looking at it now: re-baseline, don't flag, and reset any pending nudge.
                 self.seen_history[i] = s.history_len();
                 self.notified[i] = false;
+                self.grew_delta[i] = 0;
                 continue;
             }
             let len = s.history_len();
             let grew = self.seen_history[i] != usize::MAX && len > self.seen_history[i];
+            self.grew_delta[i] = len.saturating_sub(self.seen_history[i]);
             self.seen_history[i] = len;
             flags[i] = grew;
             // A muted tab is intentionally ignored: no busy badge, no OS notification. It still
@@ -567,13 +575,15 @@ impl Application {
             if live.chars().count() > 18 {
                 live = live.chars().take(18).collect::<String>() + "…";
             }
-            // An exclamation marks a backgrounded tab that has scrolled since we last sampled it; a
-            // muted tab is dimmed and shows M instead so its silence is read at a glance.
-            let flag = if activity[i] { "!" } else { "" };
+            // A magnitude badge shows how much a backgrounded tab produced since we last looked
+            // (rooted at 1 so one line displays as "!1", capped so it doesn't eat the bar); a muted
+            // tab is dimmed and shows M instead so its silence is read at a glance.
+            let delta = self.grew_delta.get(i).copied().unwrap_or(0);
+            let flag = if activity[i] { format!("!{}", delta.min(999)) } else { String::new() };
             let mute = if self.muted.get(i).copied().unwrap_or(false) { " M " } else { " " };
             // Show the user's rename if set; otherwise the plain engine id.
             let head = s.meta.name.clone().unwrap_or_else(|| s.meta.engine.clone());
-            let label = format!(" {}{} {}{}{} ", flag, head, live, mute, dot);
+            let label = format!(" {}{} {} {}{} ", flag, head, live, mute, dot);
             // Active tab: tinted by a stable hash of its host (dive context). Inactive tabs fall back
             // to the engine's own accent color so you can spot the "claude" tab from across the bar.
             let color = if active { host_color(&s.meta.host) } else { engine_accent(&s.meta.engine) };
