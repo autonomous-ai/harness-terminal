@@ -61,6 +61,7 @@ enum PaletteAction {
     Pin,
     NextPinned,
     Reconnect,
+    Destroy,
     Help,
     Quit,
 }
@@ -86,6 +87,7 @@ impl PaletteAction {
             ("pin/unpin active tab (protect from close)", Pin),
             ("jump to next pinned tab", NextPinned),
             ("force reconnect active tab (bypass backoff)", Reconnect),
+            ("kill active tab's pane (destroy remote session)", Destroy),
             ("show this help", Help),
             ("quit", Quit),
         ]
@@ -656,6 +658,32 @@ impl Application {
                 ))
             }
         }
+    }
+
+    /// Kill the active tab's pane (remote tmux/ssh/tunnel), then close the tab so the watchdog
+    /// doesn't reconnect it. The one way a fleet diver reclaims a runaway agent's resources on a
+    /// remote host from here. Local PTYs have no separate session, so it's just a close.
+    fn destroy_active(&mut self) {
+        let Some(head) = self
+            .app
+            .active_session()
+            .map(|s| s.meta.name.clone().unwrap_or_else(|| s.meta.engine.clone()))
+        else {
+            return;
+        };
+        // Destroy first, while the session object still owns the transport. A pinned tab is killed
+        // just like an unpinned one — destroy is explicit and removing resources is the point.
+        let kind = self.app.active_session().map(|s| s.kind().to_string());
+        if let Some(s) = self.app.active_session() {
+            s.destroy();
+        }
+        let note = match kind.as_deref() {
+            Some("pty") => format!("closed {head}"),
+            Some(k) => format!("killed {k} pane {head}"),
+            None => return,
+        };
+        self.flash = Some((note, std::time::Instant::now()));
+        crate::native::close_tab(&mut self.app, false);
     }
 
     /// Fork the active tab, preserving its pin state: a pinned clone (prefix+k / palette
@@ -1547,6 +1575,7 @@ impl Application {
             ("next_busy", "jump to next busy tab"),
             ("next_pinned", "jump to next pinned tab"),
             ("reconnect", "force reconnect active tab (bypass backoff)"),
+            ("destroy", "kill active tab's remote pane"),
             ("mute", "mute/unmute the active tab"),
             ("pin", "pin/unpin the active tab (protect from close)"),
             ("last_window", "flip to the previous tab"),
@@ -2251,6 +2280,7 @@ impl Application {
             Pin => self.toggle_pin_active(),
             NextPinned => self.next_pinned(),
             Reconnect => self.reconnect_active(),
+            Destroy => self.destroy_active(),
             Help => {
                 self.app.overlay = Overlay::Help;
             }
@@ -2551,6 +2581,7 @@ impl Application {
                 Some("pin") => self.toggle_pin_active(),
                 Some("next_pinned") => self.next_pinned(),
                 Some("reconnect") => self.reconnect_active(),
+                Some("destroy") => self.destroy_active(),
                 Some("last_window") => self.last_window(),
                 Some("paste") => self.paste_clipboard(),
                 Some("broadcast") => {

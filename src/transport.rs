@@ -39,6 +39,9 @@ pub trait Transport: Send {
     fn reconnect(&mut self) -> io::Result<()> {
         Ok(())
     }
+    /// Kill the session's pane (and its underlying tmux session) so it stops consuming resources on
+    /// its host. Default no-op for a local PTY, which already dies with its child.
+    fn destroy(&self) {}
 }
 
 // ── local PTY (alacritty event loop) ────────────────────────────────────────────────────────────
@@ -296,6 +299,15 @@ impl ControlPipe {
         let _ = self.tx.send(encode_keys(bytes).into_bytes());
     }
 
+    /// Destroy the owned tmux session (killing whatever runs in it) and detach the local client.
+    /// Sends `kill-session` directly to the pipe — for ssh these bytes go to the remote tmux, killing
+    /// the pane there even though our client itself dies on drop.
+    fn destroy(&self) {
+        let _ = self
+            .tx
+            .send(format!("kill-session -t {}\n", self.session).into_bytes());
+    }
+
     /// Re-attach after the client died: kill the old child, spawn a fresh control client with the
     /// same identity, and stream it into the same grid. The pane is recreated from scratch (a new
     /// `new-session`), so any in-flight agent state is lost — reconnect re-establishes the session,
@@ -367,6 +379,10 @@ impl Transport for TmuxTransport {
         self.pipe.write(bytes);
     }
 
+    fn destroy(&self) {
+        self.pipe.destroy();
+    }
+
     fn resize(&self, size: TermSize) {
         let cmd = format!("resize-window -x {} -y {}\n", size.cols, size.lines);
         let _ = self.pipe.tx.send(cmd.into_bytes());
@@ -426,6 +442,10 @@ impl Transport for RemoteTransport {
 
     fn write(&self, bytes: &[u8]) {
         self.pipe.write(bytes);
+    }
+
+    fn destroy(&self) {
+        self.pipe.destroy();
     }
 
     fn resize(&self, size: TermSize) {
@@ -620,6 +640,16 @@ impl Transport for TunnelTransport {
 
     fn reconnect(&mut self) -> io::Result<()> {
         self.reconnect()
+    }
+
+    fn destroy(&self) {
+        // Same kill-session the connection thread sends on spawn, targeted at this pane's session so
+        // the relay's tmux tears the pane down. The daemon holds the session, not us, so this must go
+        // over the wire rather than die with the socket.
+        let name = format!("auton-{}", self.program.replace('/', "-"));
+        let _ = self
+            .tx
+            .send(format!("kill-session -t {name}\n").into_bytes());
     }
 }
 

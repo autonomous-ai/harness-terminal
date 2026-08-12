@@ -438,6 +438,13 @@ impl Session {
         }
     }
 
+    /// Kill the pane's underlying session so it stops consuming resources on its host. A no-op for a
+    /// local PTY (already tied to the child process). The tab should be removed right after; the
+    /// transport's alive flag flips false and the watchdog would otherwise try to reconnect.
+    pub fn destroy(&self) {
+        self.transport.destroy();
+    }
+
     /// Push keystrokes into the session's transport.
     pub fn write(&self, bytes: &[u8]) {
         self.transport.write(bytes);

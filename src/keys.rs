@@ -42,6 +42,7 @@ pub const ACTIONS: &[(&str, &str)] = &[
     ("pin", "A"),
     ("next_pinned", "P"),
     ("reconnect", "R"),
+    ("destroy", "D"),
 ];
 
 /// The built-in full keybinding table. `(action, key)` in ACTIONS order.
