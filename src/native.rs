@@ -107,6 +107,9 @@ struct Application {
     broadcast_targets: Vec<bool>,
     /// Index of the row the broadcast overlay's focus is on (all-on by default).
     broadcast_sel: usize,
+    /// Per-tab mute state (prefix+m). A muted tab's busy nudge + badge are suppressed so a noisy
+    /// pane a diver doesn't care about stops nagging. Grows/shrinks with the tab set.
+    muted: Vec<bool>,
     /// The currently-focused search match (absolute line, col, width); recomputed on each query
     /// change / Enter and passed to draw_grid for highlighting.
     find_hit: Option<crate::render::Find>,
@@ -204,6 +207,7 @@ impl Application {
             broadcast_query: String::new(),
             broadcast_targets: vec![true; tab_count],
             broadcast_sel: 0,
+            muted: vec![false; tab_count],
             find_hit: None,
             find_all: Vec::new(),
             find_index: 0,
@@ -264,6 +268,7 @@ impl Application {
         let n = self.app.tabs.len();
         self.seen_history.resize(n, usize::MAX);
         self.notified.resize(n, false);
+        self.muted.resize(n, false);
         let mut flags = vec![false; n];
         for (i, s) in self.app.tabs.iter().enumerate() {
             if i == self.app.active {
@@ -276,6 +281,11 @@ impl Application {
             let grew = self.seen_history[i] != usize::MAX && len > self.seen_history[i];
             self.seen_history[i] = len;
             flags[i] = grew;
+            // A muted tab is intentionally ignored: no busy badge, no OS notification. It still
+            // feeds its seen-history so it isn't flagged the moment it's unmuted.
+            if self.muted[i] {
+                continue;
+            }
             // Fire a one-shot OS notification the first time a backgrounded agent goes busy, so a
             // diver is nudged without having to watch the badge. Once the tab is looked at (or it
             // settles), `notified` is reset and the next transition nags again.
@@ -417,6 +427,23 @@ impl Application {
         }
     }
 
+    /// `prefix+m`: toggle mute on the active tab. A muted tab stops firing the busy OS notification
+    /// and its `!` badge (see `activity_flags`), so a noisy pane a diver doesn't care about stops
+    /// nagging — while still showing its own live tail in the tab bar. Toggle again to unmute.
+    fn toggle_mute_active(&mut self) {
+        if self.app.active < self.app.tabs.len() {
+            let on = !self.muted[self.app.active];
+            self.muted[self.app.active] = on;
+            let state = if on { "MUTED" } else { "unmuted" };
+            let head = self
+                .app
+                .active_session()
+                .map(|s| s.meta.name.clone().unwrap_or_else(|| s.meta.engine.clone()))
+                .unwrap_or_default();
+            self.flash = Some((format!("{head} {state}"), std::time::Instant::now()));
+        }
+    }
+
     fn redraw(&mut self) {
         let (Some(w), Some(h)) = (NonZeroU32::new(self.size.width), NonZeroU32::new(self.size.height)) else {
             return;
@@ -526,11 +553,13 @@ impl Application {
             if live.chars().count() > 18 {
                 live = live.chars().take(18).collect::<String>() + "…";
             }
-            // An exclamation marks a backgrounded tab that has scrolled since we last sampled it.
+            // An exclamation marks a backgrounded tab that has scrolled since we last sampled it; a
+            // muted tab is dimmed and shows M instead so its silence is read at a glance.
             let flag = if activity[i] { "!" } else { "" };
+            let mute = if self.muted.get(i).copied().unwrap_or(false) { " M " } else { " " };
             // Show the user's rename if set; otherwise the plain engine id.
             let head = s.meta.name.clone().unwrap_or_else(|| s.meta.engine.clone());
-            let label = format!(" {}{} {} {} ", flag, head, live, dot);
+            let label = format!(" {}{} {}{}{} ", flag, head, live, mute, dot);
             // Active tab: tinted by a stable hash of its host (dive context). Inactive tabs fall back
             // to the engine's own accent color so you can spot the "claude" tab from across the bar.
             let color = if active { host_color(&s.meta.host) } else { engine_accent(&s.meta.engine) };
@@ -781,7 +810,7 @@ impl Application {
     fn render_help(&mut self, fb: &mut Framebuffer) {
         let (base_y, line_px) = self.overlay_base_y();
         draw_text(fb, &mut self.cache, "  harness-terminal keys  ", 32, base_y, self.font_px, WHITE);
-        let bindings: [(&str, &str); 27] = [
+        let bindings: [(&str, &str); 28] = [
             ("Ctrl+Space", "prefix (then a command)"),
             ("prefix /", "palette: jump to any session"),
             ("prefix ;", "command palette (all actions)"),
@@ -798,6 +827,7 @@ impl Application {
             ("prefix p", "paste clipboard (bracketed)"),
             ("1-9 / Tab", "switch tab"),
             ("prefix o", "jump to next busy tab"),
+            ("prefix m", "mute/unmute the active tab"),
             ("prefix l", "flip to the previous tab"),
             ("prefix u", "undo close (reopen last closed tab)"),
             ("x / c", "close tab / go to tab 0"),
@@ -1414,6 +1444,7 @@ impl Application {
                 }
                 "c" => { if !self.app.tabs.is_empty() { self.set_active(0); } }
                 "o" => self.next_busy(),
+                "m" => self.toggle_mute_active(),
                 "l" => self.last_window(),
                 "p" => self.paste_clipboard(),
                 "a" => {
