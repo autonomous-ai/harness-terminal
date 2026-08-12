@@ -69,7 +69,12 @@ impl LocalPtyTransport {
         let pty = tty::new(
             &tty::Options {
                 shell: Some(tty::Shell::new(program.into(), args)),
-                working_directory: None,
+                // New local tabs open in the config's `start_cwd` (when set) so a diver who keeps a
+                // repo can hit `prefix+n` and land in it, not wherever the binary was launched.
+                working_directory: crate::config::Config::load()
+                    .start_cwd
+                    .filter(|p| !p.is_empty())
+                    .map(Into::into),
                 drain_on_exit: true,
                 env: Default::default(),
             },

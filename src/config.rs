@@ -25,6 +25,11 @@ pub struct Config {
     /// beyond the cap is dropped, so the newest lines always survive.
     #[serde(default)]
     pub scrollback_cap: Option<usize>,
+    /// Directory new local (PTY) tabs start in, overriding the app's own cwd. A diver who keeps one
+    /// repo open can set this so a fresh `prefix+n` tab lands in the repo instead of wherever the
+    /// binary was launched. Absent/empty = use the app's current working directory.
+    #[serde(default)]
+    pub start_cwd: Option<String>,
 }
 
 impl Default for Config {
@@ -34,6 +39,7 @@ impl Default for Config {
             default_engine: "claude".to_string(),
             font_path: None,
             scrollback_cap: None,
+            start_cwd: None,
         }
     }
 }
@@ -79,6 +85,15 @@ mod tests {
         assert_eq!(c.scrollback_cap, Some(1_048_576));
         let d: Config = toml::from_str("font_px = 14").unwrap();
         assert_eq!(d.scrollback_cap, None);
+    }
+
+    /// A start-working-directory round-trips; absent falls back to None (app cwd).
+    #[test]
+    fn start_cwd_roundtrips() {
+        let c: Config = toml::from_str(r#"start_cwd = "/Users/d/dev/harness-terminal""#).unwrap();
+        assert_eq!(c.start_cwd.as_deref(), Some("/Users/d/dev/harness-terminal"));
+        let d: Config = toml::from_str("font_px = 14").unwrap();
+        assert_eq!(d.start_cwd, None);
     }
 
     /// Malformed TOML must fall back to defaults, never panic.
