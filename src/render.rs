@@ -380,4 +380,47 @@ mod tests {
         assert_eq!(color256(0), (0, 0, 0));
         assert_eq!(color256(15), (255, 255, 255));
     }
+
+    /// Full render path, headless: feed a real `Term` ANSI (colors + text), render it into a
+    /// framebuffer with real font rasterization, and assert the output is non-blank and colored
+    /// where a colored glyph was written. This proves the emulator→glyph→framebuffer pipeline the
+    /// native window uses, without needing a window or GPU.
+    #[test]
+    fn renders_colored_text_from_term() {
+        use alacritty_terminal::sync::FairMutex;
+        use alacritty_terminal::term::{Config, Term};
+        use alacritty_terminal::vte::ansi::{Processor, StdSyncHandler};
+
+        use crate::session::Listener;
+
+        // Build the grid at 80x24 and feed it two colored lines.
+        let size = crate::session::TermSize { lines: 24, cols: 80 };
+        let term = FairMutex::new(Term::new(Config::default(), &size, Listener));
+        let bytes = b"\x1b[32mAAA\x1b[0m\r\n\x1b[31mMMM\x1b[0m";
+        {
+            let mut p: Processor<StdSyncHandler> = Processor::default();
+            p.advance(&mut *term.lock(), bytes);
+        }
+
+        // Render at a modest cell size.
+        let mut fb = Framebuffer::new(80 * 9, 24 * 18);
+        let mut cache = GlyphCache::load();
+        {
+            let g = term.lock();
+            draw_grid(&mut fb, &g, 9, 18, 12, &mut cache);
+        }
+
+        // At least some pixel is non-background (glyphs drawn).
+        let non_blank = fb.pixels.iter().filter(|&&p| p != 0x0000_0000).count();
+        assert!(non_blank > 50, "expected glyph pixels, got {non_blank}");
+
+        // Some pixel is green-ish (our palette green = {13,188,121}) from the first line.
+        let has_green = fb.pixels.iter().any(|&p| {
+            let r = (p >> 16) & 0xff;
+            let g = (p >> 8) & 0xff;
+            let b = p & 0xff;
+            g > 100 && r < 100 && b < 100
+        });
+        assert!(has_green, "expected a green glyph pixel");
+    }
 }
