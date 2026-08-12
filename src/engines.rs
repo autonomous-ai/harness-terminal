@@ -57,7 +57,7 @@ mod tests {
         // Every id has a unique, non-empty command.
         for e in ENGINES {
             assert!(!e.cmd.is_empty());
-            assert!(by_id(e.id).is_some());
+            assert!(Engine::by_id(e.id).is_some());
         }
     }
 }

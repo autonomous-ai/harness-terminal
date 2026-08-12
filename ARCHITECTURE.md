@@ -146,3 +146,20 @@ What's live today is geometric: bytes flow as fast as ssh will carry them; no la
 smoothing, no local echo, no reconnect — those are refinements, not missing pieces.
 Host discovery (`transport::discover_hosts`) reads `~/.ssh/config` `Host` entries; the
 harness `machine-ws` tunnel can back the same attach later without touching this code.
+
+## 12. Harness fleet status (commander bus) + remote local echo
+
+- **Status badges from the real harness daemon** (`src/harness.rs`): every joined machine runs
+  `harness` on a fixed loopback control port (`HARNESS_PORT_DEFAULT`, 18473). `GET /api/status`
+  is pulled read-only and non-blocking (`prefix + s` prints a fleet summary into the pane, e.g.
+  "4 agents · tunnel up"); it's the same live data `autonomous-harness` uses, so we reuse the
+  commander-bus concept without re-implementing its parse. Serde maps exactly the wire fields the
+  daemon sends (`machineId`, `connected`, `deviceTransportConnected`, `sessions[].updatedAt`),
+  pinned by a unit test against the real payload.
+- **Local echo for remote tabs**: a `remote`-kind transport mirrors keystrokes into the grid
+  optimistically while they cross the network, so typing feels instant; the pane's real echo
+  overwrites it. Purely a render optimization — never mutates the transport bytes.
+
+Only the raw pane *byte* relay across machines remains harness-via-ssh. The tunnel needs a new
+backend frame the harness doesn't yet serve (hookServer.ts:400: "Terminal I/O is not streamed"),
+so it stays behind `Transport` with no client changes needed when that lands.

@@ -141,6 +141,24 @@ fn handle_key(app: &mut App, key: KeyEvent, in_command: &mut bool) -> bool {
                 app.spawn_tmux("this-host", "shell");
             }
             KeyCode::Char('q') => return true,
+            KeyCode::Char('s') => {
+                // Refresh + peek the local harness fleet (commander-bus status badges).
+                match autonomous_term::harness::HarnessClient::local().status() {
+                    Ok(st) => {
+                        app.fleet = st;
+                        // Report the fleet summary into the pane so it's visible for a moment.
+                        let line = format!("\r\n[fleet] {}\r\n", app.fleet.summary());
+                        if let Some(s) = app.active_session_mut() {
+                            s.write(line.as_bytes());
+                        }
+                    }
+                    Err(_) => {
+                        if let Some(s) = app.active_session_mut() {
+                            s.write(b"\r\n[fleet] harness daemon unreachable (is it joined?)\r\n");
+                        }
+                    }
+                }
+            }
             KeyCode::Char('c') => {
                 // clear / focus first tab
                 if !app.tabs.is_empty() {

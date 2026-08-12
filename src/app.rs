@@ -31,6 +31,8 @@ pub struct App {
     pub size: TermSize,
     /// Host text entry for the remote-attach overlay.
     pub remote_host: String,
+    /// Cached harness fleet status (best-effort from the local daemon's /api/status).
+    pub fleet: crate::harness::FleetStatus,
 }
 
 impl App {
@@ -44,6 +46,7 @@ impl App {
             filtered: Vec::new(),
             size,
             remote_host: String::new(),
+            fleet: crate::harness::FleetStatus::default(),
         }
     }
 

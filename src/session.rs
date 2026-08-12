@@ -11,6 +11,7 @@ use alacritty_terminal::event::{Event, EventListener};
 use alacritty_terminal::grid::Dimensions;
 use alacritty_terminal::sync::FairMutex;
 use alacritty_terminal::term::{Config, Term};
+use alacritty_terminal::vte::ansi::{Processor, StdSyncHandler};
 
 use crate::transport::{LocalPtyTransport, Transport};
 
@@ -95,6 +96,15 @@ impl Session {
     /// Push keystrokes into the session's transport.
     pub fn write(&self, bytes: &[u8]) {
         self.transport.write(bytes);
+        // Local echo: for a remote session the pane's own bytes travel back with round-trip latency,
+        // so mirror the keystrokes into the grid here to make typing feel instant. The real echo from
+        // the pane overwrites these (they are the same chars + any app-driven prompt echo). Purely an
+        // optimistic render — never affects the actual transport bytes.
+        if self.transport.kind() == "remote" {
+            let mut term = self.term.lock();
+            let mut parser: Processor<StdSyncHandler> = Processor::default();
+            parser.advance(&mut *term, bytes);
+        }
     }
 
     /// Resize the session's screen + underlying transport.

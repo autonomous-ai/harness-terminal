@@ -6,6 +6,7 @@
 
 pub mod app;
 pub mod engines;
+pub mod harness;
 pub mod session;
 pub mod transport;
 pub mod tui;
