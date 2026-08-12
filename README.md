@@ -72,7 +72,8 @@ The prefix is `Ctrl+Space` (tmux-style), then a command:
 | `Ctrl+Space` `H` | jump to the next host (page the fleet by machine) |
 | `Ctrl+Space` `Q` | jump to the next down/reconnecting tab |
 | `Ctrl+Space` `l` | flip back to the previous tab |
-| `Ctrl+Space` `i` | show the active tab's info (kind, host, task, size, state) |
+| `Ctrl+Space` `i` | show the active tab's info (kind, host, task, size, state, age) |
+| `Ctrl+Space` `I` | mark all tabs read — clear every busy, bell, and recovery badge at once |
 | `Ctrl+Space` `v` | focus mode: hide the tab bar + status line (distraction-free) |
 | `1-9` / `0` / `Tab` / `Shift+Tab` | switch tab (`0` = last, Shift+Tab = backward) |
 | `Ctrl+Space` `{` / `}` | move the active tab left / right |

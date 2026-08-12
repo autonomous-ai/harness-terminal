@@ -6,6 +6,10 @@ entries record user-visible and architectural changes since the last tagged mile
 ## Unreleased / 0.1.0 (in progress)
 
 ### Added
+- **Mark-all-read (`prefix+I`)** — clear every tab's busy `!N`, bell 🔔, and recovery ↻ badge in one
+  key. Re-baselines each backgrounded tab's seen-history so the next output is the only thing that
+  nags again; a baseline reset, not a mute (fresh output still refills a badge normally). In the
+  command palette too.
 - **Session age in the info panel** — `prefix+i` now shows how long a session has been alive
   (`age` row, via a new `Session::age`), so a diver can tell a long-running agent from a just-spawned
   one at a glance alongside the existing idle `silence` row.

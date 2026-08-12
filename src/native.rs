@@ -62,6 +62,7 @@ enum PaletteAction {
     UndoClose,
     Duplicate,
     SessionInfo,
+    MarkAllRead,
     ToggleFocus,
     Pin,
     NextPinned,
@@ -97,6 +98,10 @@ impl PaletteAction {
             ("undo close (reopen last)", UndoClose),
             ("duplicate active tab (fork same engine@host)", Duplicate),
             ("show session info (kind/host/task)", SessionInfo),
+            (
+                "mark all tabs as read (clear busy + bell badges)",
+                MarkAllRead,
+            ),
             ("toggle focus mode (hide tab bar + status)", ToggleFocus),
             ("pin/unpin active tab (protect from close)", Pin),
             ("jump to next pinned tab", NextPinned),
@@ -1284,6 +1289,32 @@ impl Application {
         self.redraw();
     }
 
+    /// `prefix+I`: mark the whole fleet read at once. Re-baselines every backgrounded tab's seen
+    /// history (so their busy `!N` badges, stale bell 🔔 and recovery ↻ badges clear) and swallows
+    /// the not-yet-fired busy nudge. Turning back to the fleet, a diver often has a scatter of stale
+    /// badges from runs that finished while they were elsewhere; this collapses them so the NEXT
+    /// output is the only thing that nags. Fresh output still refills a badge normally — it's a
+    /// baseline reset, not a mute.
+    fn mark_all_read(&mut self) {
+        let n = self.app.tabs.len();
+        for i in 0..n {
+            // Re-baseline every tab the way the active one already is each frame: future output
+            // that exceeds where things stand now is what badges again.
+            if let Some(s) = self.app.tabs.get(i) {
+                self.seen_history[i] = s.history_len();
+            }
+            self.grew_delta[i] = 0;
+            self.notified[i] = false;
+            // Drop any bell/recovery badges still fading.
+            self.bell_until[i] = None;
+            self.recover_until[i] = None;
+        }
+        self.flash = Some((
+            "marked all tabs read".to_string(),
+            std::time::Instant::now(),
+        ));
+    }
+
     fn redraw(&mut self) {
         let (Some(w), Some(h)) = (
             NonZeroU32::new(self.size.width),
@@ -2313,6 +2344,10 @@ impl Application {
             ("peek", "peek tails of all sessions"),
             ("fleet_grid", "fleet grid: live tails of every session"),
             ("session_info", "show this tab's info (kind/host/task)"),
+            (
+                "mark_all_read",
+                "clear every tab's busy + bell badges (mark the whole fleet read)",
+            ),
             ("toggle_focus", "focus mode (hide tab bar + status)"),
             ("help", "this help"),
             ("quit", "quit"),
@@ -3187,6 +3222,7 @@ impl Application {
             SessionInfo => {
                 self.app.overlay = Overlay::Info;
             }
+            MarkAllRead => self.mark_all_read(),
             ToggleFocus => self.toggle_focus(),
             Pin => self.toggle_pin_active(),
             NextPinned => self.next_pinned(),
@@ -3580,6 +3616,7 @@ impl Application {
                 Some("session_info") => {
                     self.app.overlay = Overlay::Info;
                 }
+                Some("mark_all_read") => self.mark_all_read(),
                 Some("toggle_focus") => self.toggle_focus(),
                 Some("rename") => {
                     // Rename the active tab. Pre-fill with the current custom name (if any) so
