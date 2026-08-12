@@ -400,6 +400,13 @@ impl Session {
             // keeping the session dead but not failing the sweep.
             return Ok(());
         }
+        self.reconnect_now()
+    }
+
+    /// Force an immediate reconnect attempt, ignoring the exponential-backoff timer so a diver can
+    /// nudge a dropped pane/daemon back right away instead of waiting out the retry ladder. On
+    /// failure the failure still lands on the backoff ladder (so the next auto-try is still sane).
+    pub fn reconnect_now(&mut self) -> io::Result<()> {
         match self.transport.reconnect() {
             Ok(()) => {
                 // Back up: the pane came through, reset the retry ladder.

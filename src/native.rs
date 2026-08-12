@@ -60,6 +60,7 @@ enum PaletteAction {
     ToggleFocus,
     Pin,
     NextPinned,
+    Reconnect,
     Help,
     Quit,
 }
@@ -84,6 +85,7 @@ impl PaletteAction {
             ("toggle focus mode (hide tab bar + status)", ToggleFocus),
             ("pin/unpin active tab (protect from close)", Pin),
             ("jump to next pinned tab", NextPinned),
+            ("force reconnect active tab (bypass backoff)", Reconnect),
             ("show this help", Help),
             ("quit", Quit),
         ]
@@ -624,6 +626,35 @@ impl Application {
                 .map(|s| s.meta.name.clone().unwrap_or_else(|| s.meta.engine.clone()))
                 .unwrap_or_default();
             self.flash = Some((format!("{head} {state}"), std::time::Instant::now()));
+        }
+    }
+
+    /// Force a live-again attempt on the active tab, ignoring its auto-reconnect backoff. A no-op for
+    /// local PTYs (nothing to re-attach) and alive tabs, so it only nudges dead remote panes.
+    fn reconnect_active(&mut self) {
+        let Some(s) = self.app.active_session_mut() else {
+            return;
+        };
+        if s.kind() == "pty" || s.alive() {
+            self.flash = Some((
+                format!("{} is fine", s.meta.engine),
+                std::time::Instant::now(),
+            ));
+            return;
+        }
+        match s.reconnect_now() {
+            Ok(()) => {
+                self.flash = Some((
+                    format!("{} reconnected", s.meta.engine),
+                    std::time::Instant::now(),
+                ))
+            }
+            Err(_) => {
+                self.flash = Some((
+                    format!("{} still unreachable — will keep retrying", s.meta.engine),
+                    std::time::Instant::now(),
+                ))
+            }
         }
     }
 
@@ -1515,6 +1546,7 @@ impl Application {
             ("paste", "paste clipboard (bracketed)"),
             ("next_busy", "jump to next busy tab"),
             ("next_pinned", "jump to next pinned tab"),
+            ("reconnect", "force reconnect active tab (bypass backoff)"),
             ("mute", "mute/unmute the active tab"),
             ("pin", "pin/unpin the active tab (protect from close)"),
             ("last_window", "flip to the previous tab"),
@@ -2218,6 +2250,7 @@ impl Application {
             ToggleFocus => self.toggle_focus(),
             Pin => self.toggle_pin_active(),
             NextPinned => self.next_pinned(),
+            Reconnect => self.reconnect_active(),
             Help => {
                 self.app.overlay = Overlay::Help;
             }
@@ -2517,6 +2550,7 @@ impl Application {
                 Some("mute") => self.toggle_mute_active(),
                 Some("pin") => self.toggle_pin_active(),
                 Some("next_pinned") => self.next_pinned(),
+                Some("reconnect") => self.reconnect_active(),
                 Some("last_window") => self.last_window(),
                 Some("paste") => self.paste_clipboard(),
                 Some("broadcast") => {
