@@ -275,6 +275,7 @@ impl Application {
             Overlay::NewSession => self.render_list(fb, "  new session  ", true),
             Overlay::RemoteAttach => self.render_remote(fb),
             Overlay::Find => self.render_find(fb),
+            Overlay::Fleet => self.render_fleet(fb),
             Overlay::None => {}
         }
     }
@@ -307,6 +308,30 @@ impl Application {
             let color = if sel { WHITE } else { CHROME_DIM };
             let line = format!("  {}  {}  {}", e.id, e.label, if sel { "◄" } else { "" });
             draw_text(fb, &mut self.cache, &line, 32, base_y + (i + 2) * line_px, self.font_px, color);
+        }
+    }
+
+    /// Read-only fleet panel: the machine id + tunnel state, then one line per harness session with
+    /// a live/stale marker. Esc (or any key) dismisses; `s` re-fetches. Never writes to a pane.
+    fn render_fleet(&mut self, fb: &mut Framebuffer) {
+        let (base_y, line_px) = self.overlay_base_y();
+        let f = &self.app.fleet;
+        let mid = if f.machine_id.is_empty() { "unknown".to_string() } else { f.machine_id.chars().take(6).collect() };
+        let tunnel = if f.connected { "tunnel up" } else { "tunnel down" };
+        let n = f.fleet.len();
+        draw_text(fb, &mut self.cache, &format!("  fleet · {} · {} · {} session{}  ", mid, tunnel, n, if n == 1 { "" } else { "s" }), 32, base_y, self.font_px, WHITE);
+        if n == 0 {
+            draw_text(fb, &mut self.cache, "  no harness sessions (daemon unreachable or nothing joined)  ", 32, base_y + line_px, self.font_px, CHROME_DIM);
+            return;
+        }
+        for (i, s) in f.fleet.iter().enumerate().take(20) {
+            let live = s.is_live();
+            let mark = if live { "●" } else { "○" };
+            let color = if live { (0x4a, 0xe0, 0x8a) } else { CHROME_DIM };
+            let eng = if s.engine.is_empty() { "?" } else { s.engine.as_str() };
+            let id = if s.session_id.is_empty() { s.tmux_pane.clone() } else { s.session_id.chars().take(8).collect() };
+            let line = format!("  {} {}  {:<9} {}", mark, eng, "", id);
+            draw_text(fb, &mut self.cache, &line, 32, base_y + (i + 1) * line_px, self.font_px, color);
         }
     }
 
@@ -591,18 +616,11 @@ impl Application {
                 "t" => self.app.spawn_tmux("this-host", "shell"),
                 "q" => return true,
                 "s" => {
-                    match crate::harness::HarnessClient::local().status() {
-                        Ok(st) => {
-                            self.app.fleet = st;
-                            let line = format!("\r\n[fleet] {}\r\n", self.app.fleet.summary());
-                            if let Some(s) = self.app.active_session_mut() { s.write(line.as_bytes()); }
-                        }
-                        Err(_) => {
-                            if let Some(s) = self.app.active_session_mut() {
-                                s.write(b"\r\n[fleet] harness daemon unreachable (is it joined?)\r\n");
-                            }
-                        }
+                    // Read-only fleet overlay: fetch status on open so it's fresh, then show it.
+                    if let Ok(st) = crate::harness::HarnessClient::local().status() {
+                        self.app.fleet = st;
                     }
+                    self.app.overlay = Overlay::Fleet;
                 }
                 "c" => { if !self.app.tabs.is_empty() { self.app.active = 0; } }
                 "x" => { close_tab(&mut self.app); }
@@ -701,6 +719,15 @@ impl Application {
                         _ => {}
                     },
                     _ => {}
+                }
+                return;
+            }
+            Overlay::Fleet => {
+                // Read-only: any key closes it. `s` re-fetches for a fresh view.
+                if matches!(key, Key::Named(winit::keyboard::NamedKey::Escape)) || matches!(key, Key::Character(c) if c != "s") {
+                    self.app.overlay = Overlay::None;
+                } else if let Ok(st) = crate::harness::HarnessClient::local().status() {
+                    self.app.fleet = st;
                 }
                 return;
             }

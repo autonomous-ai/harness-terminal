@@ -18,6 +18,8 @@ pub enum Overlay {
     RemoteAttach,
     /// Search scrollback: type is a query; Enter jumps to next match, Esc closes.
     Find,
+    /// Read-only fleet status: all harness sessions on this machine (fetch on open).
+    Fleet,
 }
 
 pub struct App {

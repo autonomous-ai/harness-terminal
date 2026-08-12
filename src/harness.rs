@@ -28,6 +28,8 @@ pub struct FleetSession {
     pub engine: String,
     #[serde(default, rename = "tmuxPane")]
     pub tmux_pane: String,
+    #[serde(default, rename = "sessionId")]
+    pub session_id: String,
     #[serde(default, rename = "updatedAt")]
     pub updated_at: u64,
     #[serde(default)]
@@ -81,6 +83,17 @@ impl HarnessClient {
             return Err(HarnessUnreachable);
         }
         resp.json().map_err(|_| HarnessUnreachable)
+    }
+}
+
+impl FleetSession {
+    /// A session we can still meaningfully connect to: it has an identity and was updated within
+    /// the idle window (i.e. the agent process is still alive and reporting).
+    pub fn is_live(&self) -> bool {
+        let now_ms = now_unix_ms();
+        !self.session_id.is_empty()
+            && self.updated_at > 0
+            && now_ms.saturating_sub(self.updated_at) < IDLE_AFTER_MS
     }
 }
 
@@ -138,6 +151,23 @@ mod tests {
         assert!(!st.engine_is_live("codex"));
         assert!(!st.engine_is_live("nope"));
         assert_eq!(st.summary(), "2 agents · tunnel up");
+    }
+
+    /// A `FleetSession` is live only when it has an identity AND a recent heartbeat; a stale or
+    /// never-updated row (or one missing its sessionId) must not read as live in the fleet panel.
+    #[test]
+    fn session_live_requires_identity_and_heartbeat() {
+        let now = super::now_unix_ms();
+        let live = FleetSession {
+            session_id: "abc".into(), engine: "claude".into(), tmux_pane: "%7".into(), updated_at: now - 1000, ..Default::default()
+        };
+        assert!(live.is_live());
+        // Stale (older than the idle window).
+        let stale = FleetSession { updated_at: now - 10 * 60 * 1000, ..live.clone() };
+        assert!(!stale.is_live());
+        // No session id — nothing to attach to even if recently updated.
+        let no_id = FleetSession { session_id: String::new(), ..live.clone() };
+        assert!(!no_id.is_live());
     }
 }
 
