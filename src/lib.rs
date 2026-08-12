@@ -11,4 +11,5 @@ pub mod harness;
 pub mod session;
 pub mod transport;
 pub mod render;
+pub mod restore;
 pub mod tui;

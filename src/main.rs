@@ -25,7 +25,11 @@ fn main() -> io::Result<()> {
 
 /// Standalone native window (default shell).
 fn run_native() -> Result<(), Box<dyn std::error::Error>> {
-    let app = App::new(TermSize { lines: 24, cols: 80 });
+    let mut app = App::new(TermSize { lines: 24, cols: 80 });
+    // Reopen the tabs that were open last time (best-effort; failures drop silently).
+    for spec in harness_terminal::restore::load() {
+        app.restore_tab(&spec);
+    }
     harness_terminal::native::run(app)
 }
 

@@ -160,6 +160,27 @@ impl App {
         }
         self.overlay = Overlay::None;
     }
+
+    /// Reopen a previously-persisted tab. Chooses the right transport from `kind` so a session
+    /// comes back with the same identity (local pane vs remote ssh vs tunnel). Best-effort: a
+    /// failed re-spawn just leaves no tab.
+    pub fn restore_tab(&mut self, spec: &crate::restore::TabSpec) {
+        let program = engine_cmd(&spec.engine).unwrap_or("bash");
+        let meta = self.meta_for(&spec.host, &spec.engine);
+        let res = match spec.kind.as_str() {
+            "tmux" => Session::tmux(meta, program, self.size),
+            "ssh" => Session::remote(meta, program, self.size),
+            "tunnel" => Session::tunnel(meta, &spec.host, spec.port.unwrap_or(crate::harness::HARNESS_PORT_DEFAULT), program, self.size),
+            _ => Session::local(meta, program, Vec::new(), self.size),
+        };
+        if let Ok(session) = res {
+            self.tabs.push(session);
+            // Don't steal focus on restore — keep whatever was active (usually tab 0) meaningful.
+            if self.tabs.len() == 1 {
+                self.active = 0;
+            }
+        }
+    }
 }
 
 impl App {

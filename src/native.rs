@@ -798,6 +798,7 @@ fn close_tab(app: &mut App) {
         if app.active >= app.tabs.len() {
             app.active = app.tabs.len().saturating_sub(1);
         }
+        crate::restore::save(&app.tab_specs());
     }
 }
 
@@ -987,7 +988,11 @@ impl ApplicationHandler for Application {
 
     fn window_event(&mut self, event_loop: &ActiveEventLoop, _id: WindowId, event: WindowEvent) {
         match event {
-            WindowEvent::CloseRequested => event_loop.exit(),
+            WindowEvent::CloseRequested => {
+                // Persist open tabs so they come back on the next launch.
+                crate::restore::save(&self.app.tab_specs());
+                event_loop.exit();
+            }
             WindowEvent::Resized(size) => {
                 self.size = size;
                 if size.width > 0 && size.height > 0 {
