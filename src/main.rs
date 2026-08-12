@@ -16,8 +16,21 @@ use harness_terminal::app::App;
 use harness_terminal::session::TermSize;
 
 fn main() -> io::Result<()> {
-    // Legacy TUI fallback: run inside an existing terminal (ratatui + crossterm).
-    if std::env::args().any(|a| a == "--tui") {
+    let mut args = std::env::args().skip(1);
+    let mut tui = false;
+    for a in args.by_ref() {
+        match a.as_str() {
+            "--tui" => tui = true,
+            "--version" | "-V" | "-v" => {
+                println!("harness-terminal {}", env!("CARGO_PKG_VERSION"));
+                return Ok(());
+            }
+            // Unknown flags are ignored rather than fatal — matches the config file's "broken input
+            // degrades, never crashes" philosophy.
+            _ => {}
+        }
+    }
+    if tui {
         return run_tui();
     }
     run_native().map_err(|e| io::Error::other(e.to_string()))
