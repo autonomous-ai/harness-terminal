@@ -508,6 +508,29 @@ mod tests {
         });
     }
 
+    /// A config `scrollback_cap` override tightens the persisted tail below the built-in default.
+    /// Guard against the cap silently ignoring the user's config (which would balloon the dir for
+    /// anyone who raised it, or keep too little for anyone who lowered it).
+    #[test]
+    fn scrollback_cap_honors_config_override() {
+        with_isolated_dir(|dir| {
+            // The isolated dir isn't pre-created; make it (as the app would) before writing config.
+            std::fs::create_dir_all(dir).unwrap();
+            // Write a tiny config cap so the built-in 256KB isn't what trims it.
+            let cfg = dir.join("config.toml");
+            std::fs::write(&cfg, "scrollback_cap = 64\n").unwrap();
+
+            let big = "y".repeat(4096) + "TAIL";
+            save_scrollback("ssh", "10.0.0.9", "claude", &big);
+            let loaded = load_scrollback("ssh", "10.0.0.9", "claude");
+            assert!(loaded.len() <= 64);
+            assert!(
+                loaded.ends_with("TAIL"),
+                "even a tight override keeps the tail"
+            );
+        });
+    }
+
     /// Window position round-trips through its file; a missing file loads None (let the OS place it).
     #[test]
     fn position_roundtrips_missing_is_none() {
