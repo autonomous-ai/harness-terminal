@@ -95,6 +95,8 @@ struct Application {
     fleet_query: String,
     /// Indices into `app.fleet.fleet` matching the current fleet query, for the overlay.
     fleet_filtered: Vec<usize>,
+    /// Peek-overlay selection: which session row the highlight is on (index into `app.tabs`).
+    peek_sel: usize,
     /// Mouse state: the cell anchor where a drag-selection started (Some while left button held).
     /// With winit 0.30 we track presses/releases ourselves; dragging updates the selection end.
     mouse_anchor: Option<Point>,
@@ -167,6 +169,7 @@ impl Application {
             seen_history,
             notified: vec![false; tab_count],
             flash: None,
+            peek_sel: 0,
         }
     }
 
@@ -579,6 +582,7 @@ impl Application {
             Overlay::Help => self.render_help(fb),
             Overlay::Rename => self.render_rename(fb),
             Overlay::Broadcast => self.render_broadcast(fb),
+            Overlay::Peek => self.render_peek(fb),
             Overlay::None => {}
         }
     }
@@ -711,7 +715,7 @@ impl Application {
     fn render_help(&mut self, fb: &mut Framebuffer) {
         let (base_y, line_px) = self.overlay_base_y();
         draw_text(fb, &mut self.cache, "  harness-terminal keys  ", 32, base_y, self.font_px, WHITE);
-        let bindings: [(&str, &str); 24] = [
+        let bindings: [(&str, &str); 25] = [
             ("Ctrl+Space", "prefix (then a command)"),
             ("prefix /", "palette: jump to any session"),
             ("prefix n", "new session (engine picker)"),
@@ -732,6 +736,7 @@ impl Application {
             ("g / b", "scroll up a page / jump to bottom"),
             ("prefix d", "copy whole scrollback to clipboard"),
             ("prefix w", "write scrollback to a .log file"),
+            ("prefix y", "peek tails of all sessions"),
             ("Ctrl+= / Ctrl+-", "font zoom (Ctrl+0 reset)"),
             ("PgUp/PgDn", "scrollback"),
             ("Cmd/Ctrl+click", "open URL / file path"),
@@ -1019,6 +1024,41 @@ impl Application {
         }
     }
 
+    /// Render the peek overlay: a header, then one compact row per session with either the dimmed
+    /// tail of every other session folded in and the highlighted row expanded to a ~4-line preview
+    /// of its last scrollback lines (WHITE). The selection index is `self.peek_sel`.
+    fn render_peek(&mut self, fb: &mut Framebuffer) {
+        let (base_y, line_px) = self.overlay_base_y();
+        draw_text(fb, &mut self.cache, "  peek · ↑/↓ preview  · Enter jump · Esc close  ", 32, base_y, self.font_px, WHITE);
+        // Cap the list so the overlay stays on screen (~10 rows + preview lines below the selection).
+        let rows = self.app.tabs.len().min(10);
+        for row in 0..rows {
+            let i = row;
+            let s = &self.app.tabs[i];
+            let sel = i == self.peek_sel;
+            let color = if sel { WHITE } else { CHROME_DIM };
+            let name = s.meta.name.clone().unwrap_or_else(|| s.meta.engine.clone());
+            let live = s.live_title().unwrap_or_else(|| s.meta.title.clone()).replace('\n', " ");
+            let line = format!("  {} · {} · {}  {}", s.meta.host, name, live, if sel { "◄" } else { "" });
+            let row_y = base_y + (row + 1) * line_px;
+            draw_text(fb, &mut self.cache, &line, 32, row_y, self.font_px, color);
+            // Expand the highlighted row: dim preview of the last ~4 scrollback lines underneath.
+            if sel {
+                let scrollback = s.capture_scrollback();
+                let lines: Vec<&str> = scrollback
+                    .split('\n')
+                    .map(|l| l.trim_end())
+                    .filter(|l| !l.is_empty())
+                    .collect();
+                let start = lines.len().saturating_sub(4);
+                for (k, tl) in lines[start..].iter().enumerate().take(4) {
+                    let t = if tl.chars().count() > 90 { tl.chars().take(90).collect::<String>() + "…" } else { tl.to_string() };
+                    draw_text(fb, &mut self.cache, &format!("      {}", t), 32, row_y + (k + 1) * line_px, self.font_px, CHROME_DIM);
+                }
+            }
+        }
+    }
+
     /// Handle a key while in copy mode: vim-style motion keys move the read cursor; `v` starts
     /// (or re-anchors) a selection; Enter/Space copies and exits; Esc/Q exits; g/G go to top/bottom.
     fn handle_copy_key(&mut self, key: &Key, _mods: &ModifiersState) {
@@ -1211,6 +1251,7 @@ impl Application {
                 "x" => { close_tab(&mut self.app); }
                 "d" => self.copy_whole_scrollback(),
                 "w" => self.export_scrollback(),
+                "y" => { self.app.overlay = Overlay::Peek; self.peek_sel = 0; },
                 "g" => { scroll_active(self, 20); if let Some(s) = self.app.active_session() { s.set_scrolled(true); } }
                 "b" => self.scroll_to_bottom(),
                 "f" => { self.app.overlay = Overlay::Find; self.find_query.clear(); self.find_hit = None; self.find_all = Vec::new(); },
@@ -1426,6 +1467,34 @@ impl Application {
                             self.broadcast_query.clear();
                             self.app.overlay = Overlay::None;
                         }
+                        _ => {}
+                    },
+                    _ => {}
+                }
+                return;
+            }
+            Overlay::Peek => {
+                match key {
+                    // A picker, not a prompt: typing does nothing.
+                    Key::Character(_) => {}
+                    Key::Named(n) => match n {
+                        winit::keyboard::NamedKey::ArrowDown | winit::keyboard::NamedKey::Tab if !mods.shift_key() => {
+                            self.peek_sel = (self.peek_sel + 1).min(self.app.tabs.len().saturating_sub(1));
+                        }
+                        winit::keyboard::NamedKey::Tab => {
+                            self.peek_sel = self.peek_sel.saturating_sub(1);
+                        }
+                        winit::keyboard::NamedKey::ArrowUp => {
+                            self.peek_sel = self.peek_sel.saturating_sub(1);
+                        }
+                        winit::keyboard::NamedKey::Enter => {
+                            if !self.app.tabs.is_empty() {
+                                self.app.active = self.peek_sel;
+                                crate::restore::save_active(self.app.active);
+                                self.app.overlay = Overlay::None;
+                            }
+                        }
+                        winit::keyboard::NamedKey::Escape => { self.app.overlay = Overlay::None; }
                         _ => {}
                     },
                     _ => {}

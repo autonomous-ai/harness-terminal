@@ -29,6 +29,8 @@ pub enum Overlay {
     Rename,
     /// Broadcast: type one line, Enter sends it to EVERY open session (with a trailing newline).
     Broadcast,
+    /// Peek: a picker of every session with a tail preview of its last lines; Enter jumps to it.
+    Peek,
 }
 
 pub struct App {
