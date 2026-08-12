@@ -1381,6 +1381,7 @@ impl ApplicationHandler for Application {
         match event {
             WindowEvent::CloseRequested => {
                 // Persist open tabs so they come back on the next launch; keep the window size too.
+                self.app.save_all_scrollbacks();
                 crate::restore::save(&self.app.tab_specs());
                 crate::restore::save_geometry(self.size.width, self.size.height);
                 event_loop.exit();

@@ -147,6 +147,39 @@ pub fn load_geometry() -> Option<(u32, u32)> {
     Some((w, h))
 }
 
+// ── scrollback persistence ──────────────────────────────────────────────────
+
+fn scrollback_path() -> std::path::PathBuf {
+    config_dir().join("scrollback")
+}
+
+fn scrollback_file(kind: &str, host: &str, engine: &str) -> std::path::PathBuf {
+    // Bullet-proof file name: only alnum/`_`/`-` survive, host may be an IP or machine id.
+    let k: String = (kind.to_owned() + host + engine)
+        .chars()
+        .map(|c| if c.is_ascii_alphanumeric() || c == '-' || c == '_' { c } else { '_' })
+        .collect();
+    scrollback_path().join(format!("{}.txt", k))
+}
+
+/// Persist a captured scrollback for one tab's identity (kind + host + engine). Best-effort like the
+/// other state files; a full disk must not crash the app. Old snapshots of the same identity are
+/// overwritten.
+pub fn save_scrollback(kind: &str, host: &str, engine: &str, text: &str) {
+    if text.trim().is_empty() {
+        return;
+    }
+    let path = scrollback_file(kind, host, engine);
+    let _ = std::fs::create_dir_all(scrollback_path());
+    let _ = std::fs::write(path, text);
+}
+
+/// Load a previously-captured scrollback for a tab identity. Empty string on any error/missing.
+pub fn load_scrollback(kind: &str, host: &str, engine: &str) -> String {
+    let path = scrollback_file(kind, host, engine);
+    std::fs::read_to_string(path).unwrap_or_default()
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -244,6 +277,25 @@ mod tests {
             assert_eq!(back.len(), 2);
             assert_eq!(back[0].name, None);
             assert_eq!(back[1].name.as_deref(), Some("staging-deploy"));
+        });
+    }
+
+    /// A captured scrollback round-trips through its per-identity file, and an absent file loads
+    /// empty (never an error).
+    #[test]
+    fn scrollback_roundtrips_through_file() {
+        with_isolated_dir(|_| {
+            // Missing file → empty, no panic.
+            assert_eq!(load_scrollback("tmux", "build-host", "claude"), "");
+            // A snapshot with wrapped lines and unicode survives verbatim.
+            let text = "line one\nbeta-beta-beta-beta-gamma\nελληνικά ωμέγα\n";
+            save_scrollback("tmux", "build-host", "claude", text);
+            assert_eq!(load_scrollback("tmux", "build-host", "claude"), text);
+            // Distinct identities don't collide (host differs → separate file).
+            assert!(load_scrollback("tmux", "other-host", "claude").is_empty());
+            // An all-whitespace snapshot is refused (nothing meaningful to persist).
+            save_scrollback("ssh", "10.0.0.9", "codex", "   \n  ");
+            assert_eq!(load_scrollback("ssh", "10.0.0.9", "codex"), "");
         });
     }
 }

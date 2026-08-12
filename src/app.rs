@@ -171,6 +171,20 @@ impl App {
         }
     }
 
+    /// Persist every open tab's scrollback (kind+host+engine → text file) so a restart can replay
+    /// it. Runs on close-quit and on Ctrl+C quit; local "pty" tabs re-spawn with a fresh prompt (not
+    /// a real pane), so their history is deliberately skipped to avoid replaying a stale prompt.
+    pub fn save_all_scrollbacks(&self) {
+        for s in &self.tabs {
+            let kind = s.kind();
+            if kind == "pty" {
+                continue; // no real pane to re-attach; a replayed prompt would just mislead.
+            }
+            let text = s.capture_scrollback();
+            crate::restore::save_scrollback(kind, &s.meta.host, &s.meta.engine, &text);
+        }
+    }
+
     /// Focus the currently-selected palette entry.
     pub fn jump_to_selection(&mut self) {
         if let Some(&i) = self.filtered.get(self.selected) {
@@ -193,6 +207,10 @@ impl App {
         };
         if let Ok(mut session) = res {
             session.meta.name = spec.name.clone();
+            // Replay the persisted scrollback into the fresh emulator so a session comes back with
+            // its history intact (before live bytes arrive; the reconnect sweep appends on top).
+            let history = crate::restore::load_scrollback(&spec.kind, &spec.host, &spec.engine);
+            session.restore_history(&history);
             self.tabs.push(session);
             // Don't steal focus on restore — keep whatever was active (usually tab 0) meaningful.
             if self.tabs.len() == 1 {
