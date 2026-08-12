@@ -834,7 +834,32 @@ impl Application {
         (any, count, max_idle)
     }
 
-    /// `prefix+b`: jump to the next tab whose live session has gone quiet (sat silent past the
+    /// Whether a single tab currently reads as "quiet" (live, backgrounded, unprotected, sampled,
+    /// and sat silent past the threshold). Shares the exact condition `next_quiet` uses so the fleet
+    /// grid's per-tile `⌛` matches the `prefix+z` jump and the triage count.
+    fn quiet_for(&self, i: usize) -> bool {
+        let present = self.seen_history.len() == self.app.tabs.len();
+        let Some(s) = self.app.tabs.get(i) else {
+            return false;
+        };
+        let live = s.alive() && s.kind() != "pty";
+        let watched = i == self.app.active;
+        let shielded = self.pinned.get(i).copied().unwrap_or(false)
+            || self.muted.get(i).copied().unwrap_or(false);
+        let sampled = present && self.seen_history[i] != usize::MAX;
+        if !(live && !watched && !shielded && sampled) {
+            return false;
+        }
+        let threshold = std::time::Duration::from_secs(
+            crate::config::Config::load()
+                .quiet_after_secs
+                .unwrap_or(120),
+        );
+        let idle = std::time::Instant::now() - self.last_output[i];
+        idle >= threshold
+    }
+
+    /// `prefix+z`: jump to the next tab whose live session has gone quiet (sat silent past the
     /// quiet threshold — likely done, or parked at an input prompt waiting on you), wrapping.
     /// Complements `next_busy`/`next_down`: busy means "just produced output", quiet means
     /// "finished/stalled — needs a look". No-op when no tab is quiet.
@@ -2544,6 +2569,10 @@ impl Application {
         }
         // Clamp the selected tile into range (tabs can close underneath the overlay).
         self.grid_sel = self.grid_sel.min(n - 1);
+        // Same per-frame output-activity pass the tab bar / triage use, so each tile's status glyphs
+        // match the rest of the chrome: busy = produced output, quiet = sat silent past threshold.
+        let activity = self.activity_flags();
+        let (_, _, _max_idle) = self.quiet_flags();
         // Layout the grid. Tile geometry is a full text cell (the grid rows draw just below the
         // header). Fit as many columns as the window width allows at the active cell width.
         let gcol = self.cell_w as usize;
@@ -2583,11 +2612,48 @@ impl Application {
             } else {
                 format!("@{}", s.meta.host)
             };
+            // Status glyph, matching the tab-bar chrome: nothing for a live idle tab; `!N` busy,
+            // `⌛` quiet (awaiting you), `○`/`↓` down, `⏳N` queued-input, `🔒` pinned, `M` muted.
+            // Quiet and busy are mutually exclusive; down wins over both. The focused tile is the
+            // one you're actively reading, so it's never flagged busy/quiet (same rule as the bar).
+            let is_down = !s.alive() && s.kind() != "pty";
+            let busy = activity
+                .get(idx)
+                .copied()
+                .unwrap_or(false)
+                .then_some(self.grew_delta.get(idx).copied().unwrap_or(0))
+                .unwrap_or(0);
+            let clipped = s.pending_bytes();
+            let glyph = if is_down {
+                "○".to_string()
+            } else if idx != self.grid_sel && activity[idx] {
+                format!("!{}", busy)
+            } else if idx != self.grid_sel && self.quiet_for(idx) {
+                "⌛".to_string()
+            } else {
+                String::new()
+            };
+            let mut glyph_s = glyph;
+            if self.pinned.get(idx).copied().unwrap_or(false) {
+                glyph_s.push('🔒');
+            }
+            if self.muted.get(idx).copied().unwrap_or(false) {
+                glyph_s.push('M');
+            }
+            if clipped > 0 {
+                glyph_s.push_str(&format!("⏳{}", clipped));
+            }
+            let pfx = if glyph_s.is_empty() {
+                String::new()
+            } else {
+                format!("{glyph_s} ")
+            };
             let header = format!(
-                "  {}{}  {head}{}",
+                "  {}{}  {head}{} {}",
                 idx + 1,
                 host,
-                if selected { " ◄" } else { "" }
+                if selected { " ◄" } else { "" },
+                pfx
             );
             draw_text(
                 fb,
