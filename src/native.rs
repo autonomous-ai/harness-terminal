@@ -75,6 +75,8 @@ struct Application {
     /// Last OS window title we set, so we only call set_title when it changes (each call is a
     /// platform round-trip).
     window_title: String,
+    /// Base font scale (1.0 = 14px). Zoom multiplies font/margins; persisted in restore.
+    zoom: f32,
 }
 
 impl Application {
@@ -103,15 +105,28 @@ impl Application {
             cursor: (0.0, 0.0),
             last_press: None,
             window_title: String::new(),
+            zoom: 1.0,
         }
     }
 
     fn metrics_from_scale(&mut self) {
         if let Some(w) = &self.window {
-            let s = w.scale_factor() as f32;
-            self.font_px = (14.0 * s).round() as u32;
-            self.cell_w = (8.0 * s).round() as u32;
+            let s = w.scale_factor() as f32 * self.zoom;
+            self.font_px = (14.0 * s).round().clamp(8.0, 40.0) as u32;
+            self.cell_w = (8.0 * s).round().max(2.0) as u32;
             self.cell_h = (18.0 * s).round() as u32;
+        }
+    }
+
+    /// Zoom the terminal font by a multiplicative factor, applied on top of the display scale.
+    /// Clamps so the grid never becomes unusable, then re-derives cell metrics.
+    fn zoom_font(&mut self, delta: f32) {
+        self.zoom = (self.zoom * delta).clamp(0.5, 3.0);
+        self.metrics_from_scale();
+        if let Some(active) = self.app.active_session() {
+            let lines = (self.size.height - self.cell_h * 2) as usize / self.cell_h as usize;
+            let cols = self.size.width as usize / self.cell_w as usize;
+            active.resize(crate::session::TermSize { lines, cols });
         }
     }
 
@@ -220,7 +235,7 @@ impl Application {
             info = format!(" {} · {} · {} · [{} {}]", s.meta.host, s.meta.engine, live, s.kind(), link);
         }
         draw_text(fb, &mut self.cache, &info, 6, status_base, self.font_px, CHROME_FG);
-        let hints = " prefix+/ palette  prefix+n new  prefix+r remote  prefix+[ copy  prefix+q quit ";
+        let hints = " prefix+/ palette  prefix+n new  prefix+r remote  prefix+[ copy  Ctrl+= zoom  prefix+q quit ";
         let hw = draw_text(fb, &mut self.cache, hints, 6, status_base, self.font_px, CHROME_DIM);
         // Move the hint to the right edge by re-drawing after clearing a wide column is complex;
         // simplest right-align: draw hints over the info end offset. We draw at the right edge:
@@ -694,6 +709,18 @@ impl Application {
 
         // Normal mode: send keystrokes to the active session.
         if self.app.overlay == Overlay::None {
+            // Font zoom (Ctrl+= / Ctrl+- / Ctrl+0 to reset) — captured before anything reaches the
+            // shell, like any terminal's, and a persistent per-window preference.
+            if mods.control_key() {
+                if let Key::Character(c) = key {
+                    match c.as_str() {
+                        "=" | "+" => { self.zoom_font(1.1); return; }
+                        "-" => { self.zoom_font(1.0 / 1.1); return; }
+                        "0" => { self.zoom = 1.0; self.metrics_from_scale(); return; }
+                        _ => {}
+                    }
+                }
+            }
             // Copy mode intercepts keystrokes (navigation + selection) instead of forwarding.
             if self.copy_mode {
                 self.handle_copy_key(key, mods);
