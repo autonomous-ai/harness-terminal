@@ -170,6 +170,13 @@ impl Session {
         self.title.lock().ok().and_then(|t| t.clone())
     }
 
+    /// Current scrollback line count (rows that have scrolled off the top and into history). Grows
+    /// monotonically as the pane produces output; used to badge tabs that produced unseen output
+    /// while we were looking at another one. Read-only; never locks for long.
+    pub fn history_len(&self) -> usize {
+        self.term.lock().grid().history_size()
+    }
+
     /// Create a session running a LOCAL program (shell or an engine CLI) in a fresh PTY.
     pub fn local(
         meta: SessionMeta,

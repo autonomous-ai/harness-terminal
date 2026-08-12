@@ -80,11 +80,16 @@ struct Application {
     /// Base font size in px from config (the size a fresh window opens at, before display-scale
     /// and zoom). `zoom` still scales on top; Ctrl+0 resets zoom but not this.
     base_font: f32,
+    /// Last-seen scrollback line count per tab index, used to flag tabs that produced output while
+    /// not focused. `None` until a tab has been sampled once (so a freshly-spawned tab doesn't
+    /// immediately badge).
+    seen_history: Vec<usize>,
 }
 
 impl Application {
     fn new(app: App) -> Self {
         let base_font = crate::config::Config::load().font_px as f32;
+        let seen_history = vec![usize::MAX; app.tabs.len()];
         Application {
             window: None,
             context: None,
@@ -111,6 +116,7 @@ impl Application {
             window_title: String::new(),
             zoom: crate::restore::load_zoom(),
             base_font,
+            seen_history,
         }
     }
 
@@ -134,6 +140,27 @@ impl Application {
             let cols = self.size.width as usize / self.cell_w as usize;
             active.resize(crate::session::TermSize { lines, cols });
         }
+    }
+
+    /// Return which tab indices have produced output since we last looked at them (are
+    /// backgrounded AND have grown scrollback since our last sample). The focused tab is never
+    /// flagged. Unknown/gone tabs (never sampled) are not flagged.
+    fn activity_flags(&mut self) -> Vec<bool> {
+        let n = self.app.tabs.len();
+        self.seen_history.resize(n, usize::MAX);
+        let mut flags = vec![false; n];
+        for (i, s) in self.app.tabs.iter().enumerate() {
+            if i == self.app.active {
+                // We're looking at it now: re-baseline and don't flag.
+                self.seen_history[i] = s.history_len();
+                continue;
+            }
+            let len = s.history_len();
+            let grew = self.seen_history[i] != usize::MAX && len > self.seen_history[i];
+            self.seen_history[i] = len;
+            flags[i] = grew;
+        }
+        flags
     }
 
     fn redraw(&mut self) {
@@ -212,7 +239,8 @@ impl Application {
             draw_grid(fb, &g, self.cell_w, self.cell_h, self.font_px, &mut self.cache, self.find_hit, &self.find_all, sel.as_ref(), copy);
         }
 
-        // Tab bar (top row).
+        // Tab bar (top row). Flag backgrounded tabs that produced output since we last looked.
+        let activity = self.activity_flags();
         let tab_base = self.cell_h as usize / 2;
         let mut x = 6usize;
         for (i, s) in self.app.tabs.iter().enumerate() {
@@ -224,7 +252,9 @@ impl Application {
             if live.chars().count() > 18 {
                 live = live.chars().take(18).collect::<String>() + "…";
             }
-            let label = format!(" {} {} {} ", s.meta.engine, live, dot);
+            // An exclamation marks a backgrounded tab that has scrolled since we last sampled it.
+            let flag = if activity[i] { "!" } else { "" };
+            let label = format!(" {}{} {} {} ", flag, s.meta.engine, live, dot);
             let color = if active { WHITE } else { CHROME_DIM };
             x += draw_text(fb, &mut self.cache, &label, x, tab_base, self.font_px, color) + 12;
             if x > fb.width.saturating_sub(20) {
