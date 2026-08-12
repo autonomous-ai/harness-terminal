@@ -1784,7 +1784,18 @@ impl Application {
             .clamp(6.0, (self.size.width.max(60) - 40) as f64)) as usize;
         let base_y = self.cell_h as usize + 8;
 
-        let mut lines: Vec<String> = s.tail(5);
+        // A busy tab's live screen is a moving blur (new chars land every frame), so show its
+        // settled scrollback — the freshly-printed rows that have frozen in history — for a stable
+        // read. An idle tab shows its live tail as usual.
+        let mut lines: Vec<String> = if self.grew_delta.get(i).copied().unwrap_or(0) > 0 {
+            let mut h = s.history_slice(5);
+            if h.is_empty() {
+                h = s.tail(5);
+            }
+            h
+        } else {
+            s.tail(5)
+        };
         // Title / state header so the preview is self-describing.
         let head = s.meta.name.clone().unwrap_or_else(|| s.meta.engine.clone());
         let live = s.live_title().unwrap_or_else(|| s.meta.title.clone());

@@ -524,6 +524,28 @@ impl Session {
         tail_to_string(term.grid(), n)
     }
 
+    /// The newest rows that have scrolled off the visible screen into scrollback HISTORY, oldest
+    /// first, up to `n`. Unlike [`tail`] (which reads the live screen where new chars land every
+    /// frame), these rows are frozen in history and no longer reflow, so they read stably while an
+    /// agent streams. Used by the hover tooltip on a busy tab to show the freshly-printed, settled
+    /// output instead of a moving blur. Empty when nothing has scrolled off yet.
+    pub fn history_slice(&self, n: usize) -> Vec<String> {
+        let term = self.term.lock();
+        let grid = term.grid();
+        let cols = grid.columns();
+        let hist = grid.history_size();
+        let take = hist.min(n) as i64;
+        // History rows are indexed GridLine(-k), k=1..=hist, where -1 is the newest (just above the
+        // screen). Walk newest-first then reverse so the returned slice is oldest-first (natural
+        // reading order), matching `tail`.
+        let mut out = Vec::with_capacity(take as usize);
+        for k in 1..=take {
+            out.push(row_text(grid, -k as i32, cols));
+        }
+        out.reverse();
+        out
+    }
+
     /// Replay a previously-captured scrollback (from [`capture_scrollback`]) into a fresh session,
     /// reconstructing wrapping/color/cursor as if the pane had produced those bytes. Call right after
     /// construction, before the transport's live bytes arrive; the reconnect sweep then appends live

@@ -6,6 +6,10 @@ entries record user-visible and architectural changes since the last tagged mile
 ## Unreleased / 0.1.0 (in progress)
 
 ### Added
+- **Busy-tab tooltip shows settled scrollback** — hovering a tab that's actively streaming now shows
+  the freshly-printed rows that have frozen into history (a stable read of what the agent decided to
+  print) instead of the live screen tail, which reflows every frame into an unreadable blur. Idle
+  tabs keep showing their live tail as before.
 - **Streaming spinner** — a tab that is producing output right now (this frame) shows a small,
   cycling spinner next to its busy badge, so live tabs visibly turn while settled ones sit still.
   Distinct from the cumulative `!N` badge, which lingers after an agent goes quiet.
