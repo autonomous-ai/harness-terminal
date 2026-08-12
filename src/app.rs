@@ -235,6 +235,34 @@ impl App {
         self.active = to;
     }
 
+    /// Move the tab at `from` to final position `to` in the bar (both original indices), used by
+    /// drag-to-reorder. Unlike [`move_tab`] (which swaps the *active* tab), this relocates an
+    /// arbitrary tab to an arbitrary slot. The active index is tracked through the remove/insert so
+    /// focus stays on the same session it was on; clamping makes out-of-range calls no-ops.
+    pub fn move_tab_from_to(&mut self, from: usize, to: usize) {
+        let len = self.tabs.len();
+        if len < 2 || from == to || from >= len || to >= len {
+            return;
+        }
+        let spec = self.tabs.remove(from);
+        // Inserting at `to` after the removal places the moved tab at final index `to` (the array
+        // is a slot shorter, so any `to < len` is a valid insertion point).
+        self.tabs.insert(to, spec);
+        // Re-anchor the focused session. It is the moved tab itself (now at `to`), or one of the
+        // neighbors the move shifted: moving right shifts indices in `(from, to]` left by one,
+        // moving left shifts `[to, from)` right by one. Anything else is untouched.
+        let a = self.active;
+        self.active = if a == from {
+            to
+        } else if from < to && a > from && a <= to {
+            a - 1
+        } else if from > to && a >= to && a < from {
+            a + 1
+        } else {
+            a
+        };
+    }
+
     /// Undo the most recent tab close, re-spawning the same identity (same pane@host / engine) and
     /// focusing it. No-op when nothing has been closed or the re-spawn fails.
     pub fn reopen_last_closed(&mut self) {
@@ -316,4 +344,93 @@ fn engine_cmd(id: &str) -> Option<&'static str> {
         return Some("bash");
     }
     ENGINES.iter().find(|e| e.id == id).map(|e| e.cmd)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// A headless App with `n` throwaway local sessions (each spawns a fast `true`). Built by hand
+    /// rather than via `App::new` so it never touches the config dir (no HARNESS_CONFIG_DIR redirect,
+    /// hence no cross-module env-var race with restore.rs's parallel tests).
+    fn app_with(n: usize) -> App {
+        let size = TermSize {
+            lines: 24,
+            cols: 80,
+        };
+        let mut app = App {
+            tabs: Vec::new(),
+            active: 0,
+            overlay: Overlay::None,
+            query: String::new(),
+            selected: 0,
+            filtered: Vec::new(),
+            size,
+            remote_host: String::new(),
+            fleet: crate::harness::FleetStatus::default(),
+            next_reconnect: std::time::Instant::now(),
+            last_closed: None,
+        };
+        for i in 0..n {
+            let meta = SessionMeta {
+                host: "h".into(),
+                engine: format!("e{i}"),
+                title: format!("e{i} @ h"),
+                name: None,
+            };
+            if let Ok(s) = Session::local(meta, "/usr/bin/true", Vec::new(), app.size, None) {
+                app.tabs.push(s);
+            }
+        }
+        app
+    }
+
+    /// Reordering a tab keeps the active session's identity focused (not its slot).
+    #[test]
+    fn move_from_to_tracks_active_index() {
+        let mut app = app_with(4);
+        app.active = 2; // focus e2 initially
+                        // Move e2 (slot 2) to the front (slot 0).
+        app.move_tab_from_to(2, 0);
+        assert_eq!(app.tabs[0].meta.engine, "e2");
+        assert_eq!(app.tabs[1].meta.engine, "e0");
+        assert_eq!(app.tabs[2].meta.engine, "e1");
+        assert_eq!(app.tabs[3].meta.engine, "e3");
+        assert_eq!(
+            app.tabs[app.active].meta.engine, "e2",
+            "focus follows the dragged session"
+        );
+    }
+
+    /// Moving a tab past the active index shifts the active index down by one (the removed front
+    /// slot reduces indices above it).
+    #[test]
+    fn move_from_to_forward_past_active_shifts_active() {
+        let mut app = app_with(4);
+        app.active = 1; // focus e1 (slot 1)
+                        // Move e0 (slot 0) past the active to the end.
+        app.move_tab_from_to(0, 3);
+        assert_eq!(app.tabs[0].meta.engine, "e1");
+        assert_eq!(app.tabs[1].meta.engine, "e2");
+        assert_eq!(app.tabs[2].meta.engine, "e3");
+        assert_eq!(app.tabs[3].meta.engine, "e0");
+        assert_eq!(
+            app.tabs[app.active].meta.engine, "e1",
+            "active e1 shifted from slot 1 to slot 0"
+        );
+    }
+
+    /// No-op reorders (same slot, out of range, single tab) never change the list.
+    #[test]
+    fn move_from_to_noop_cases() {
+        let mut app = app_with(1);
+        app.move_tab_from_to(0, 0);
+        assert_eq!(app.tabs.len(), 1);
+
+        let mut a2 = app_with(3);
+        a2.move_tab_from_to(0, 9); // out of range
+        assert_eq!(a2.tabs[0].meta.engine, "e0");
+        a2.move_tab_from_to(9, 0); // from out of range
+        assert_eq!(a2.tabs.len(), 3);
+    }
 }

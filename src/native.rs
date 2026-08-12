@@ -210,6 +210,10 @@ struct Application {
     /// The tab index currently under the pointer (for a hover-preview tooltip of its tail), or
     /// None when the cursor isn't over a tab. Recompute on every CursorMoved against the tab bar.
     hover_tab: Option<usize>,
+    /// The tab index being drag-reordered (left button pressed on a tab), or None when idle. While
+    /// this is Some, drags reorder the tab bar instead of growing a text selection, and release
+    /// lands the dragged tab. Clicking a tab (press→release without moving) still switches to it.
+    drag_tab: Option<usize>,
 }
 
 impl Application {
@@ -298,6 +302,7 @@ impl Application {
             focus: false,
             bell_until: vec![None; tab_count],
             hover_tab: None,
+            drag_tab: None,
         }
     }
 
@@ -3275,6 +3280,43 @@ impl Application {
         }
     }
 
+    /// Drag the hovered tab: as the pointer crosses a neighbor's midpoint, live-swap the dragged tab
+    /// with it so the bar reflows under the cursor (standard tab-drag feel). `drag_tab` holds the
+    /// current source slot; each swap keeps the dragged session under the pointer.
+    fn tab_drag(&mut self, x: f64) {
+        let src = match self.drag_tab {
+            Some(i) => i,
+            None => return,
+        };
+        if self.app.tabs.len() < 2 {
+            return;
+        }
+        // Destination is the tab currently hovered (by the same hit-test the press used).
+        let Some(dst) = self.tab_at(x, 4.0) else {
+            return;
+        };
+        if dst == src {
+            return;
+        }
+        self.app.move_tab_from_to(src, dst);
+        // The dragged session landed at final index `dst`; resume dragging it from there so a
+        // further move keeps the same session under the pointer.
+        self.drag_tab = Some(dst);
+    }
+
+    /// Land a drag: if the tab moved from where it was pressed, leave it reordered; if it didn't
+    /// move, treat the release as a click that switches to that tab. Always clears the drag state.
+    /// The `from` slot is recovered as the tab the press started on via `drag_tab`; we track the
+    /// original so a no-move release still switches.
+    fn tab_drop(&mut self, x: f64, y: f64) {
+        if let Some(i) = self.drag_tab.take() {
+            // A plain click on a tab (press→release over the same tab) switches to it.
+            if self.tab_at(x, y) == Some(i) {
+                self.set_active(i);
+            }
+        }
+    }
+
     /// Copy the active session's text selection to the system clipboard. No-op when empty.
     fn copy_selection(&mut self) {
         let Some(active) = self.app.active_session() else {
@@ -3503,7 +3545,14 @@ impl ApplicationHandler for Application {
                         });
                     }
                 }
-                if self.mouse_anchor.is_some() && self.app.overlay == Overlay::None {
+                // Dragging a tab reorders the bar (live swap as you cross a neighbor's midpoint);
+                // dragging in the grid grows a text selection. Both are mutually exclusive.
+                if self.drag_tab.is_some() && self.app.overlay == Overlay::None {
+                    self.tab_drag(position.x);
+                    if let Some(w) = &self.window {
+                        w.request_redraw();
+                    }
+                } else if self.mouse_anchor.is_some() && self.app.overlay == Overlay::None {
                     self.mouse_drag(position.x, position.y);
                     if let Some(w) = &self.window {
                         w.request_redraw();
@@ -3549,13 +3598,27 @@ impl ApplicationHandler for Application {
                                 self.mouse_open(x, y);
                                 return;
                             }
+                            // Pressing on a tab starts a drag-reorder (or a click-to-switch); pressing
+                            // in the grid starts normal text selection. Both are mutually exclusive.
+                            if let Some(i) = self.tab_at(x, y) {
+                                self.drag_tab = Some(i);
+                                if let Some(w) = &self.window {
+                                    w.request_redraw();
+                                }
+                                return;
+                            }
+                            self.drag_tab = None;
                             self.mouse_press(x, y);
                             if let Some(w) = &self.window {
                                 w.request_redraw();
                             }
                         }
                         ElementState::Released => {
-                            self.mouse_release(x, y);
+                            if self.drag_tab.is_some() {
+                                self.tab_drop(x, y);
+                            } else {
+                                self.mouse_release(x, y);
+                            }
                             if let Some(w) = &self.window {
                                 w.request_redraw();
                             }
