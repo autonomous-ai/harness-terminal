@@ -20,6 +20,8 @@ pub enum Overlay {
     Find,
     /// Read-only fleet status: all harness sessions on this machine (fetch on open).
     Fleet,
+    /// Keybinding reference overlay (dismiss on any key).
+    Help,
 }
 
 pub struct App {

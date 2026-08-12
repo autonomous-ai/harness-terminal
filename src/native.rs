@@ -235,7 +235,7 @@ impl Application {
             info = format!(" {} · {} · {} · [{} {}]", s.meta.host, s.meta.engine, live, s.kind(), link);
         }
         draw_text(fb, &mut self.cache, &info, 6, status_base, self.font_px, CHROME_FG);
-        let hints = " prefix+/ palette  prefix+n new  prefix+r remote  prefix+[ copy  Ctrl+= zoom  prefix+q quit ";
+        let hints = " prefix+/ palette  prefix+n new  prefix+r remote  prefix+s fleet  prefix+[ copy  prefix+? help  prefix+q quit ";
         let hw = draw_text(fb, &mut self.cache, hints, 6, status_base, self.font_px, CHROME_DIM);
         // Move the hint to the right edge by re-drawing after clearing a wide column is complex;
         // simplest right-align: draw hints over the info end offset. We draw at the right edge:
@@ -276,6 +276,7 @@ impl Application {
             Overlay::RemoteAttach => self.render_remote(fb),
             Overlay::Find => self.render_find(fb),
             Overlay::Fleet => self.render_fleet(fb),
+            Overlay::Help => self.render_help(fb),
             Overlay::None => {}
         }
     }
@@ -332,6 +333,31 @@ impl Application {
             let id = if s.session_id.is_empty() { s.tmux_pane.clone() } else { s.session_id.chars().take(8).collect() };
             let line = format!("  {} {}  {:<9} {}", mark, eng, "", id);
             draw_text(fb, &mut self.cache, &line, 32, base_y + (i + 1) * line_px, self.font_px, color);
+        }
+    }
+
+    /// Keybinding reference overlay. Static list; dismiss on any key.
+    fn render_help(&mut self, fb: &mut Framebuffer) {
+        let (base_y, line_px) = self.overlay_base_y();
+        draw_text(fb, &mut self.cache, "  harness-terminal keys  ", 32, base_y, self.font_px, WHITE);
+        let bindings: [(&str, &str); 14] = [
+            ("Ctrl+Space", "prefix (then a command)"),
+            ("prefix /", "palette: jump to any session"),
+            ("prefix n", "new session (engine picker)"),
+            ("prefix r", "attach to a remote pane@host"),
+            ("prefix s", "fleet status"),
+            ("prefix f", "search scrollback"),
+            ("prefix [", "copy mode"),
+            ("prefix ?", "this help"),
+            ("1-9 / Tab", "switch tab"),
+            ("x / c", "close tab / go to tab 0"),
+            ("g / b", "scroll up a page / jump to bottom"),
+            ("Ctrl+= / Ctrl+-", "font zoom (Ctrl+0 reset)"),
+            ("PgUp/PgDn", "scrollback"),
+            ("prefix q", "quit"),
+        ];
+        for (row, (k, d)) in bindings.iter().enumerate() {
+            draw_text(fb, &mut self.cache, &format!("  {:<14} {}", k, d), 32, base_y + (row + 1) * line_px, self.font_px, CHROME_DIM);
         }
     }
 
@@ -628,6 +654,7 @@ impl Application {
                 "b" => self.scroll_to_bottom(),
                 "f" => { self.app.overlay = Overlay::Find; self.find_query.clear(); self.find_hit = None; self.find_all = Vec::new(); },
                 "[" => self.start_copy_mode(),
+                "?" => { self.app.overlay = Overlay::Help; }
                 // Numeric tabs 1-9.
                 _ if c.len() == 1 && c.chars().next().unwrap().is_ascii_digit() => {
                     let idx = c.chars().next().unwrap() as u8;
@@ -731,6 +758,7 @@ impl Application {
                 }
                 return;
             }
+            Overlay::Help => { self.app.overlay = Overlay::None; return; }
             Overlay::None => {}
         }
 

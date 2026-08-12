@@ -67,6 +67,7 @@ fn draw_frame(frame: &mut Frame, app: &mut App) {
         Overlay::RemoteAttach => draw_remote_attach(frame, chunks[1], app),
         Overlay::Find => {} // native-only feature; the TUI fallback ignores it.
         Overlay::Fleet => {} // native-only overlay; the TUI fallback ignores it.
+        Overlay::Help => {} // native-only overlay; the TUI fallback ignores it.
         Overlay::None => {}
     }
 }
