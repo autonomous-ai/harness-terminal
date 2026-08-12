@@ -1881,6 +1881,14 @@ impl Application {
                 None => "live".to_string(),
             }
         ));
+        // Staged type-ahead (visible in the bar too): how much input is parked to flush on reconnect.
+        let queued = s.pending_bytes();
+        if queued > 0 {
+            rows.push(format!(
+                "  queued     ⏳{}B staged, flush on reconnect",
+                queued
+            ));
+        }
         rows.push(format!(
             "  view       {}",
             if s.scrolled() {
