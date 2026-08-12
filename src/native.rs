@@ -1323,6 +1323,16 @@ impl Application {
             return;
         };
         let (width, height) = (w.get() as usize, h.get() as usize);
+        // Keep the softbuffer surface buffer in lockstep with the window's physical size.
+        // SOFTBUFFER-PITFALL: on macOS the CG backend only resizes its internal buffer when we
+        // call `Surface::resize` — it does NOT track the window bounds on its own (unlike winit,
+        // which reports Resized in physical px). If we skip this, an enlarged window renders into
+        // a stale small buffer, so `buffer_mut` hands back a tiny top-left patch and the rest of
+        // the window is transparent white. `resize` just sets two fields and `buffer_mut` reallocs
+        // per frame anyway, so calling it every frame is both correct and free.
+        if let Some(s) = &mut self.surface {
+            let _ = s.resize(w, h);
+        }
         // 0x00RRGGBB (softbuffer's native format); starts solid black.
         let mut fb = Framebuffer::new(width, height);
         for p in fb.pixels.iter_mut() {
