@@ -1489,8 +1489,12 @@ impl Application {
                 "p" => self.paste_clipboard(),
                 "a" => {
                     // Broadcast one line to every open session. Starts with an empty query so the
-                    // user types (or re-enters) the command line to fan out via Enter.
+                    // user types (or re-enters) the command line to fan out via Enter. Targets reset
+                    // all-on on each open: a prior run's deselections must NOT silently carry over,
+                    // or a user who meant to exclude one host could re-fan to it on the next send.
                     self.broadcast_query.clear();
+                    self.broadcast_targets.iter_mut().for_each(|t| *t = true);
+                    self.broadcast_sel = 0;
                     self.app.overlay = Overlay::Broadcast;
                 }
                 "x" => { close_tab(&mut self.app); }
