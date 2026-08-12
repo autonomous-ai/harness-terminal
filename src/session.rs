@@ -201,6 +201,10 @@ pub struct Session {
     /// switching tabs doesn't lose where you left each pane — flag A's scroll survives a switch to
     /// B and back, unlike a single app-wide "scrolled".
     scrolled: Arc<std::sync::atomic::AtomicBool>,
+    /// Keystrokes typed while the transport is dead, flushed into the pane on the next successful
+    /// reconnect. Lets a diver queue a command for a host that's coming back instead of typing into a
+    /// black hole (and losing the input when the pane re-attaches).
+    pending: Mutex<Vec<u8>>,
 }
 
 /// Per-session auto-reconnect policy: exponential backoff with a visible attempt count.
@@ -274,6 +278,7 @@ impl Session {
             bell,
             retry: Mutex::new(RetryState::new()),
             scrolled: Arc::new(std::sync::atomic::AtomicBool::new(false)),
+            pending: Mutex::new(Vec::new()),
         })
     }
 
@@ -297,6 +302,7 @@ impl Session {
             bell,
             retry: Mutex::new(RetryState::new()),
             scrolled: Arc::new(std::sync::atomic::AtomicBool::new(false)),
+            pending: Mutex::new(Vec::new()),
         })
     }
 
@@ -337,6 +343,7 @@ impl Session {
             bell,
             retry: Mutex::new(RetryState::new()),
             scrolled: Arc::new(std::sync::atomic::AtomicBool::new(false)),
+            pending: Mutex::new(Vec::new()),
         })
     }
 
@@ -369,6 +376,7 @@ impl Session {
             bell,
             retry: Mutex::new(RetryState::new()),
             scrolled: Arc::new(std::sync::atomic::AtomicBool::new(false)),
+            pending: Mutex::new(Vec::new()),
         })
     }
 
@@ -411,6 +419,12 @@ impl Session {
             Ok(()) => {
                 // Back up: the pane came through, reset the retry ladder.
                 self.retry.lock().unwrap().attempts = 0;
+                // Replay whatever was typed while the pane was dead so a queued command actually
+                // lands in the re-attached pane.
+                let buffered: Vec<u8> = self.pending.lock().unwrap().drain(..).collect();
+                if !buffered.is_empty() {
+                    self.transport.write(&buffered);
+                }
                 Ok(())
             }
             Err(e) => {
@@ -438,6 +452,13 @@ impl Session {
         }
     }
 
+    /// Number of bytes buffered while the transport was down (type-ahead awaiting a reconnect).
+    /// Zero for live tabs. Lets the tab/status show how much queued input will land when the pane
+    /// comes back.
+    pub fn pending_bytes(&self) -> usize {
+        self.pending.lock().unwrap().len()
+    }
+
     /// Kill the pane's underlying session so it stops consuming resources on its host. A no-op for a
     /// local PTY (already tied to the child process). The tab should be removed right after; the
     /// transport's alive flag flips false and the watchdog would otherwise try to reconnect.
@@ -445,8 +466,14 @@ impl Session {
         self.transport.destroy();
     }
 
-    /// Push keystrokes into the session's transport.
+    /// Push keystrokes into the session's transport. If the transport is down the keystrokes are
+    /// buffered in `pending` (see [`Session::pending`]) and flushed on the next successful reconnect —
+    /// so typing into a dead pane queues the command rather than dropping it.
     pub fn write(&self, bytes: &[u8]) {
+        if !self.transport.alive() {
+            self.pending.lock().unwrap().extend_from_slice(bytes);
+            return;
+        }
         self.transport.write(bytes);
         if let Some(echo) = &self.echo {
             // Latency smoothing: optimistically render the keystrokes locally so typing feels
@@ -618,6 +645,111 @@ mod tests {
             out, b"xxxxx",
             "expired pending echo must pass through as real output"
         );
+    }
+
+    /// A controllable fake transport whose writes are recorded and whose liveness the test toggles.
+    /// Lives behind shared cells so the test can flip liveness and read what was written through the
+    /// same `Box<dyn Transport>` the session holds.
+    struct FakeTransport {
+        alive: Arc<std::sync::atomic::AtomicBool>,
+        writes: Arc<Mutex<Vec<u8>>>,
+    }
+    impl FakeTransport {
+        fn new() -> (
+            FakeTransport,
+            Arc<std::sync::atomic::AtomicBool>,
+            Arc<Mutex<Vec<u8>>>,
+        ) {
+            let alive = Arc::new(std::sync::atomic::AtomicBool::new(true));
+            let writes = Arc::new(Mutex::new(Vec::new()));
+            (
+                FakeTransport {
+                    alive: Arc::clone(&alive),
+                    writes: Arc::clone(&writes),
+                },
+                alive,
+                writes,
+            )
+        }
+    }
+    impl Transport for FakeTransport {
+        fn kind(&self) -> &'static str {
+            "fake"
+        }
+        fn write(&self, bytes: &[u8]) {
+            self.writes.lock().unwrap().extend_from_slice(bytes);
+        }
+        fn resize(&self, _size: TermSize) {}
+        fn alive(&self) -> bool {
+            self.alive.load(Ordering::Relaxed)
+        }
+        fn reconnect(&mut self) -> io::Result<()> {
+            self.alive.store(true, Ordering::Relaxed);
+            Ok(())
+        }
+        fn destroy(&self) {}
+    }
+
+    fn fake_session(fake: FakeTransport) -> Session {
+        let title = Arc::new(Mutex::new(None));
+        let listener = Listener::with_title(Arc::clone(&title));
+        let size = TermSize {
+            lines: 24,
+            cols: 80,
+        };
+        let term = Arc::new(FairMutex::new(Term::new(
+            Config::default(),
+            &size,
+            listener,
+        )));
+        Session {
+            meta: SessionMeta {
+                host: "h".into(),
+                engine: "e".into(),
+                title: "e @ h".into(),
+                name: None,
+            },
+            term,
+            transport: Box::new(fake),
+            echo: None,
+            title,
+            bell: Arc::new(AtomicBool::new(false)),
+            retry: Mutex::new(RetryState::new()),
+            scrolled: Arc::new(AtomicBool::new(false)),
+            pending: Mutex::new(Vec::new()),
+        }
+    }
+
+    /// Keystrokes typed while a pane is dead are buffered (not dropped) and flushed into the pane on
+    /// the next successful reconnect.
+    #[test]
+    fn type_ahead_buffers_while_down_and_flushes_on_reconnect() {
+        let (fake, alive, writes) = FakeTransport::new();
+        let mut s = fake_session(fake);
+        // Live tab: writes go straight through.
+        s.write(b"ls\r");
+        assert_eq!(*writes.lock().unwrap(), b"ls\r");
+        assert_eq!(s.pending_bytes(), 0);
+
+        // Kill the transport; further input buffers instead of vanishing.
+        alive.store(false, Ordering::Relaxed);
+        s.write(b"git pull\r ");
+        s.write(b"&& make\r");
+        assert_eq!(s.pending_bytes(), 18, "dead pane input buffers, not drops");
+        assert_eq!(
+            *writes.lock().unwrap(),
+            b"ls\r",
+            "nothing new reaches a dead pane"
+        );
+
+        // Bring the pane back; the queued command replays into it and the buffer clears.
+        s.reconnect_now().unwrap();
+        assert_eq!(
+            *writes.lock().unwrap(),
+            b"ls\rgit pull\r && make\r",
+            "buffered keystrokes flush on reconnect"
+        );
+        assert_eq!(s.pending_bytes(), 0);
     }
 
     /// OSC window titles are captured into the shared slot and exposed via live_title; ResetTitle

@@ -1130,11 +1130,17 @@ impl Application {
                 } else {
                     // Show the live retry state (attempts + backoff seconds) so a dropped tunnel is
                     // visibly healing itself rather than silently sitting on a dead pane.
-                    format!(
-                        "○ {}",
-                        s.retry_info()
-                            .unwrap_or_else(|| "reconnecting…".to_string())
-                    )
+                    // If the diver typed into the dead pane, say how much is queued to flush on
+                    // reconnect — otherwise they'd assume the keystrokes were lost.
+                    let queued = s.pending_bytes();
+                    let base = s
+                        .retry_info()
+                        .unwrap_or_else(|| "reconnecting…".to_string());
+                    if queued > 0 {
+                        format!("○ {base} · queued {}B", queued)
+                    } else {
+                        format!("○ {base}")
+                    }
                 };
                 let live = s.live_title().unwrap_or_else(|| s.meta.title.clone());
                 let head = s.meta.name.clone().unwrap_or_else(|| s.meta.engine.clone());
