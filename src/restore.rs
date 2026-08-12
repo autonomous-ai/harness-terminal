@@ -89,6 +89,29 @@ fn active_path() -> std::path::PathBuf {
     config_dir().join("active.json")
 }
 
+fn engine_recency_path() -> std::path::PathBuf {
+    config_dir().join("engines.json")
+}
+
+/// Persist when each engine was last used (monotonic spawn tick -> engine id), so the new-session
+/// picker's recency ordering survives a restart. Best-effort like the others.
+pub fn save_engine_recency(recency: &std::collections::HashMap<String, u64>) {
+    let _ = std::fs::create_dir_all(config_dir());
+    let _ = std::fs::write(
+        engine_recency_path(),
+        serde_json::to_string_pretty(recency).unwrap_or_default(),
+    );
+}
+
+/// Load engine recency (empty on missing file / bad JSON). Caller seeds the live counter from the
+/// max tick so future spawns keep counting strictly upward.
+pub fn load_engine_recency() -> std::collections::HashMap<String, u64> {
+    let Ok(raw) = std::fs::read_to_string(engine_recency_path()) else {
+        return std::collections::HashMap::new();
+    };
+    serde_json::from_str(&raw).unwrap_or_default()
+}
+
 /// Persist which tab was focused last, so a relaunch opens on it rather than always tab 0.
 /// Best-effort like the others.
 pub fn save_active(idx: usize) {
@@ -447,6 +470,21 @@ mod tests {
             assert_eq!(load_active(), 0);
             save_active(3);
             assert_eq!(load_active(), 3);
+        });
+    }
+
+    /// Engine-recency round-trips; a missing file loads as an empty map.
+    #[test]
+    fn engine_recency_roundtrips_missing_is_empty() {
+        with_isolated_dir(|_| {
+            let mut m = std::collections::HashMap::new();
+            m.insert("claude".to_string(), 5u64);
+            m.insert("grok".to_string(), 9u64);
+            save_engine_recency(&m);
+            let back = load_engine_recency();
+            assert_eq!(back.get("claude"), Some(&5));
+            assert_eq!(back.get("grok"), Some(&9));
+            assert_eq!(back.len(), 2);
         });
     }
 

@@ -74,6 +74,13 @@ impl App {
             .map(|s| (s.kind.as_str(), s.host.as_str(), s.engine.as_str()))
             .collect();
         crate::restore::cleanup_orphans(&alive);
+        // Load persisted engine recency so the picker keeps its ordering across restarts. The live
+        // counter resumes past the max stored tick so new spawns keep counting strictly upward.
+        let mut recency = crate::restore::load_engine_recency();
+        let counter = recency.values().copied().max().unwrap_or(0);
+        if counter == 0 {
+            recency.clear(); // no stored ticks yet — keep the picker in configured-default order
+        }
         App {
             tabs: Vec::new(),
             active: 0,
@@ -86,8 +93,8 @@ impl App {
             fleet: crate::harness::FleetStatus::default(),
             next_reconnect: std::time::Instant::now(),
             last_closed: None,
-            spawn_counter: 0,
-            engine_last_used: std::collections::HashMap::new(),
+            spawn_counter: counter,
+            engine_last_used: recency,
         }
     }
 
@@ -186,6 +193,12 @@ impl App {
             .insert(engine_id.to_string(), self.spawn_counter);
     }
 
+    /// Persist the recency map so a relaunch keeps the picker's ordering. Called from the spawn
+    /// paths (not from [`note_engine_used`]) so tests that bump recency by hand don't hit the disk.
+    pub fn persist_engine_recency(&self) {
+        crate::restore::save_engine_recency(&self.engine_last_used);
+    }
+
     /// Picker order for the 12 engines: most-recently-used first, ties broken alphabetically by id.
     pub fn engine_order(&self) -> Vec<&'static crate::engines::Engine> {
         let mut v: Vec<&'static crate::engines::Engine> = crate::engines::ENGINES.iter().collect();
@@ -201,6 +214,7 @@ impl App {
         match res {
             Ok(session) => {
                 self.note_engine_used(engine_id);
+                self.persist_engine_recency();
                 self.tabs.push(session);
                 self.active = self.tabs.len() - 1;
             }
