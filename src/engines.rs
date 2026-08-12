@@ -24,6 +24,9 @@ pub const ENGINE_IDS: &[&str] = &[
 pub struct Engine {
     pub id: &'static str,
     pub label: &'static str,
+    /// One-line human description, shown in the picker/remote-attach/fleet so a diver can tell
+    /// frameworks apart before spawning one.
+    pub desc: &'static str,
     /// CLI command that launches the framework.
     pub cmd: &'static str,
     /// ARGB accent color used for the tab badge.
@@ -34,72 +37,84 @@ pub const ENGINES: &[Engine] = &[
     Engine {
         id: "claude",
         label: "Claude Code",
+        desc: "Anthropic CLI coding agent (this one) - fast, terminal-first",
         cmd: "claude",
         color: 0xff_9a4dff,
     },
     Engine {
         id: "codex",
         label: "Codex",
+        desc: "OpenAI terminal agent - GPT code gen + shell workflows",
         cmd: "codex",
         color: 0xff_22c55e,
     },
     Engine {
         id: "cursor",
         label: "Cursor",
+        desc: "Cursor Agent - the popular VS Code AI, shipped as a CLI",
         cmd: "agent",
         color: 0xff_38bdf8,
     },
     Engine {
         id: "opencode",
         label: "OpenCode",
+        desc: "OpenCode - open-source agentic CLI (solver, MCP-ready)",
         cmd: "opencode",
         color: 0xff_0ea5e9,
     },
     Engine {
         id: "pi",
         label: "PI",
+        desc: "Perplexity PI - reasoning agent with web browsing",
         cmd: "pi",
         color: 0xff_a3e635,
     },
     Engine {
         id: "hermes",
         label: "Hermes",
+        desc: "Hermes - fast local-first agent (Nous Research)",
         cmd: "hermes",
         color: 0xff_a78bfa,
     },
     Engine {
         id: "commandcode",
         label: "Command Code",
+        desc: "Command Code - JetBrains agent CLI (AI Assistant)",
         cmd: "cmd",
         color: 0xff_f472b6,
     },
     Engine {
         id: "devin",
         label: "Devin",
+        desc: "Devin - Cognition autonomous software engineer",
         cmd: "devin",
         color: 0xff_818cf8,
     },
     Engine {
         id: "muse",
         label: "Muse",
+        desc: "Muse - DeepMind-style generalist coding agent",
         cmd: "muse",
         color: 0xff_fbbf24,
     },
     Engine {
         id: "amp",
         label: "AMP",
+        desc: "AMP - agent marketplace CLI (open agent discovery)",
         cmd: "amp",
         color: 0xff_34d399,
     },
     Engine {
         id: "kilo",
         label: "Kilo",
+        desc: "Kilo - open-source Codex Workflow reimplementation",
         cmd: "kilo",
         color: 0xff_2dd4bf,
     },
     Engine {
         id: "grok",
         label: "Grok",
+        desc: "Grok Code Fast - xAI coding agent (fast, low-latency)",
         cmd: "grok",
         color: 0xff_ef4444,
     },

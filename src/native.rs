@@ -1154,6 +1154,19 @@ impl Application {
                 color,
             );
         }
+        // Under the engine list, a running description of the selected engine so a diver can read
+        // what each framework is before committing to a spawn.
+        if let Some(e) = ENGINES.get(self.app.selected) {
+            draw_text(
+                fb,
+                &mut self.cache,
+                &format!("      {} — {}", e.label, e.desc),
+                32,
+                base_y + (ENGINES.len() + 2) * line_px,
+                self.font_px,
+                CHROME_DIM,
+            );
+        }
     }
 
     /// Read-only fleet panel: the machine id + tunnel state, then one line per harness session with
