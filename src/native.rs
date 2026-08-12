@@ -20,7 +20,7 @@ use softbuffer::{Context, Surface};
 
 use crate::app::{App, Overlay};
 use crate::engines::ENGINES;
-use crate::render::{draw_grid, draw_text, Framebuffer, GlyphCache};
+use crate::render::{draw_grid, draw_text, find as grid_find, Framebuffer, GlyphCache};
 use crate::session::TermSize;
 
 /// Chromeless text colors (macOS style).
@@ -45,6 +45,11 @@ struct Application {
     /// scrolls up; cleared when they return to the bottom (scroll command / Esc) or new output
     /// resets the display offset in `render`.
     scrolled: bool,
+    /// Active search query ("" when the Find overlay is closed).
+    find_query: String,
+    /// The currently-focused search match (absolute line, col, width); recomputed on each query
+    /// change / Enter and passed to draw_grid for highlighting.
+    find_hit: Option<crate::render::Find>,
 }
 
 impl Application {
@@ -62,6 +67,8 @@ impl Application {
             prefix_down: false,
             mods: ModifiersState::default(),
             scrolled: false,
+            find_query: String::new(),
+            find_hit: None,
         }
     }
 
@@ -128,7 +135,7 @@ impl Application {
                 use alacritty_terminal::grid::Scroll;
                 g.grid_mut().scroll_display(Scroll::Bottom);
             }
-            draw_grid(fb, &g, self.cell_w, self.cell_h, self.font_px, &mut self.cache);
+            draw_grid(fb, &g, self.cell_w, self.cell_h, self.font_px, &mut self.cache, self.find_hit);
         }
 
         // Tab bar (top row).
@@ -173,6 +180,7 @@ impl Application {
             Overlay::Palette => self.render_palette(fb),
             Overlay::NewSession => self.render_list(fb, "  new session  ", true),
             Overlay::RemoteAttach => self.render_remote(fb),
+            Overlay::Find => self.render_find(fb),
             Overlay::None => {}
         }
     }
@@ -218,6 +226,42 @@ impl Application {
             let line = format!("  {}  {}  {}", e.id, e.label, if sel { "◄" } else { "" });
             draw_text(fb, &mut self.cache, &line, 32, base_y + (i + 3) * line_px, self.font_px, color);
         }
+    }
+
+    /// Recompute the focused search match (from the top if none, else continue from it) and scroll
+    /// the viewport so the match is visible at the top of the grid area.
+    fn find_recompute(&mut self, _start: Option<i32>) {
+        let Some(active) = self.app.active_session() else { self.find_hit = None; return };
+        let mut g = active.term.lock();
+        let from = self
+            .find_hit
+            .map(|(l, _, _)| l + 1)
+            .unwrap_or_else(|| g.grid().topmost_line().0);
+        let hit = grid_find(&g, &self.find_query, from);
+        self.find_hit = hit;
+        if let Some((l, _, _)) = hit {
+            // Place the match line at the top of the viewport:
+            // visible top line = -display_offset, so set display_offset = -l.
+            use alacritty_terminal::grid::Scroll;
+            let current = g.grid().display_offset() as i32;
+            let desired = (-l as i32).clamp(0, g.grid().history_size() as i32);
+            g.grid_mut().scroll_display(Scroll::Delta(desired - current));
+            self.scrolled = true;
+        }
+    }
+
+    /// Render the search overlay: query prompt + current match location in the status area.
+    fn render_find(&mut self, fb: &mut Framebuffer) {
+        let status_base = fb.height.saturating_sub(self.cell_h as usize / 2);
+        // Overlay status line with query and match count info.
+        let line = if self.find_query.is_empty() {
+            "  find: (type to search)  ".to_string()
+        } else if self.find_hit.is_some() {
+            format!("  find: {}  ({} matches · Enter next)", self.find_query, self.find_query)
+        } else {
+            format!("  find: {}  (no match)", self.find_query)
+        };
+        draw_text(fb, &mut self.cache, &line, 6, status_base, self.font_px, WHITE);
     }
 
     /// Handle a key. Mirrors the TUI's prefix→command→forward logic; prefix here is Ctrl+Space
@@ -270,6 +314,7 @@ impl Application {
                 "x" => { close_tab(&mut self.app); }
                 "g" => { scroll_active(self, 20); self.scrolled = true; }
                 "b" => self.scroll_to_bottom(),
+                "f" => { self.app.overlay = Overlay::Find; self.find_query.clear(); self.find_hit = None; },
                 // Numeric tabs 1-9.
                 _ if c.len() == 1 && c.chars().next().unwrap().is_ascii_digit() => {
                     let idx = c.chars().next().unwrap() as u8;
@@ -339,6 +384,22 @@ impl Application {
                         winit::keyboard::NamedKey::ArrowDown => self.app.selected = (self.app.selected + 1).min(ENGINES.len() - 1),
                         winit::keyboard::NamedKey::ArrowUp => self.app.selected = self.app.selected.saturating_sub(1),
                         winit::keyboard::NamedKey::Backspace => { self.app.remote_host.pop(); }
+                        _ => {}
+                    },
+                    _ => {}
+                }
+                return;
+            }
+            Overlay::Find => {
+                match key {
+                    Key::Character(c) => {
+                        self.find_query.push_str(c);
+                        self.find_recompute(None);
+                    }
+                    Key::Named(n) => match n {
+                        winit::keyboard::NamedKey::Enter => { self.find_recompute(None); }
+                        winit::keyboard::NamedKey::Backspace => { self.find_query.pop(); self.find_recompute(None); }
+                        winit::keyboard::NamedKey::Escape => { self.app.overlay = Overlay::None; }
                         _ => {}
                     },
                     _ => {}

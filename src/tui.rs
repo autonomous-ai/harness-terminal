@@ -65,6 +65,7 @@ fn draw_frame(frame: &mut Frame, app: &mut App) {
         Overlay::Palette => draw_palette(frame, chunks[1], app),
         Overlay::NewSession => draw_picker(frame, chunks[1], app),
         Overlay::RemoteAttach => draw_remote_attach(frame, chunks[1], app),
+        Overlay::Find => {} // native-only feature; the TUI fallback ignores it.
         Overlay::None => {}
     }
 }

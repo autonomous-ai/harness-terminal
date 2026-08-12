@@ -16,6 +16,8 @@ pub enum Overlay {
     NewSession,
     /// Remote-attach: type a host, choose an engine, attach to a pane@host on the fleet.
     RemoteAttach,
+    /// Search scrollback: type is a query; Enter jumps to next match, Esc closes.
+    Find,
 }
 
 pub struct App {

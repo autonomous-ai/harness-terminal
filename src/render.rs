@@ -11,6 +11,7 @@ use ab_glyph::{Font as _, FontArc, Glyph as AbsGlyph, PxScale, ScaleFont as _};
 use alacritty_terminal::grid::Dimensions;
 use alacritty_terminal::term::cell::Flags;
 use alacritty_terminal::term::Term;
+use alacritty_terminal::index::{Column, Line};
 use alacritty_terminal::vte::ansi;
 
 use crate::session::Listener;
@@ -226,8 +227,14 @@ impl GlyphCache {
     }
 }
 
+/// A search highlight: the currently-focused match, given as (absolute line, column, width).
+pub type Find = (i32, usize, usize);
+
 /// Draw the grid rows/cols into the framebuffer. `row_px`, `col_px` are per-cell pixel sizes.
 /// The glyph `h` px is the line box; the glyph bitmap is drawn at bottom baseline.
+///
+/// `find` is an optional search highlight: when Some, the match's cells are drawn with a hot
+/// background (yellow) so the user can see where the query landed.
 pub fn draw_grid(
     buf: &mut Framebuffer,
     term: &Term<Listener>,
@@ -235,12 +242,16 @@ pub fn draw_grid(
     cell_h: u32,
     font_px: u32,
     cache: &mut GlyphCache,
+    find: Option<Find>,
 ) {
     let cols = term.columns();
     // Cursor cell (block) — draw on top of its own cell after painting the background.
     let cursor = &term.grid().cursor.point;
     // When scrolled into history the cursor should not draw (it lives off-screen).
     let scrolled = term.grid().display_offset() > 0;
+    // Search-highlight color (vivid yellow background, black text pops).
+    const HIT_FG: (u8, u8, u8) = (0x00, 0x00, 0x00);
+    const HIT_BG: (u8, u8, u8) = (0xff, 0xd2, 0x00);
 
     // Iterate the grid in *display* order (rows scrolled into the viewport), so a non-zero
     // `display_offset` (history scrollback) renders correctly rather than the raw storage lines.
@@ -256,10 +267,16 @@ pub fn draw_grid(
         let x0 = col as u32 * cell_w;
         let y0 = row as u32 * cell_h;
         let is_cursor = !scrolled && row == cursor.line.0 && col == cursor.column.0 as usize;
+        // Is this cell part of the active search match?
+        let in_match = find
+            .map(|(l, c, w)| row == l && col >= c && col < c + w)
+            .unwrap_or(false);
 
         // Background.
         let mut bg = cell_color(&cell.bg);
-        if is_cursor {
+        if in_match {
+            bg = PaletteColor::Spec { r: HIT_BG.0, g: HIT_BG.1, b: HIT_BG.2 };
+        } else if is_cursor {
             // Classic block cursor: use the cell's foreground as the block fill.
             bg = cell_color(&cell.fg);
         }
@@ -268,9 +285,11 @@ pub fn draw_grid(
             continue;
         }
 
-        // Foreground: normal cell fg, or (cursor) theme background so the glyph inverts.
+        // Foreground: normal cell fg, or (cursor/match) inverted theme.
         let mut fg = cell_color(&cell.fg);
-        if is_cursor {
+        if in_match {
+            fg = PaletteColor::Spec { r: HIT_FG.0, g: HIT_FG.1, b: HIT_FG.2 };
+        } else if is_cursor {
             // Invert: draw the glyph in the cell's original background color.
             let mut bgsave = cell_color(&cell.bg);
             std::mem::swap(&mut fg, &mut bgsave);
@@ -303,6 +322,38 @@ pub fn draw_grid(
             }
         }
     }
+}
+
+/// Extract the text of one grid line (history or visible) as a String, for case-insensitive search.
+fn line_text(term: &Term<Listener>, line: i32) -> String {
+    let grid = term.grid();
+    // `Row` indexes over `Column`; take a full slice of cells and collect their chars.
+    let out = &grid[Line(line)][Column(0)..Column(grid.columns())];
+    let mut s = String::with_capacity(out.len());
+    for cell in out {
+        s.push(cell.c);
+    }
+    s
+}
+
+/// Case-insensitive substring search across the whole grid (history + screen). Returns the first
+/// match at-or-after `start` (an absolute line), or None. `start` starts at topmost_line.
+pub fn find(term: &Term<Listener>, query: &str, start: i32) -> Option<Find> {
+    if query.is_empty() {
+        return None;
+    }
+    let q = query.to_lowercase();
+    let grid = term.grid();
+    let bottom = grid.bottommost_line().0;
+    let mut line = start;
+    while line <= bottom {
+        let text = line_text(term, line).to_lowercase();
+        if let Some(c) = text.find(&q) {
+            return Some((line, c, q.chars().count()));
+        }
+        line += 1;
+    }
+    None
 }
 
 /// Draw a line of text at pixel origin (x0,y0 baseline) with the given color/size. Used for the
@@ -430,7 +481,7 @@ mod tests {
         let mut cache = GlyphCache::load();
         {
             let g = term.lock();
-            draw_grid(&mut fb, &g, 9, 18, 12, &mut cache);
+            draw_grid(&mut fb, &g, 9, 18, 12, &mut cache, None);
         }
 
         // At least some pixel is non-background (glyphs drawn).
@@ -487,9 +538,36 @@ mod tests {
         let mut cache = GlyphCache::load();
         {
             let g = term.lock();
-            draw_grid(&mut fb, &g, 9, 18, 12, &mut cache);
+            draw_grid(&mut fb, &g, 9, 18, 12, &mut cache, None);
         }
         let non_blank = fb.pixels.iter().filter(|&&p| p != 0x0000_0000).count();
         assert!(non_blank > 20, "expected scrollback glyphs when scrolled, got {non_blank}");
+    }
+
+    /// Search: find a query string across history, case-insensitively, and report its line+col.
+    #[test]
+    fn finds_text_in_scrollback() {
+        use alacritty_terminal::sync::FairMutex;
+        use alacritty_terminal::term::{Config, Term};
+        use alacritty_terminal::vte::ansi::{Processor, StdSyncHandler};
+
+        use crate::session::Listener;
+
+        let size = crate::session::TermSize { lines: 6, cols: 40 };
+        let term = FairMutex::new(Term::new(Config::default(), &size, Listener));
+        let mut buf = Vec::new();
+        for i in 0..10 {
+            buf.extend_from_slice(format!("\r\nrow {i} needle").as_bytes());
+        }
+        {
+            let mut p: Processor<StdSyncHandler> = Processor::default();
+            p.advance(&mut *term.lock(), &buf);
+        }
+        let g = term.lock();
+        // needle appears on every line; starting from the top of history the first hit is the
+        // topmost history line (a negative absolute line, since history sits above line 0).
+        let hit = find(&g, "NEEDLE", g.grid().topmost_line().0).expect("should find a match");
+        assert!(hit.0 < 0, "first hit should be in history (negative line), got {}", hit.0);
+        assert!(hit.1 >= 0 && hit.2 > 0, "match should have a column and width");
     }
 }
