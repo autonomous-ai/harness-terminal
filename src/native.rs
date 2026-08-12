@@ -279,6 +279,9 @@ struct Application {
     /// The tab index currently under the pointer (for a hover-preview tooltip of its tail), or
     /// None when the cursor isn't over a tab. Recompute on every CursorMoved against the tab bar.
     hover_tab: Option<usize>,
+    /// The last-rendered hover tooltip's rect `(px0, py0, panel_w, panel_h)`, so a click inside
+    /// the popover can switch to the hovered tab. `None` when no tooltip is showing.
+    tooltip_box: Option<(usize, usize, usize, usize)>,
     /// The tab index being drag-reordered (left button pressed on a tab), or None when idle. While
     /// this is Some, drags reorder the tab bar instead of growing a text selection, and release
     /// lands the dragged tab. Clicking a tab (press→release without moving) still switches to it.
@@ -403,6 +406,7 @@ impl Application {
             recover_until: vec![None; tab_count],
             hover_tab: None,
             drag_tab: None,
+            tooltip_box: None,
             grid_sel: 0,
         }
     }
@@ -1782,7 +1786,7 @@ impl Application {
         };
         lines.insert(0, format!(" {} · {} · {}{}", head, live, alive, prot));
         if lines.len() > 1 {
-            lines.push(" (hover → switch? no: click the tab) ".to_string());
+            lines.push(" (click → switch to this tab) ".to_string());
         }
 
         // Measure the widest line so the panel hugs its content.
@@ -1802,6 +1806,9 @@ impl Application {
         let panel_h = lines.len() * row_px + 14;
         let px0 = hx.min(fb.width.saturating_sub(panel_w + 8));
         let py0 = base_y;
+        // Remember the panel's rect so a click inside it (see `set_active`) can switch to this tab
+        // without the pointer having to find the tab chip itself.
+        self.tooltip_box = Some((px0, py0, panel_w, panel_h));
         // Fill the panel background (dim near-black) then a soft border.
         let bg = argb(255, 0x12, 0x12, 0x16);
         for py in py0..(py0 + panel_h).min(fb.height) {
@@ -4899,6 +4906,21 @@ impl ApplicationHandler for Application {
                                 w.request_redraw();
                             }
                             return;
+                        }
+                        // A click inside the hover tooltip switches to that session's tab — the peek
+                        // panel is click-through, so "hover to preview, click to go" is one gesture.
+                        if let Some((px0, py0, pw, ph)) = self.tooltip_box {
+                            let (mx, my) = (x as usize, y as usize);
+                            if mx >= px0 && mx < px0 + pw && my >= py0 && my < py0 + ph {
+                                if let Some(i) = self.hover_tab {
+                                    self.set_active(i);
+                                }
+                                self.tooltip_box = None;
+                                if let Some(w) = &self.window {
+                                    w.request_redraw();
+                                }
+                                return;
+                            }
                         }
                         self.drag_tab = None;
                         self.mouse_press(x, y);

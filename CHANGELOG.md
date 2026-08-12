@@ -6,6 +6,9 @@ entries record user-visible and architectural changes since the last tagged mile
 ## Unreleased / 0.1.0 (in progress)
 
 ### Added
+- **Clickable hover tooltip** — the hover-preview popover (the live tail shown for a backgrounded
+  tab) is now click-through: clicking inside it switches to that session instead of having to find
+  the tab chip. "Hover to preview, go" is one gesture.
 - **Close-quiet-tabs (`prefix+C`)** — close every live, backgrounded, unprotected tab that's been
   sitting silent past the quiet threshold (the ones the triage marks `⌛` and `prefix+z` jumps to)
   in one go, skipping the active tab and pinned ones. A fleet-cleanup gesture for when a batch of
