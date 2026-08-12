@@ -22,7 +22,7 @@ use softbuffer::{Context, Surface};
 
 use crate::app::{App, Overlay};
 use crate::engines::ENGINES;
-use crate::render::{draw_grid, draw_text, find as grid_find, Framebuffer, GlyphCache};
+use crate::render::{draw_grid, draw_text, Framebuffer, GlyphCache};
 use crate::session::TermSize;
 
 /// Chromeless text colors (macOS style).
@@ -55,6 +55,8 @@ struct Application {
     /// Every match of the active query (line, col, width), so draw_grid can highlight all of them
     /// in yellow while the focused one shows orange.
     find_all: Vec<crate::render::Find>,
+    /// Index into `find_all` of the currently-focused match (the "N of M" cursor).
+    find_index: usize,
     /// Mouse state: the cell anchor where a drag-selection started (Some while left button held).
     /// With winit 0.30 we track presses/releases ourselves; dragging updates the selection end.
     mouse_anchor: Option<Point>,
@@ -83,6 +85,7 @@ impl Application {
             find_query: String::new(),
             find_hit: None,
             find_all: Vec::new(),
+            find_index: 0,
             mouse_anchor: None,
             cursor: (0.0, 0.0),
             last_press: None,
@@ -256,26 +259,55 @@ impl Application {
 
     /// Recompute the focused search match (from the top if none, else continue from it) and scroll
     /// the viewport so the match is visible at the top of the grid area.
+    /// Scroll the viewport so the focused match's line is visible (at the top of the screen).
+    fn find_scroll_to(&self, g: &mut alacritty_terminal::term::Term<crate::session::Listener>, l: i32) {
+        use alacritty_terminal::grid::Scroll;
+        let current = g.grid().display_offset() as i32;
+        let desired = (-l as i32).clamp(0, g.grid().history_size() as i32);
+        g.grid_mut().scroll_display(Scroll::Delta(desired - current));
+    }
+
+    /// Recompute the occurrence list after a query edit; focuses the first match (or the match
+    /// nearest the previous focus) so the viewport tracks the user.
     fn find_recompute(&mut self, _start: Option<i32>) {
-        let Some(active) = self.app.active_session() else { self.find_hit = None; self.find_all = Vec::new(); return };
+        let Some(active) = self.app.active_session() else { self.find_hit = None; self.find_all = Vec::new(); self.find_index = 0; return };
         let mut g = active.term.lock();
-        // Refresh the full set of occurrences so every match can be highlighted.
+        // Remember the previous focus position so edits keep roughly the same match in view.
+        let prev_line = self.find_hit.map(|(l, _, _)| l);
         self.find_all = crate::render::all_matches(&g, &self.find_query);
-        let from = self
-            .find_hit
-            .map(|(l, _, _)| l + 1)
-            .unwrap_or_else(|| g.grid().topmost_line().0);
-        let hit = grid_find(&g, &self.find_query, from);
-        self.find_hit = hit;
-        if let Some((l, _, _)) = hit {
-            // Place the match line at the top of the viewport:
-            // visible top line = -display_offset, so set display_offset = -l.
-            use alacritty_terminal::grid::Scroll;
-            let current = g.grid().display_offset() as i32;
-            let desired = (-l as i32).clamp(0, g.grid().history_size() as i32);
-            g.grid_mut().scroll_display(Scroll::Delta(desired - current));
+        // Pick the first match at-or-after the old focus; else the very first match.
+        let idx = if self.find_all.is_empty() {
+            0
+        } else {
+            prev_line
+                .and_then(|pl| self.find_all.iter().position(|&(l, _, _)| l >= pl))
+                .unwrap_or(0)
+        };
+        self.find_index = idx;
+        self.find_hit = self.find_all.get(idx).copied();
+        if let Some((l, _, _)) = self.find_hit {
+            self.find_scroll_to(&mut *g, l);
             self.scrolled = true;
         }
+    }
+
+    /// Jump the focus by `delta` through the matches (wrapping around the ends), updating the
+    /// focused highlight and the viewport. Returns false when there's nothing to step to.
+    fn find_jump(&mut self, delta: isize) -> bool {
+        let m = self.find_all.len();
+        if m == 0 {
+            return false;
+        }
+        let next = (self.find_index as isize + delta).rem_euclid(m as isize) as usize;
+        self.find_index = next;
+        self.find_hit = self.find_all.get(next).copied();
+        let Some(active) = self.app.active_session() else { return false };
+        if let Some((l, _, _)) = self.find_hit {
+            let mut g = active.term.lock();
+            self.find_scroll_to(&mut *g, l);
+            self.scrolled = true;
+        }
+        true
     }
 
     /// Render the search overlay: query prompt + current match location in the status area.
@@ -287,7 +319,8 @@ impl Application {
         } else {
             let n = self.find_all.len();
             if n > 0 {
-                format!("  find: {}  ({} matches · Enter next)", self.find_query, n)
+                let here = (self.find_index % n) + 1;
+                format!("  find: {}  (match {} of {} · Enter/Tab next, Shift+Enter prev)", self.find_query, here, n)
             } else {
                 format!("  find: {}  (no match)", self.find_query)
             }
@@ -428,7 +461,10 @@ impl Application {
                         self.find_recompute(None);
                     }
                     Key::Named(n) => match n {
-                        winit::keyboard::NamedKey::Enter => { self.find_recompute(None); }
+                        winit::keyboard::NamedKey::Enter if mods.shift_key() => { self.find_jump(-1); }
+                        winit::keyboard::NamedKey::Enter | winit::keyboard::NamedKey::Tab => { self.find_jump(1); }
+                        winit::keyboard::NamedKey::ArrowDown => { self.find_jump(1); }
+                        winit::keyboard::NamedKey::ArrowUp => { self.find_jump(-1); }
                         winit::keyboard::NamedKey::Backspace => { self.find_query.pop(); self.find_recompute(None); }
                         winit::keyboard::NamedKey::Escape => { self.app.overlay = Overlay::None; }
                         _ => {}
