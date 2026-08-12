@@ -2131,7 +2131,7 @@ impl Application {
 
         if self.prefix_down && self.app.overlay == Overlay::None {
             self.prefix_down = false;
-            if self.command_key(key) {
+            if self.command_key(key, mods) {
                 self.quit();
             }
             return;
@@ -2170,7 +2170,7 @@ impl Application {
     /// resolved from config with the hardcoded defaults as fallback) and dispatches on the action
     /// name. Digit keys 1-9 and Tab are NOT part of the remappable table — they stay fixed, exactly
     /// as before, so a remap can never accidentally break tab switching.
-    fn command_key(&mut self, key: &Key) -> bool {
+    fn command_key(&mut self, key: &Key, mods: &ModifiersState) -> bool {
         match key {
             Key::Character(c) if c.len() == 1 && c.chars().next().unwrap().is_ascii_digit() => {
                 // Numeric tabs: 1-9 jump to that tab, 0 jumps to the LAST tab (kept fixed outside
@@ -2294,7 +2294,13 @@ impl Application {
             Key::Named(n) => match n {
                 winit::keyboard::NamedKey::Tab => {
                     if !self.app.tabs.is_empty() {
-                        self.set_active((self.app.active + 1) % self.app.tabs.len());
+                        let n = self.app.tabs.len();
+                        // Shift+Tab cycles backward (wrapping) through tabs; plain Tab goes forward.
+                        if mods.shift_key() {
+                            self.set_active((self.app.active + n - 1) % n);
+                        } else {
+                            self.set_active((self.app.active + 1) % n);
+                        }
                     }
                 }
                 _ => {}

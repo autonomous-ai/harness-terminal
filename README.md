@@ -60,7 +60,7 @@ The prefix is `Ctrl+Space` (tmux-style), then a command:
 | `Ctrl+Space` `l` | flip back to the previous tab |
 | `Ctrl+Space` `i` | show the active tab's info (kind, host, task, size, state) |
 | `Ctrl+Space` `v` | focus mode: hide the tab bar + status line (distraction-free) |
-| `1-9` / `0` / `Tab` | switch tab (`0` = last) |
+| `1-9` / `0` / `Tab` / `Shift+Tab` | switch tab (`0` = last, Shift+Tab = backward) |
 | `Ctrl+Space` `{` / `}` | move the active tab left / right |
 | `x` / `c` | close tab / jump to tab 0 |
 | `g` / `b` | scroll up a page / jump to bottom |
