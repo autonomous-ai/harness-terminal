@@ -243,6 +243,7 @@ pub fn draw_grid(
     font_px: u32,
     cache: &mut GlyphCache,
     find: Option<Find>,
+    sel: Option<&alacritty_terminal::selection::SelectionRange>,
 ) {
     let cols = term.columns();
     // Cursor cell (block) — draw on top of its own cell after painting the background.
@@ -252,6 +253,8 @@ pub fn draw_grid(
     // Search-highlight color (vivid yellow background, black text pops).
     const HIT_FG: (u8, u8, u8) = (0x00, 0x00, 0x00);
     const HIT_BG: (u8, u8, u8) = (0xff, 0xd2, 0x00);
+    // Text-selection highlight (soft blue background).
+    const SEL_BG: (u8, u8, u8) = (0x26, 0x4f, 0x8c);
 
     // Iterate the grid in *display* order (rows scrolled into the viewport), so a non-zero
     // `display_offset` (history scrollback) renders correctly rather than the raw storage lines.
@@ -271,6 +274,7 @@ pub fn draw_grid(
         let in_match = find
             .map(|(l, c, w)| row == l && col >= c && col < c + w)
             .unwrap_or(false);
+        let in_sel = sel.map(|s| s.contains(idx.point)).unwrap_or(false);
 
         // Resolve effective fg/bg, applying SGR inverse first (so cursor/match still take visual
         // precedence while keeping the right base colors to swap).
@@ -284,7 +288,11 @@ pub fn draw_grid(
         } else {
             cell_color(&cell.bg)
         };
-        // Search match: force the yellow highlight regardless of inverse.
+        // Text selection: soft blue background, keep the foreground for the glyph text.
+        if in_sel {
+            bgc = PaletteColor::Spec { r: SEL_BG.0, g: SEL_BG.1, b: SEL_BG.2 };
+        }
+        // Search match: force the yellow highlight regardless of inverse/selection.
         if in_match {
             fg = PaletteColor::Spec { r: HIT_FG.0, g: HIT_FG.1, b: HIT_FG.2 };
             bgc = PaletteColor::Spec { r: HIT_BG.0, g: HIT_BG.1, b: HIT_BG.2 };
@@ -523,7 +531,7 @@ mod tests {
         let mut cache = GlyphCache::load();
         {
             let g = term.lock();
-            draw_grid(&mut fb, &g, 9, 18, 12, &mut cache, None);
+            draw_grid(&mut fb, &g, 9, 18, 12, &mut cache, None, None);
         }
 
         // At least some pixel is non-background (glyphs drawn).
@@ -580,7 +588,7 @@ mod tests {
         let mut cache = GlyphCache::load();
         {
             let g = term.lock();
-            draw_grid(&mut fb, &g, 9, 18, 12, &mut cache, None);
+            draw_grid(&mut fb, &g, 9, 18, 12, &mut cache, None, None);
         }
         let non_blank = fb.pixels.iter().filter(|&&p| p != 0x0000_0000).count();
         assert!(non_blank > 20, "expected scrollback glyphs when scrolled, got {non_blank}");
@@ -637,7 +645,7 @@ mod tests {
         let mut cache = GlyphCache::load();
         {
             let g = term.lock();
-            draw_grid(&mut fb, &g, 9, 18, 12, &mut cache, None);
+            draw_grid(&mut fb, &g, 9, 18, 12, &mut cache, None, None);
         }
         // Cell (0,0) bg should be green-ish (the original fg became the bg).
         let cell0 = fb.pixels[0];

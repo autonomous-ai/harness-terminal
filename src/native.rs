@@ -9,9 +9,11 @@ use std::num::NonZeroU32;
 use std::rc::Rc;
 
 use alacritty_terminal::grid::Dimensions;
+use alacritty_terminal::index::{Column, Line, Point, Side};
+use alacritty_terminal::selection::{Selection, SelectionType};
 use winit::application::ApplicationHandler;
 use winit::dpi::{LogicalSize, PhysicalSize, Size};
-use winit::event::{ElementState, WindowEvent};
+use winit::event::{ElementState, MouseButton, WindowEvent};
 use winit::event_loop::{ActiveEventLoop, EventLoop};
 use winit::keyboard::{Key, ModifiersState};
 use winit::window::{Window, WindowId};
@@ -50,6 +52,11 @@ struct Application {
     /// The currently-focused search match (absolute line, col, width); recomputed on each query
     /// change / Enter and passed to draw_grid for highlighting.
     find_hit: Option<crate::render::Find>,
+    /// Mouse state: the cell anchor where a drag-selection started (Some while left button held).
+    /// With winit 0.30 we track presses/releases ourselves; dragging updates the selection end.
+    mouse_anchor: Option<Point>,
+    /// Latest cursor position in framebuffer px (winit's MouseInput has no position; we read this).
+    cursor: (f64, f64),
 }
 
 impl Application {
@@ -69,6 +76,8 @@ impl Application {
             scrolled: false,
             find_query: String::new(),
             find_hit: None,
+            mouse_anchor: None,
+            cursor: (0.0, 0.0),
         }
     }
 
@@ -135,7 +144,9 @@ impl Application {
                 use alacritty_terminal::grid::Scroll;
                 g.grid_mut().scroll_display(Scroll::Bottom);
             }
-            draw_grid(fb, &g, self.cell_w, self.cell_h, self.font_px, &mut self.cache, self.find_hit);
+            // Compute the current text-selection range (if any) so draw_grid can highlight it.
+            let sel = g.selection.as_ref().and_then(|s| s.to_range(&g));
+            draw_grid(fb, &g, self.cell_w, self.cell_h, self.font_px, &mut self.cache, self.find_hit, sel.as_ref());
         }
 
         // Tab bar (top row).
@@ -439,6 +450,28 @@ impl Application {
             }
 
             if let Some(s) = self.app.active_session_mut() {
+                // Copy selection: Cmd+C (mac convention) copies the current text selection to the
+                // system clipboard and clears the highlight. Ctrl+C still goes to the session as
+                // the interrupt byte unless a selection exists on mac.
+                let is_copy = mods.super_key() && matches!(key, Key::Character(c) if c == "c");
+                if is_copy {
+                    // Copy without holding the session borrow: read the text, clear it, then store.
+                    let (text, selected) = {
+                        let g = s.term.lock();
+                        (g.selection_to_string(), g.selection.is_some())
+                    };
+                    if selected {
+                        if let Some(t) = text {
+                            if !t.is_empty() {
+                                if let Ok(mut cb) = arboard::Clipboard::new() {
+                                    let _ = cb.set_text(t);
+                                }
+                            }
+                        }
+                        s.term.lock().selection = None;
+                    }
+                    return;
+                }
                 // Paste clipboard: Ctrl+V (and Cmd+V, the mac convention) reads the system clipboard
                 // and writes it to the session, bracketing with bracketed-paste if the app asked.
                 let is_paste = (mods.control_key() && matches!(key, Key::Character(c) if c == "v"))
@@ -511,6 +544,78 @@ impl Application {
         }
         self.scrolled = false;
     }
+
+    /// Map a framebuffer pixel position to the terminal-cell it lands on (viewing row 0 = the
+    /// visually-top line, which with scrollback is history). Returns None if the point is outside
+    /// the grid area (tab/status chrome or the right/left gutter).
+    fn mouse_to_cell(&self, x: f64, y: f64) -> Option<Point> {
+        let x = x as i64;
+        let y = y as i64;
+        // Grid area origin: below the tab bar (cell_h), above the status bar.
+        let top = self.cell_h as i64;
+        let bottom = self.size.height as i64 - self.cell_h as i64;
+        if y < top || y >= bottom || x < 0 {
+            return None;
+        }
+        let row = ((y - top) / self.cell_h as i64) as i64;
+        let col = (x / self.cell_w as i64) as i64;
+        if row < 0 || col < 0 {
+            return None;
+        }
+        Some(Point::new(Line((row as usize).try_into().unwrap()), Column(col as usize)))
+    }
+
+    /// Start a text selection at a pressed cursor position, or clear the selection when clicking.
+    fn mouse_press(&mut self, x: f64, y: f64) {
+        let Some(pt) = self.mouse_to_cell(x, y) else {
+            // Click outside the grid (on chrome) clears any selection.
+            if let Some(active) = self.app.active_session() {
+                let mut g = active.term.lock();
+                g.selection = None;
+            }
+            self.mouse_anchor = None;
+            return;
+        };
+        self.mouse_anchor = Some(pt);
+        if let Some(active) = self.app.active_session() {
+            let mut g = active.term.lock();
+            g.selection = Some(Selection::new(SelectionType::Simple, pt, Side::Left));
+        }
+    }
+
+    /// Grow the drag selection to the cursor's current cell while the button is held.
+    fn mouse_drag(&mut self, x: f64, y: f64) {
+        let Some(pt) = self.mouse_to_cell(x, y) else { return };
+        if let Some(active) = self.app.active_session() {
+            let mut g = active.term.lock();
+            if let Some(sel) = g.selection.as_mut() {
+                sel.update(pt, Side::Right);
+            }
+        }
+    }
+
+    /// The user released the button: finalize the drag (if any) and copy the selection to the
+    /// system clipboard, keeping it highlighted until the next click (standard terminal behavior).
+    fn mouse_release(&mut self, x: f64, y: f64) {
+        if self.mouse_anchor.is_some() {
+            self.mouse_drag(x, y);
+            self.mouse_anchor = None;
+            self.copy_selection();
+        }
+    }
+
+    /// Copy the active session's text selection to the system clipboard. No-op when empty.
+    fn copy_selection(&mut self) {
+        let Some(active) = self.app.active_session() else { return };
+        let g = active.term.lock();
+        let Some(text) = g.selection_to_string() else { return };
+        if text.is_empty() {
+            return;
+        }
+        if let Ok(mut cb) = arboard::Clipboard::new() {
+            let _ = cb.set_text(text);
+        }
+    }
 }
 
 /// Map a typed letter to its control byte (a-z → 1-26), for Ctrl+key.
@@ -577,6 +682,34 @@ impl ApplicationHandler for Application {
                     self.handle_key(&event.logical_key, &mods);
                     if let Some(w) = &self.window {
                         w.request_redraw();
+                    }
+                }
+            }
+            WindowEvent::CursorMoved { position, .. } => {
+                self.cursor = (position.x, position.y);
+                if self.mouse_anchor.is_some() && self.app.overlay == Overlay::None {
+                    self.mouse_drag(position.x, position.y);
+                    if let Some(w) = &self.window {
+                        w.request_redraw();
+                    }
+                }
+            }
+            WindowEvent::MouseInput { state, button, .. } => {
+                if button == MouseButton::Left && self.app.overlay == Overlay::None {
+                    let (x, y) = self.cursor;
+                    match state {
+                        ElementState::Pressed => {
+                            self.mouse_press(x, y);
+                            if let Some(w) = &self.window {
+                                w.request_redraw();
+                            }
+                        }
+                        ElementState::Released => {
+                            self.mouse_release(x, y);
+                            if let Some(w) = &self.window {
+                                w.request_redraw();
+                            }
+                        }
                     }
                 }
             }
