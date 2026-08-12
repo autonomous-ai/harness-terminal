@@ -189,6 +189,20 @@ impl Application {
         let base_font = crate::config::Config::load().font_px as f32;
         let tab_count = app.tabs.len();
         let seen_history = vec![usize::MAX; tab_count];
+        // Bring back any tabs the user muted last session (prefix+m) so they stay muted across a
+        // restart instead of nagging again the moment the window reopens.
+        let mut muted = vec![false; tab_count];
+        {
+            let saved = crate::restore::load_muted();
+            if !saved.is_empty() {
+                for (i, s) in app.tabs.iter().enumerate() {
+                    let key = format!("{}:{}:{}", s.kind(), s.meta.host, s.meta.engine);
+                    if saved.contains(&key) {
+                        muted[i] = true;
+                    }
+                }
+            }
+        }
         Application {
             window: None,
             context: None,
@@ -207,7 +221,7 @@ impl Application {
             broadcast_query: String::new(),
             broadcast_targets: vec![true; tab_count],
             broadcast_sel: 0,
-            muted: vec![false; tab_count],
+            muted,
             find_hit: None,
             find_all: Vec::new(),
             find_index: 0,
@@ -1413,11 +1427,26 @@ impl Application {
         self.forward_key(key, mods);
     }
 
+    /// Persist which tabs are muted (prefix+m) so a restart brings them back muted instead of the
+    /// tab nagging again the moment the window reopens. Shared by `quit` and the close path.
+    fn save_muted_state(&self) {
+        let keys: Vec<(&str, &str, &str)> = self
+            .app
+            .tabs
+            .iter()
+            .enumerate()
+            .filter(|(i, _)| self.muted.get(*i).copied().unwrap_or(false))
+            .map(|(_, s)| (s.kind(), s.meta.host.as_str(), s.meta.engine.as_str()))
+            .collect();
+        crate::restore::save_muted(&keys);
+    }
+
     /// Apply the same save-then-exit dance as a window CloseRequested: persist open tabs, tab list,
     /// and geometry, then flag the loop to exit at the next `about_to_wait`.
     fn quit(&mut self) {
         self.app.save_all_scrollbacks();
         crate::restore::save(&self.app.tab_specs());
+        self.save_muted_state();
         crate::restore::save_geometry(self.size.width, self.size.height);
         self.quit_requested = true;
     }
@@ -2228,6 +2257,7 @@ impl ApplicationHandler for Application {
                 // Persist open tabs so they come back on the next launch; keep the window size too.
                 self.app.save_all_scrollbacks();
                 crate::restore::save(&self.app.tab_specs());
+                self.save_muted_state();
                 crate::restore::save_geometry(self.size.width, self.size.height);
                 event_loop.exit();
             }

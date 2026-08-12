@@ -206,6 +206,33 @@ pub fn load_scrollback(kind: &str, host: &str, engine: &str) -> String {
     std::fs::read_to_string(path).unwrap_or_default()
 }
 
+// ── mute persistence ────────────────────────────────────────────────────────
+
+fn muted_path() -> std::path::PathBuf {
+    config_dir().join("muted.json")
+}
+
+/// Persist the identities (kind+host+engine) of tabs the user has muted (prefix+m), so a tab stays
+/// muted across a restart instead of nagging again the moment the window reopens. Best-effort like
+/// the other state files; only a non-empty list is written.
+pub fn save_muted(kinds_engines: &[(&str, &str, &str)]) {
+    if kinds_engines.is_empty() {
+        return;
+    }
+    let payload: Vec<String> = kinds_engines
+        .iter()
+        .map(|(k, h, e)| format!("{k}:{h}:{e}"))
+        .collect();
+    let _ = std::fs::create_dir_all(config_dir());
+    let _ = std::fs::write(muted_path(), serde_json::to_string(&payload).unwrap_or_default());
+}
+
+/// Load the set of muted identity keys, each "kind:host:engine". Empty set on error/missing.
+pub fn load_muted() -> Vec<String> {
+    let Ok(raw) = std::fs::read_to_string(muted_path()) else { return Vec::new() };
+    serde_json::from_str(&raw).unwrap_or_default()
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -330,6 +357,22 @@ mod tests {
             let loaded = load_scrollback("tunnel", "10.0.0.7", "claude");
             assert!(loaded.len() <= MAX_SCROLLBACK_BYTES);
             assert!(loaded.ends_with("TAIL"), "cap must keep the tail, not the head");
+        });
+    }
+
+    /// Muted identities round-trip through their file; an absent file loads empty.
+    #[test]
+    fn muted_roundtrips_through_file() {
+        with_isolated_dir(|_| {
+            assert!(load_muted().is_empty());
+            let keys = vec![("tmux", "build-host", "claude"), ("tunnel", "10.0.0.7", "codex")];
+            save_muted(&keys);
+            let back = load_muted();
+            assert_eq!(back.len(), 2);
+            assert!(back.contains(&"tmux:build-host:claude".to_string()));
+            assert!(back.contains(&"tunnel:10.0.0.7:codex".to_string()));
+            // A stale mute for a vanished tab is harmless — restore matches on exact identity.
+            assert!(!back.contains(&"pty:ghost:shell".to_string()));
         });
     }
 }
