@@ -58,6 +58,15 @@ pub struct App {
 
 impl App {
     pub fn new(size: TermSize) -> App {
+        // Sweep the state dir for scrollback/mute entries that no persisted tab references. This
+        // runs before any tab is restored, so `load()` (the persisted specs) is exactly the set of
+        // identities whose per-tab state we still want — anything else is an orphan and goes.
+        let alive = crate::restore::load();
+        let alive: Vec<(&str, &str, &str)> = alive
+            .iter()
+            .map(|s| (s.kind.as_str(), s.host.as_str(), s.engine.as_str()))
+            .collect();
+        crate::restore::cleanup_orphans(&alive);
         App {
             tabs: Vec::new(),
             active: 0,

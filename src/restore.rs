@@ -240,6 +240,84 @@ pub fn load_scrollback(kind: &str, host: &str, engine: &str) -> String {
     std::fs::read_to_string(path).unwrap_or_default()
 }
 
+/// The file name (relative to the `scrollback/` dir) a tab identity maps to. Public so cleanup can
+/// match an on-disk file back to a tab that still references it.
+fn scrollback_name(kind: &str, host: &str, engine: &str) -> String {
+    scrollback_file(kind, host, engine)
+        .file_name()
+        .unwrap_or_default()
+        .to_string_lossy()
+        .into_owned()
+}
+
+/// Best-effort sweep of the state dir for state that no open/persisted tab references anymore.
+///
+/// Long-lived scrollback and muted entries accumulate per tab identity; when a session is closed
+/// (or a renamed tab's host/engine changes) its `.txt` file and its `kind:host:engine` mute entry
+/// become orphans that would otherwise linger forever. At startup we know exactly which identities
+/// are still alive — the persisted `TabSpec`s (and any tabs currently open) — so we delete the
+/// scrollback files and prune the muted set for everything not referenced. Never errors; a full
+/// disk or partial read is just skipped.
+///
+/// The `alive` slice is the set of identities we want to keep: for every entry its scrollback file
+/// and mute entry survive; everything else in the scrollback dir / muted set is removed.
+pub fn cleanup_orphans(alive: &[(&str, &str, &str)]) {
+    // Resolve the live identities to their file names / mute keys so we can match on-disk state.
+    let keep_names: Vec<String> = alive
+        .iter()
+        .map(|(k, h, e)| scrollback_name(k, h, e))
+        .collect();
+    let keep_keys: Vec<String> = alive
+        .iter()
+        .map(|(k, h, e)| format!("{k}:{h}:{e}"))
+        .collect();
+
+    // Scavenge the scrollback dir: delete any *.txt not backed by a live identity.
+    if let Ok(entries) = std::fs::read_dir(scrollback_path()) {
+        for entry in entries.flatten() {
+            let path = entry.path();
+            let name = path
+                .file_name()
+                .unwrap_or_default()
+                .to_string_lossy()
+                .into_owned();
+            if name.ends_with(".txt") && !keep_names.contains(&name) {
+                let _ = std::fs::remove_file(path);
+            }
+        }
+    }
+
+    // Prune the muted set to only entries that are still live; rewrite only if something changed.
+    let current = load_muted();
+    let kept: Vec<String> = current
+        .into_iter()
+        .filter(|k| keep_keys.contains(k))
+        .collect();
+    if kept.len() != load_muted().len() {
+        // Reuse the same write path as save_muted so format/behavior stay identical.
+        let pairs: Vec<(&str, &str, &str)> = kept
+            .iter()
+            .filter_map(|k| {
+                let mut it = k.splitn(3, ':');
+                Some((it.next()?, it.next()?, it.next()?))
+            })
+            .collect();
+        if pairs.is_empty() {
+            let _ = std::fs::remove_file(muted_path());
+        } else {
+            let _ = std::fs::create_dir_all(config_dir());
+            let payload: Vec<String> = pairs
+                .iter()
+                .map(|(k, h, e)| format!("{k}:{h}:{e}"))
+                .collect();
+            let _ = std::fs::write(
+                muted_path(),
+                serde_json::to_string(&payload).unwrap_or_default(),
+            );
+        }
+    }
+}
+
 // ── mute persistence ────────────────────────────────────────────────────────
 
 fn muted_path() -> std::path::PathBuf {
@@ -459,6 +537,61 @@ mod tests {
             assert!(back.contains(&"tunnel:10.0.0.7:codex".to_string()));
             // A stale mute for a vanished tab is harmless — restore matches on exact identity.
             assert!(!back.contains(&"pty:ghost:shell".to_string()));
+        });
+    }
+
+    /// cleanup_orphans removes scrollback files and muted entries that no alive identity references,
+    /// while keeping the ones that are still live.
+    #[test]
+    fn cleanup_orphans_removes_stale_and_keeps_live() {
+        with_isolated_dir(|_| {
+            // Live identities (still persisted/open) and a vanished one.
+            save_scrollback("tmux", "build-host", "claude", "keep this");
+            save_scrollback("tunnel", "10.0.0.7", "codex", "keep this too");
+            save_scrollback("pty", "ghost", "shell", "stale — should be deleted");
+            save_muted(&[
+                ("tmux", "build-host", "claude"),
+                ("tunnel", "10.0.0.7", "codex"),
+                ("pty", "ghost", "shell"),
+            ]);
+            assert_eq!(
+                load_scrollback("pty", "ghost", "shell"),
+                "stale — should be deleted"
+            );
+
+            // Only the two live identities survive.
+            let alive: Vec<(&str, &str, &str)> = vec![
+                ("tmux", "build-host", "claude"),
+                ("tunnel", "10.0.0.7", "codex"),
+            ];
+            cleanup_orphans(&alive);
+
+            // Live scrollbacks kept; the ghost's deleted.
+            assert_eq!(load_scrollback("tmux", "build-host", "claude"), "keep this");
+            assert_eq!(
+                load_scrollback("tunnel", "10.0.0.7", "codex"),
+                "keep this too"
+            );
+            assert_eq!(load_scrollback("pty", "ghost", "shell"), "");
+
+            // Live mutes kept; the ghost's pruned.
+            let muted = load_muted();
+            assert!(muted.contains(&"tmux:build-host:claude".to_string()));
+            assert!(muted.contains(&"tunnel:10.0.0.7:codex".to_string()));
+            assert!(!muted.contains(&"pty:ghost:shell".to_string()));
+        });
+    }
+
+    /// cleanup_orphans with nothing alive empties the state dir (fully discarded sessions never
+    /// come back), including rewinding the muted file entirely.
+    #[test]
+    fn cleanup_orphans_with_no_live_empties_state() {
+        with_isolated_dir(|_| {
+            save_scrollback("pty", "solo", "claude", "all gone");
+            save_muted(&[("pty", "solo", "claude")]);
+            cleanup_orphans(&[]);
+            assert_eq!(load_scrollback("pty", "solo", "claude"), "");
+            assert!(load_muted().is_empty());
         });
     }
 }
