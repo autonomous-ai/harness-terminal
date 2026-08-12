@@ -74,6 +74,11 @@ struct Application {
     copy_query: String,
     /// Whether the copy-mode `/` prompt is currently active (accepting typing).
     copy_searching: bool,
+    /// Fleet-overlay filter: typing narrows the session list (by session id / tmux pane / engine).
+    /// An empty string shows every session; the highlighted row indexes `fleet_filtered`.
+    fleet_query: String,
+    /// Indices into `app.fleet.fleet` matching the current fleet query, for the overlay.
+    fleet_filtered: Vec<usize>,
     /// Mouse state: the cell anchor where a drag-selection started (Some while left button held).
     /// With winit 0.30 we track presses/releases ourselves; dragging updates the selection end.
     mouse_anchor: Option<Point>,
@@ -124,6 +129,8 @@ impl Application {
             copy_anchor: None,
             copy_query: String::new(),
             copy_searching: false,
+            fleet_query: String::new(),
+            fleet_filtered: Vec::new(),
             mouse_anchor: None,
             cursor: (0.0, 0.0),
             last_press: None,
@@ -211,8 +218,35 @@ impl Application {
 
     /// Fleet-overlay Enter: jump to an already-open tab running the selected session's engine if one
     /// exists (closest thing to 'diving into' that pane), else open a fresh local tmux pane for it.
+    /// Refresh `fleet_filtered` (indices into `app.fleet.fleet` matching `fleet_query`) and clamp the
+    /// selection. Mirrors the palette filter, but over fleet sessions (matched by id / pane / engine).
+    fn fleet_refresh_filter(&mut self) {
+        let q = self.fleet_query.to_lowercase();
+        self.fleet_filtered = self
+            .app
+            .fleet
+            .fleet
+            .iter()
+            .enumerate()
+            .filter(|(_, s)| {
+                if q.is_empty() {
+                    return true;
+                }
+                s.session_id.to_lowercase().contains(&q)
+                    || s.tmux_pane.to_lowercase().contains(&q)
+                    || s.engine.to_lowercase().contains(&q)
+            })
+            .map(|(i, _)| i)
+            .collect();
+        if self.app.selected >= self.fleet_filtered.len() {
+            self.app.selected = self.fleet_filtered.len().saturating_sub(1);
+        }
+    }
+
     fn fleet_attach_selected(&mut self) {
-        let Some(fs) = self.app.fleet.fleet.get(self.app.selected) else {
+        // `selected` is an index into `fleet_filtered`; resolve it back to the real session.
+        let real = self.fleet_filtered.get(self.app.selected).copied().unwrap_or(self.app.selected);
+        let Some(fs) = self.app.fleet.fleet.get(real) else {
             self.app.overlay = Overlay::None;
             return;
         };
@@ -492,24 +526,33 @@ impl Application {
     /// a live/stale marker. Esc (or any key) dismisses; `s` re-fetches. Never writes to a pane.
     fn render_fleet(&mut self, fb: &mut Framebuffer) {
         let (base_y, line_px) = self.overlay_base_y();
+        // Recompute the filter each frame so typing filters live (mirrors the palette overlay).
+        self.fleet_refresh_filter();
         let f = &self.app.fleet;
         let mid = if f.machine_id.is_empty() { "unknown".to_string() } else { f.machine_id.chars().take(6).collect() };
         let tunnel = if f.connected { "tunnel up" } else { "tunnel down" };
         let n = f.fleet.len();
-        draw_text(fb, &mut self.cache, &format!("  fleet · {} · {} · {} session{} · Up/Down+Enter to dive  ", mid, tunnel, n, if n == 1 { "" } else { "s" }), 32, base_y, self.font_px, WHITE);
+        let shown = self.fleet_filtered.len();
+        let q = if self.fleet_query.is_empty() { String::new() } else { format!("/{} ", self.fleet_query) };
+        draw_text(fb, &mut self.cache, &format!("  fleet · {} · {} · {} session{} · {}type to filter · Up/Down+Enter to dive  ", mid, tunnel, n, if n == 1 { "" } else { "s" }, q), 32, base_y, self.font_px, WHITE);
         if n == 0 {
             draw_text(fb, &mut self.cache, "  no harness sessions (daemon unreachable or nothing joined)  ", 32, base_y + line_px, self.font_px, CHROME_DIM);
             return;
         }
-        for (i, s) in f.fleet.iter().enumerate().take(20) {
+        if shown == 0 && !self.fleet_query.is_empty() {
+            draw_text(fb, &mut self.cache, "  no sessions match  ", 32, base_y + line_px, self.font_px, CHROME_DIM);
+            return;
+        }
+        for (row, &real) in self.fleet_filtered.iter().enumerate().take(20) {
+            let s = &f.fleet[real];
             let live = s.is_live();
-            let sel = i == self.app.selected;
+            let sel = row == self.app.selected;
             let mark = if live { "●" } else { "○" };
             let color = if sel { WHITE } else if live { (0x4a, 0xe0, 0x8a) } else { CHROME_DIM };
             let eng = if s.engine.is_empty() { "?" } else { s.engine.as_str() };
             let id = if s.session_id.is_empty() { s.tmux_pane.clone() } else { s.session_id.chars().take(8).collect() };
             let line = format!("  {} {}  {:<9} {}{}", mark, eng, "", id, if sel { "  ◄" } else { "" });
-            draw_text(fb, &mut self.cache, &line, 32, base_y + (i + 1) * line_px, self.font_px, color);
+            draw_text(fb, &mut self.cache, &line, 32, base_y + (row + 1) * line_px, self.font_px, color);
         }
     }
 
@@ -918,8 +961,11 @@ impl Application {
                 "t" => self.app.spawn_tmux("this-host", "shell"),
                 "q" => return true,
                 "s" => {
-                    // Fleet overlay: fetch status on open so it's fresh, then show it.
+                    // Fleet overlay: fetch status on open so it's fresh, then show it. Filter starts
+                    // empty so the full list is visible; typing narrows it live.
                     self.app.selected = 0;
+                    self.fleet_query.clear();
+                    self.fleet_filtered.clear();
                     if let Ok(st) = crate::harness::HarnessClient::local().status() {
                         self.app.fleet = st;
                     }
@@ -1044,10 +1090,10 @@ impl Application {
                     Key::Named(n) => match n {
                         // Up/Down move the highlighted row; Enter attaches to it (jump to an open
                         // tab for that engine, else open a fresh local tmux pane). Esc dismisses.
-                        winit::keyboard::NamedKey::Escape => self.app.overlay = Overlay::None,
+                        winit::keyboard::NamedKey::Escape => { self.app.overlay = Overlay::None; }
                         winit::keyboard::NamedKey::ArrowDown => {
-                            if !self.app.fleet.fleet.is_empty() {
-                                self.app.selected = (self.app.selected + 1).min(self.app.fleet.fleet.len() - 1);
+                            if !self.fleet_filtered.is_empty() {
+                                self.app.selected = (self.app.selected + 1).min(self.fleet_filtered.len() - 1);
                             }
                         }
                         winit::keyboard::NamedKey::ArrowUp => {
@@ -1056,15 +1102,26 @@ impl Application {
                         winit::keyboard::NamedKey::Enter => {
                             self.fleet_attach_selected();
                         }
+                        // Backspace removes the last filter character (re-filter live).
+                        winit::keyboard::NamedKey::Backspace => {
+                            self.fleet_query.pop();
+                            self.app.selected = 0;
+                            self.fleet_refresh_filter();
+                        }
                         _ => {}
                     },
-                    // `s` re-fetches for a fresh view; any other character closes.
-                    Key::Character(c) if c == "s" => {
+                    // `s` re-fetches for a fresh view; any other character filters the list.
+                    Key::Character(c) if c == "s" && self.fleet_query.is_empty() => {
                         if let Ok(st) = crate::harness::HarnessClient::local().status() {
                             self.app.fleet = st;
                         }
                     }
-                    _ => self.app.overlay = Overlay::None,
+                    Key::Character(c) => {
+                        self.fleet_query.push_str(c);
+                        self.app.selected = 0;
+                        self.fleet_refresh_filter();
+                    }
+                    _ => {}
                 }
                 return;
             }
