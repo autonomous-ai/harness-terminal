@@ -1150,9 +1150,12 @@ impl ApplicationHandler for Application {
         if self.window.is_some() {
             return;
         }
+        let size = crate::restore::load_geometry()
+            .map(|(w, h)| Size::Physical(PhysicalSize::new(w, h)))
+            .unwrap_or(Size::Logical(LogicalSize::new(110.0, 34.0)));
         let attribs = winit::window::Window::default_attributes()
             .with_title("harness-terminal")
-            .with_inner_size(Size::Logical(LogicalSize::new(110.0, 34.0)));
+            .with_inner_size(size);
         match event_loop.create_window(attribs) {
             Ok(w) => {
                 let w = Rc::new(w);
@@ -1175,13 +1178,15 @@ impl ApplicationHandler for Application {
     fn window_event(&mut self, event_loop: &ActiveEventLoop, _id: WindowId, event: WindowEvent) {
         match event {
             WindowEvent::CloseRequested => {
-                // Persist open tabs so they come back on the next launch.
+                // Persist open tabs so they come back on the next launch; keep the window size too.
                 crate::restore::save(&self.app.tab_specs());
+                crate::restore::save_geometry(self.size.width, self.size.height);
                 event_loop.exit();
             }
             WindowEvent::Resized(size) => {
                 self.size = size;
                 if size.width > 0 && size.height > 0 {
+                    crate::restore::save_geometry(size.width, size.height);
                     if let Some(w) = &self.window {
                         w.request_redraw();
                     }

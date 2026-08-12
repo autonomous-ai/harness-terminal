@@ -98,6 +98,34 @@ pub fn load_zoom() -> f32 {
     raw.trim().parse::<f32>().unwrap_or(1.0).clamp(0.5, 3.0)
 }
 
+fn geometry_path() -> std::path::PathBuf {
+    config_dir().join("geometry.json")
+}
+
+/// Persist the window's inner size (physical px) so a relaunch comes back the same working area.
+/// Best-effort like the others; a zero/inverted size is ignored.
+pub fn save_geometry(width: u32, height: u32) {
+    if width == 0 || height == 0 {
+        return;
+    }
+    let payload = format!("{{\"w\":{},\"h\":{}}}", width, height);
+    let _ = std::fs::create_dir_all(config_dir());
+    let _ = std::fs::write(geometry_path(), payload);
+}
+
+/// Load the persisted window size. None on error (missing/corrupt) so the caller falls back to its
+/// default.
+pub fn load_geometry() -> Option<(u32, u32)> {
+    let raw = std::fs::read_to_string(geometry_path()).ok()?;
+    let v: serde_json::Value = serde_json::from_str(&raw).ok()?;
+    let w = v.get("w")?.as_u64()? as u32;
+    let h = v.get("h")?.as_u64()? as u32;
+    if w == 0 || h == 0 {
+        return None;
+    }
+    Some((w, h))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -155,6 +183,18 @@ mod tests {
             assert_eq!(back, 1.7);
             // A refused save must not clobber the previously-persisted value.
             assert_eq!(still, 1.7);
+        });
+    }
+
+    /// Window geometry round-trips through its own file; a zero size is refused/tolerated.
+    #[test]
+    fn geometry_roundtrips_and_rejects_zero() {
+        with_isolated_dir(|_| {
+            save_geometry(1600, 900);
+            assert_eq!(load_geometry(), Some((1600, 900)));
+            // A zero/inverted size must not be persisted as valid.
+            save_geometry(0, 0);
+            assert_eq!(load_geometry(), Some((1600, 900)));
         });
     }
 }
