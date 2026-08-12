@@ -43,6 +43,9 @@ struct Application {
     cache: GlyphCache,
     prefix_down: bool,
     mods: ModifiersState,
+    /// The tab that was active before the current one, so prefix+l can flip back to it (tmux
+    /// last-window muscle memory). Cleared to None when tabs get rearranged out from under it.
+    last_active: Option<usize>,
     /// True while the view is scrolled into history (live follow suspended). Set when the user
     /// scrolls up; cleared when they return to the bottom (scroll command / Esc) or new output
     /// resets the display offset in `render`.
@@ -104,6 +107,7 @@ impl Application {
             cache: GlyphCache::load(),
             prefix_down: false,
             mods: ModifiersState::default(),
+            last_active: None,
             scrolled: false,
             find_query: String::new(),
             rename_query: String::new(),
@@ -168,8 +172,21 @@ impl Application {
 
     /// Focus tab `i` and remember it (so a relaunch opens on the same tab).
     fn set_active(&mut self, i: usize) {
+        if i != self.app.active && self.app.active < self.app.tabs.len() {
+            self.last_active = Some(self.app.active);
+        }
         self.app.active = i.min(self.app.tabs.len().saturating_sub(1));
         crate::restore::save_active(self.app.active);
+    }
+
+    /// `prefix+l`: flip to the tab that was active just before this one (tmux last-window).
+    /// Repeated presses ping-pong, since swapping focus swaps `last_active`.
+    fn last_window(&mut self) {
+        if let Some(prev) = self.last_active.take() {
+            if prev < self.app.tabs.len() {
+                self.set_active(prev);
+            }
+        }
     }
 
     /// `prefix+o`: jump to the next backgrounded tab that produced output since we last looked,
@@ -323,7 +340,7 @@ impl Application {
             info += "  ▾ scrolled (Esc/b to bottom)";
         }
         draw_text(fb, &mut self.cache, &info, 6, status_base, self.font_px, CHROME_FG);
-        let hints = " prefix+/ palette  prefix+n new  prefix+r remote  prefix+s fleet  prefix+[ copy  prefix+? help  prefix+q quit ";
+        let hints = " prefix+/ palette  prefix+n new  prefix+r remote  prefix+s fleet  prefix+o busy  prefix+[ copy  prefix+l last  prefix+? help  prefix+q quit ";
         let hw = draw_text(fb, &mut self.cache, hints, 6, status_base, self.font_px, CHROME_DIM);
         // Move the hint to the right edge by re-drawing after clearing a wide column is complex;
         // simplest right-align: draw hints over the info end offset. We draw at the right edge:
@@ -430,7 +447,7 @@ impl Application {
     fn render_help(&mut self, fb: &mut Framebuffer) {
         let (base_y, line_px) = self.overlay_base_y();
         draw_text(fb, &mut self.cache, "  harness-terminal keys  ", 32, base_y, self.font_px, WHITE);
-        let bindings: [(&str, &str); 17] = [
+        let bindings: [(&str, &str); 18] = [
             ("Ctrl+Space", "prefix (then a command)"),
             ("prefix /", "palette: jump to any session"),
             ("prefix n", "new session (engine picker)"),
@@ -442,6 +459,7 @@ impl Application {
             ("prefix ?", "this help"),
             ("1-9 / Tab", "switch tab"),
             ("prefix o", "jump to next busy tab"),
+            ("prefix l", "flip to the previous tab"),
             ("x / c", "close tab / go to tab 0"),
             ("g / b", "scroll up a page / jump to bottom"),
             ("Ctrl+= / Ctrl+-", "font zoom (Ctrl+0 reset)"),
@@ -760,6 +778,7 @@ impl Application {
                 }
                 "c" => { if !self.app.tabs.is_empty() { self.set_active(0); } }
                 "o" => self.next_busy(),
+                "l" => self.last_window(),
                 "x" => { close_tab(&mut self.app); }
                 "g" => { scroll_active(self, 20); self.scrolled = true; }
                 "b" => self.scroll_to_bottom(),

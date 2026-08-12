@@ -49,6 +49,7 @@ The prefix is `Ctrl+Space` (tmux-style), then a command:
 | `Ctrl+Space` `,` | rename the active tab (persisted, shown in tab bar) |
 | `Ctrl+Space` `?` | help (full keybinding reference) |
 | `Ctrl+Space` `o` | jump to the next busy (produced-output) tab |
+| `Ctrl+Space` `l` | flip back to the previous tab |
 | `1-9` / `Tab` | switch tab |
 | `x` / `c` | close tab / jump to tab 0 |
 | `g` / `b` | scroll up a page / jump to bottom |
