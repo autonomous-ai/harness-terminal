@@ -189,6 +189,10 @@ struct Application {
     /// A transient status-line toast (text, shown-at) for one-shot confirmations like an export
     /// path. Displayed for a couple seconds, then fades on its own. None = no toast.
     flash: Option<(String, std::time::Instant)>,
+    /// Resolved prefix keybindings, reversed: key (the char pressed after Ctrl+Space) -> action
+    /// name. Built from `crate::keys::resolve`, so it mirrors the hardcoded defaults unless the user
+    /// overrides them in `[keybindings]`.
+    key_action: std::collections::BTreeMap<String, String>,
     /// Per-tab: whether a backgrounded-output notification has ALREADY fired since the tab last went
     /// quiet. Reset when the tab is focused (looked at) or stops growing, so each silent→busy
     /// transition nudges the user exactly once.
@@ -199,6 +203,13 @@ impl Application {
     fn new(app: App) -> Self {
         let cfg = crate::config::Config::load();
         let base_font = cfg.font_px as f32;
+        // Resolve prefix bindings once: action name -> key. Reverse it to key -> action so the
+        // command handler can look up a pressed key directly. Unknown actions in config are dropped
+        // by `resolve`, so this always covers every action with a valid key.
+        let key_action = crate::keys::resolve(&cfg.keybindings.unwrap_or_default())
+            .into_iter()
+            .map(|(action, key)| (key, action))
+            .collect::<std::collections::BTreeMap<String, String>>();
         let colors = match &cfg.theme {
             Some(t) => crate::render::Colors::from(t),
             None => crate::render::Colors::default(),
@@ -270,6 +281,7 @@ impl Application {
             palette_filtered: Vec::new(),
             palette_sel: 0,
             quit_requested: false,
+            key_action,
         }
     }
 
@@ -1988,28 +2000,43 @@ impl Application {
     }
 
     /// Command-mode (after prefix). Returns true to quit.
+    ///
+    /// The single key pressed after `Ctrl+Space` looks up `self.key_action` (key -> action name,
+    /// resolved from config with the hardcoded defaults as fallback) and dispatches on the action
+    /// name. Digit keys 1-9 and Tab are NOT part of the remappable table — they stay fixed, exactly
+    /// as before, so a remap can never accidentally break tab switching.
     fn command_key(&mut self, key: &Key) -> bool {
         match key {
-            Key::Character(c) => match c.as_str() {
-                "/" => {
+            Key::Character(c) if c.len() == 1 && c.chars().next().unwrap().is_ascii_digit() => {
+                // Numeric tabs 1-9 (kept fixed outside the keybinding table).
+                let idx = c.chars().next().unwrap() as u8;
+                if (b'1'..=b'9').contains(&idx) {
+                    let i = (idx - b'1') as usize;
+                    if i < self.app.tabs.len() {
+                        self.set_active(i);
+                    }
+                }
+            }
+            Key::Character(c) => match self.key_action.get(c.as_str()).map(String::as_str) {
+                Some("palette") => {
                     self.app.overlay = Overlay::Palette;
                     self.app.query.clear();
                     self.app.selected = 0;
                     self.app.refresh_filter();
                 }
-                "n" => {
+                Some("new_session") => {
                     self.app.overlay = Overlay::NewSession;
                     self.app.select_default_engine();
                     self.new_cwd.clear();
                 }
-                "r" => {
+                Some("remote_attach") => {
                     self.app.overlay = Overlay::RemoteAttach;
                     self.app.remote_host.clear();
                     self.app.selected = 0;
                 }
-                "t" => self.app.spawn_tmux("this-host", "shell"),
-                "q" => return true,
-                "s" => {
+                Some("local_shell") => self.app.spawn_tmux("this-host", "shell"),
+                Some("quit") => return true,
+                Some("fleet") => {
                     // Fleet overlay: fetch status on open so it's fresh, then show it. Filter starts
                     // empty so the full list is visible; typing narrows it live.
                     self.app.selected = 0;
@@ -2020,16 +2047,16 @@ impl Application {
                     }
                     self.app.overlay = Overlay::Fleet;
                 }
-                "c" => {
+                Some("goto_tab0") => {
                     if !self.app.tabs.is_empty() {
                         self.set_active(0);
                     }
                 }
-                "o" => self.next_busy(),
-                "m" => self.toggle_mute_active(),
-                "l" => self.last_window(),
-                "p" => self.paste_clipboard(),
-                "a" => {
+                Some("next_busy") => self.next_busy(),
+                Some("mute") => self.toggle_mute_active(),
+                Some("last_window") => self.last_window(),
+                Some("paste") => self.paste_clipboard(),
+                Some("broadcast") => {
                     // Broadcast one line to every open session. Starts with an empty query so the
                     // user types (or re-enters) the command line to fan out via Enter. Targets reset
                     // all-on on each open: a prior run's deselections must NOT silently carry over,
@@ -2039,48 +2066,48 @@ impl Application {
                     self.broadcast_sel = 0;
                     self.app.overlay = Overlay::Broadcast;
                 }
-                "x" => {
+                Some("close_tab") => {
                     close_tab(&mut self.app);
                 }
-                "d" => self.copy_whole_scrollback(),
-                "w" => self.export_scrollback(),
-                "y" => {
+                Some("copy_scrollback") => self.copy_whole_scrollback(),
+                Some("export_scrollback") => self.export_scrollback(),
+                Some("peek") => {
                     self.app.overlay = Overlay::Peek;
                     self.peek_sel = 0;
                 }
-                "u" => self.app.reopen_last_closed(),
-                "g" => {
+                Some("undo_close") => self.app.reopen_last_closed(),
+                Some("page_up") => {
                     scroll_active(self, 20);
                     if let Some(s) = self.app.active_session() {
                         s.set_scrolled(true);
                     }
                 }
-                "b" => self.scroll_to_bottom(),
-                "f" => {
+                Some("scroll_bottom") => self.scroll_to_bottom(),
+                Some("search") => {
                     self.app.overlay = Overlay::Find;
                     self.find_query.clear();
                     self.find_hit = None;
                     self.find_all = Vec::new();
                 }
-                "h" => {
+                Some("search_all") => {
                     self.app.overlay = Overlay::FleetSearch;
                     self.fleet_q.clear();
                     self.fleet_matches.clear();
                     self.fleet_sel = 0;
                 }
-                "{" => self.app.move_tab(-1),
-                "}" => self.app.move_tab(1),
-                "[" => self.start_copy_mode(),
-                "?" => {
+                Some("move_left") => self.app.move_tab(-1),
+                Some("move_right") => self.app.move_tab(1),
+                Some("copy_mode") => self.start_copy_mode(),
+                Some("help") => {
                     self.app.overlay = Overlay::Help;
                 }
-                ";" => {
+                Some("command_palette") => {
                     self.palette_q.clear();
                     self.palette_sel = 0;
                     self.palette_rows = PaletteAction::all_rows();
                     self.app.overlay = Overlay::CommandPalette;
                 }
-                "," => {
+                Some("rename") => {
                     // Rename the active tab. Pre-fill with the current custom name (if any) so
                     // editing doesn't start from scratch.
                     self.rename_query = self
@@ -2089,16 +2116,6 @@ impl Application {
                         .map(|s| s.meta.name.clone().unwrap_or_default())
                         .unwrap_or_default();
                     self.app.overlay = Overlay::Rename;
-                }
-                // Numeric tabs 1-9.
-                _ if c.len() == 1 && c.chars().next().unwrap().is_ascii_digit() => {
-                    let idx = c.chars().next().unwrap() as u8;
-                    if (b'1'..=b'9').contains(&idx) {
-                        let i = (idx - b'1') as usize;
-                        if i < self.app.tabs.len() {
-                            self.set_active(i);
-                        }
-                    }
                 }
                 _ => {}
             },

@@ -5,6 +5,8 @@
 //! support what's cheap to wire and genuinely useful pre-1.0 — the font size a fresh window opens
 //! at (overridden by later Ctrl+= / Ctrl+-), and the engine the new-session picker starts with.
 
+use std::collections::BTreeMap;
+
 use serde::{Deserialize, Deserializer, Serialize};
 
 /// The whole config file. All fields optional with defaults: `Config::default()` is what you get
@@ -33,6 +35,11 @@ pub struct Config {
     /// Optional color theme. Absent (or a broken `[theme]` block) keeps the built-in palette.
     #[serde(default)]
     pub theme: Option<Theme>,
+    /// Optional prefix-key remapping: an action name -> the key that triggers it after `Ctrl+Space`.
+    /// Only actions named here that exist are remapped; everything else keeps its default. Absent
+    /// (or an empty block) = today's exact keybindings. See `crate::keys`.
+    #[serde(default)]
+    pub keybindings: Option<BTreeMap<String, String>>,
 }
 
 /// A user-configurable color theme. Every field is optional; unset entries keep the built-in
@@ -126,6 +133,7 @@ impl Default for Config {
             scrollback_cap: None,
             start_cwd: None,
             theme: None,
+            keybindings: None,
         }
     }
 }
@@ -265,5 +273,17 @@ mod tests {
         let c: Config = toml::from_str("[theme]\nforeground = [9999]\n").unwrap_or_default();
         // A bad value type means the whole theme block is rejected; config itself must still parse.
         assert!(c.font_px == 14);
+    }
+
+    /// A `[keybindings]` block parses; absent falls back to None (default keys).
+    #[test]
+    fn keybindings_parse_and_default() {
+        let c: Config =
+            toml::from_str("[keybindings]\nnew_session = \"N\"\nsearch = \"f\"\n").unwrap();
+        let kb = c.keybindings.expect("keybindings should parse");
+        assert_eq!(kb.get("new_session").map(String::as_str), Some("N"));
+        assert_eq!(kb.get("search").map(String::as_str), Some("f"));
+        let d: Config = toml::from_str("font_px = 14").unwrap();
+        assert_eq!(d.keybindings, None);
     }
 }

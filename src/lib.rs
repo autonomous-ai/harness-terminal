@@ -8,6 +8,7 @@ pub mod app;
 pub mod config;
 pub mod engines;
 pub mod harness;
+pub mod keys;
 pub mod links;
 pub mod native;
 pub mod render;

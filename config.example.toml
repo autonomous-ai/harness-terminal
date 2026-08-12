@@ -37,3 +37,23 @@ default_engine = "claude"
 # 0 = [0, 0, 0]
 # 1 = [205, 49, 49]
 # 9 = [241, 76, 76]
+
+# Remap the keys pressed right after Ctrl+Space (tmux-style prefix). The map is
+# action name -> key. Only the actions you list here change; every other action
+# keeps its built-in default, so an absent or empty [keybindings] block is
+# today's exact behaviour (a no-op).
+#
+# Action names (with their defaults):
+#   palette "/"  new_session "n"  remote_attach "r"  local_shell "t"
+#   quit "q"  fleet "s"  goto_tab0 "c"  next_busy "o"  mute "m"
+#   last_window "l"  paste "p"  broadcast "a"  close_tab "x"
+#   copy_scrollback "d"  export_scrollback "w"  peek "y"  undo_close "u"
+#   page_up "g"  scroll_bottom "b"  search "f"  search_all "h"
+#   move_left "{"  move_right "}"  copy_mode "["  help "?"
+#   command_palette ";"  rename ","
+#
+# The digit keys 1-9 (tab switching) and Tab are NOT remappable.
+# [keybindings]
+# new_session = "N"     # prefix+Shift+n -> new session (capital is a distinct key)
+# search = "f"          # keep default
+# copy_mode = "["       # keep default

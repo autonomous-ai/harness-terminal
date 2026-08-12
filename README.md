@@ -111,3 +111,21 @@ session restore, config, and font zoom all work. Architecture in `ARCHITECTURE.m
 ## License
 
 MIT — see [LICENSE](LICENSE).
+
+### Remapping prefix keys
+
+The keys you press right after `Ctrl+Space` are configurable via a `[keybindings]` block in the
+config. It maps an **action name** to the key that triggers it. Anything you don't list keeps
+today's default, so an empty block is a no-op.
+
+```toml
+[keybindings]
+new_session = "N"   # prefix+Shift+n now opens a new session
+mute = "v"          # prefix+v toggles mute
+```
+
+Action names: `palette`, `new_session`, `remote_attach`, `local_shell`, `quit`, `fleet`,
+`goto_tab0`, `next_busy`, `mute`, `last_window`, `paste`, `broadcast`, `close_tab`,
+`copy_scrollback`, `export_scrollback`, `peek`, `undo_close`, `page_up`, `scroll_bottom`,
+`search`, `search_all`, `move_left`, `move_right`, `copy_mode`, `help`, `command_palette`,
+`rename`. The digit keys `1-9` (tab switching) and `Tab` are not remappable.
