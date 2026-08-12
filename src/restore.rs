@@ -373,6 +373,36 @@ pub fn load_muted() -> Vec<String> {
     serde_json::from_str(&raw).unwrap_or_default()
 }
 
+// ── last-broadcast persistence ───────────────────────────────────────────────
+
+fn last_broadcast_path() -> std::path::PathBuf {
+    config_dir().join("last-broadcast.json")
+}
+
+/// Remember the last broadcast line so the next `prefix+a` pre-fills it (repeating a command to
+/// every host survives a restart without retyping). Best-effort like the other state files; an
+/// empty line is not written (nothing to pre-fill).
+pub fn save_last_broadcast(line: &str) {
+    if line.trim().is_empty() {
+        return;
+    }
+    let _ = std::fs::create_dir_all(config_dir());
+    let _ = std::fs::write(last_broadcast_path(), line.as_bytes());
+}
+
+/// Load the last-sent broadcast line; "" on error/missing/empty.
+pub fn load_last_broadcast() -> String {
+    let Ok(raw) = std::fs::read_to_string(last_broadcast_path()) else {
+        return String::new();
+    };
+    let s = raw.trim();
+    if s.is_empty() {
+        String::new()
+    } else {
+        s.to_string()
+    }
+}
+
 // ── pin persistence ─────────────────────────────────────────────────────────
 
 fn pinned_path() -> std::path::PathBuf {
@@ -642,6 +672,23 @@ mod tests {
             assert!(back.contains(&"tunnel:10.0.0.7:codex".to_string()));
             // A stale mute for a vanished tab is harmless — restore matches on exact identity.
             assert!(!back.contains(&"pty:ghost:shell".to_string()));
+        });
+    }
+
+    #[test]
+    fn last_broadcast_roundtrips_through_file() {
+        with_isolated_dir(|_| {
+            // Nothing saved yet -> empty pre-fill.
+            assert_eq!(load_last_broadcast(), "");
+            // Empty lines are not worth persisting.
+            save_last_broadcast("");
+            assert_eq!(load_last_broadcast(), "");
+            // A real repeatable command survives the round trip.
+            save_last_broadcast("git pull");
+            assert_eq!(load_last_broadcast(), "git pull");
+            // A second send overwrites, not appends.
+            save_last_broadcast("git pull --rebase");
+            assert_eq!(load_last_broadcast(), "git pull --rebase");
         });
     }
 
