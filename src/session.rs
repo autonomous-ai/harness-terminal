@@ -164,6 +164,29 @@ pub struct Session {
     /// Live OSC title (what the shell/agent in the pane is currently doing), written by the
     /// emulator's Listener and read by the tab/status chrome.
     title: Arc<Mutex<Option<String>>>,
+    /// Reconnect bookkeeping for dropped remote transports (tmux/ssh/tunnel): how many consecutive
+    /// attempts have failed and when the next attempt may fire (exponential backoff so a dead daemon
+    /// isn't hammered and the status line can show *how long* it's been down).
+    retry: Mutex<RetryState>,
+}
+
+/// Per-session auto-reconnect policy: exponential backoff with a visible attempt count.
+struct RetryState {
+    /// Consecutive failed reconnect attempts since the transport last came up.
+    attempts: u32,
+    /// Monotonic instant before which we won't try again.
+    next_attempt: Instant,
+}
+
+impl RetryState {
+    fn new() -> Self {
+        RetryState { attempts: 0, next_attempt: Instant::now() }
+    }
+    /// Exponential backoff seconds for the *next* retry, capped: 5s, 10s, 20s, … 60s.
+    fn backoff_seconds(attempts: u32) -> u64 {
+        let exp = 5u64 << attempts.min(4); // 5,10,20,40 -> clamp at 60
+        exp.min(60)
+    }
 }
 
 impl Session {
@@ -190,7 +213,7 @@ impl Session {
         let title = Arc::new(Mutex::new(None));
         let term = Arc::new(FairMutex::new(Term::new(Config::default(), &size, Listener::with_title(Arc::clone(&title)))));
         let transport = LocalPtyTransport::spawn(program, args, size, Arc::clone(&term))?;
-        Ok(Session { meta, term, transport: Box::new(transport), echo: None, title })
+        Ok(Session { meta, term, transport: Box::new(transport), echo: None, title, retry: Mutex::new(RetryState::new()) })
     }
 
     /// Create a session backed by a real tmux pane (control mode).
@@ -202,7 +225,7 @@ impl Session {
         let title = Arc::new(Mutex::new(None));
         let term = Arc::new(FairMutex::new(Term::new(Config::default(), &size, Listener::with_title(Arc::clone(&title)))));
         let transport = crate::transport::TmuxTransport::spawn(program, size, Arc::clone(&term))?;
-        Ok(Session { meta, term, transport: Box::new(transport), echo: None, title })
+        Ok(Session { meta, term, transport: Box::new(transport), echo: None, title, retry: Mutex::new(RetryState::new()) })
     }
 
     /// Create a session whose pane is reached through the harness pane-relay tunnel at `host:port`.
@@ -222,7 +245,7 @@ impl Session {
         let transport = crate::transport::TunnelTransport::spawn(
             host, port, program, size, Arc::clone(&term), Arc::clone(&echo),
         )?;
-        Ok(Session { meta, term, transport: Box::new(transport), echo: Some(echo), title })
+        Ok(Session { meta, term, transport: Box::new(transport), echo: Some(echo), title, retry: Mutex::new(RetryState::new()) })
     }
 
     /// Create a session whose pane lives on REMOTE host `host` (via ssh + tmux control mode).
@@ -239,7 +262,7 @@ impl Session {
         let transport = crate::transport::RemoteTransport::spawn(
             &meta.host, program, size, Arc::clone(&term), Arc::clone(&echo),
         )?;
-        Ok(Session { meta, term, transport: Box::new(transport), echo: Some(echo), title })
+        Ok(Session { meta, term, transport: Box::new(transport), echo: Some(echo), title, retry: Mutex::new(RetryState::new()) })
     }
 
     /// Transport kind: "pty" / "tmux" / "ssh" / "tunnel" (shown in the status line).
@@ -255,8 +278,50 @@ impl Session {
 
     /// Re-attach after a dropped connection. Local PTYs are a no-op. Returns an error only if the
     /// immediate re-spawn fails (e.g. tunnel daemon unreachable again) — callers retry later.
+    ///
+    /// Encapsulates the per-session exponential backoff: each failure pushes the next attempt out by
+    /// 5s → 10s → 20s → … (capped at 60s), and success resets the counter. The reconnect sweep calls
+    /// this every few seconds but only actually attempts when the session's backoff window has passed,
+    /// so a permanently-dead daemon gets probed on a sane schedule, not every sweep tick.
     pub fn reconnect(&mut self) -> io::Result<()> {
-        self.transport.reconnect()
+        let due = {
+            let r = self.retry.lock().unwrap();
+            Instant::now() >= r.next_attempt
+        };
+        if !due {
+            // Not yet due — skip. Return Ok so the sweep treats it as "handled, nothing to do",
+            // keeping the session dead but not failing the sweep.
+            return Ok(());
+        }
+        match self.transport.reconnect() {
+            Ok(()) => {
+                // Back up: the pane came through, reset the retry ladder.
+                self.retry.lock().unwrap().attempts = 0;
+                Ok(())
+            }
+            Err(e) => {
+                let mut r = self.retry.lock().unwrap();
+                r.attempts = r.attempts.saturating_add(1);
+                let backoff = Duration::from_secs(RetryState::backoff_seconds(r.attempts));
+                r.next_attempt = Instant::now() + backoff;
+                Err(e)
+            }
+        }
+    }
+
+    /// Human-readable reconnect status, for the status line and tab chrome. None while the transport
+    /// is alive or a local PTY; otherwise describes the current backoff state.
+    pub fn retry_info(&self) -> Option<String> {
+        if self.transport.alive() {
+            return None;
+        }
+        let r = self.retry.lock().unwrap();
+        if r.attempts == 0 {
+            Some("reconnecting…".to_string())
+        } else {
+            let secs = RetryState::backoff_seconds(r.attempts);
+            Some(format!("reconnect {} · retry in {}s", r.attempts, secs))
+        }
     }
 
     /// Push keystrokes into the session's transport.
@@ -467,5 +532,17 @@ mod tests {
         assert!(ls.iter().any(|l| *l == "line one"), "restored line one");
         assert!(ls.iter().any(|l| *l == "line two"), "restored line two");
         assert!(ls.iter().any(|l| l.starts_with("line three")), "restored line three: {recaptured:?}");
+    }
+
+    /// The retry backoff ladder grows exponentially and caps at 60s, so a dead daemon is probed on
+    /// a sane schedule (5s, 10s, 20s, 40s, 60s, 60s, …) rather than hammered every sweep tick.
+    #[test]
+    fn retry_backoff_ladder_caps_at_60() {
+        assert_eq!(RetryState::backoff_seconds(0), 5);
+        assert_eq!(RetryState::backoff_seconds(1), 10);
+        assert_eq!(RetryState::backoff_seconds(2), 20);
+        assert_eq!(RetryState::backoff_seconds(3), 40);
+        assert_eq!(RetryState::backoff_seconds(4), 60);
+        assert_eq!(RetryState::backoff_seconds(9), 60, "must cap, not overflow");
     }
 }

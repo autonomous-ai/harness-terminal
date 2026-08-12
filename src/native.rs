@@ -404,7 +404,13 @@ impl Application {
         let status_base = fb.height.saturating_sub(self.cell_h as usize / 2);
         let mut info = String::new();
         if let Some(s) = self.app.active_session() {
-            let link = if s.alive() { "●" } else { "○ reconnecting" };
+            let link = if s.alive() {
+                "●".to_string()
+            } else {
+                // Show the live retry state (attempts + backoff seconds) so a dropped tunnel is
+                // visibly healing itself rather than silently sitting on a dead pane.
+                format!("○ {}", s.retry_info().unwrap_or_else(|| "reconnecting…".to_string()))
+            };
             let live = s.live_title().unwrap_or_else(|| s.meta.title.clone());
             let head = s.meta.name.clone().unwrap_or_else(|| s.meta.engine.clone());
             info = format!(" {} · {} · {} · [{} {}]", s.meta.host, head, live, s.kind(), link);
