@@ -43,7 +43,7 @@ The prefix is `Ctrl+Space` (tmux-style), then a command:
 | `Ctrl+Space` `/` | palette: fuzzy-jump to any session |
 | `Ctrl+Space` `n` | new session (engine picker) |
 | `Ctrl+Space` `r` | attach to a remote `pane@host` |
-| `Ctrl+Space` `s` | fleet status (read-only) |
+| `Ctrl+Space` `s` | fleet status (Up/Down + Enter to dive into a session) |
 | `Ctrl+Space` `f` | search scrollback |
 | `Ctrl+Space` `[` | copy mode (vim nav, block select, copy) |
 | `Ctrl+Space` `,` | rename the active tab (persisted, shown in tab bar) |

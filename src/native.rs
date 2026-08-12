@@ -202,6 +202,23 @@ impl Application {
         }
     }
 
+    /// Fleet-overlay Enter: jump to an already-open tab running the selected session's engine if one
+    /// exists (closest thing to 'diving into' that pane), else open a fresh local tmux pane for it.
+    fn fleet_attach_selected(&mut self) {
+        let Some(fs) = self.app.fleet.fleet.get(self.app.selected) else {
+            self.app.overlay = Overlay::None;
+            return;
+        };
+        let eng = fs.engine.clone();
+        // Prefer an open tab with the same engine id, so re-running the same session isn't duplicated.
+        if let Some(i) = self.app.tabs.iter().position(|t| t.meta.engine == eng) {
+            self.set_active(i);
+        } else if !eng.is_empty() {
+            self.app.spawn_tmux("this-host", &eng);
+        }
+        self.app.overlay = Overlay::None;
+    }
+
     /// `prefix+o`: jump to the next backgrounded tab that produced output since we last looked,
     /// wrapping around. Makes the activity badge actionable — a key to reach 'the one that just
     /// did something'. If none is flagged, does nothing.
@@ -446,18 +463,19 @@ impl Application {
         let mid = if f.machine_id.is_empty() { "unknown".to_string() } else { f.machine_id.chars().take(6).collect() };
         let tunnel = if f.connected { "tunnel up" } else { "tunnel down" };
         let n = f.fleet.len();
-        draw_text(fb, &mut self.cache, &format!("  fleet · {} · {} · {} session{}  ", mid, tunnel, n, if n == 1 { "" } else { "s" }), 32, base_y, self.font_px, WHITE);
+        draw_text(fb, &mut self.cache, &format!("  fleet · {} · {} · {} session{} · Up/Down+Enter to dive  ", mid, tunnel, n, if n == 1 { "" } else { "s" }), 32, base_y, self.font_px, WHITE);
         if n == 0 {
             draw_text(fb, &mut self.cache, "  no harness sessions (daemon unreachable or nothing joined)  ", 32, base_y + line_px, self.font_px, CHROME_DIM);
             return;
         }
         for (i, s) in f.fleet.iter().enumerate().take(20) {
             let live = s.is_live();
+            let sel = i == self.app.selected;
             let mark = if live { "●" } else { "○" };
-            let color = if live { (0x4a, 0xe0, 0x8a) } else { CHROME_DIM };
+            let color = if sel { WHITE } else if live { (0x4a, 0xe0, 0x8a) } else { CHROME_DIM };
             let eng = if s.engine.is_empty() { "?" } else { s.engine.as_str() };
             let id = if s.session_id.is_empty() { s.tmux_pane.clone() } else { s.session_id.chars().take(8).collect() };
-            let line = format!("  {} {}  {:<9} {}", mark, eng, "", id);
+            let line = format!("  {} {}  {:<9} {}{}", mark, eng, "", id, if sel { "  ◄" } else { "" });
             draw_text(fb, &mut self.cache, &line, 32, base_y + (i + 1) * line_px, self.font_px, color);
         }
     }
@@ -790,7 +808,8 @@ impl Application {
                 "t" => self.app.spawn_tmux("this-host", "shell"),
                 "q" => return true,
                 "s" => {
-                    // Read-only fleet overlay: fetch status on open so it's fresh, then show it.
+                    // Fleet overlay: fetch status on open so it's fresh, then show it.
+                    self.app.selected = 0;
                     if let Ok(st) = crate::harness::HarnessClient::local().status() {
                         self.app.fleet = st;
                     }
@@ -911,11 +930,31 @@ impl Application {
                 return;
             }
             Overlay::Fleet => {
-                // Read-only: any key closes it. `s` re-fetches for a fresh view.
-                if matches!(key, Key::Named(winit::keyboard::NamedKey::Escape)) || matches!(key, Key::Character(c) if c != "s") {
-                    self.app.overlay = Overlay::None;
-                } else if let Ok(st) = crate::harness::HarnessClient::local().status() {
-                    self.app.fleet = st;
+                match key {
+                    Key::Named(n) => match n {
+                        // Up/Down move the highlighted row; Enter attaches to it (jump to an open
+                        // tab for that engine, else open a fresh local tmux pane). Esc dismisses.
+                        winit::keyboard::NamedKey::Escape => self.app.overlay = Overlay::None,
+                        winit::keyboard::NamedKey::ArrowDown => {
+                            if !self.app.fleet.fleet.is_empty() {
+                                self.app.selected = (self.app.selected + 1).min(self.app.fleet.fleet.len() - 1);
+                            }
+                        }
+                        winit::keyboard::NamedKey::ArrowUp => {
+                            self.app.selected = self.app.selected.saturating_sub(1);
+                        }
+                        winit::keyboard::NamedKey::Enter => {
+                            self.fleet_attach_selected();
+                        }
+                        _ => {}
+                    },
+                    // `s` re-fetches for a fresh view; any other character closes.
+                    Key::Character(c) if c == "s" => {
+                        if let Ok(st) = crate::harness::HarnessClient::local().status() {
+                            self.app.fleet = st;
+                        }
+                    }
+                    _ => self.app.overlay = Overlay::None,
                 }
                 return;
             }
