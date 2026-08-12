@@ -371,9 +371,25 @@ impl Application {
         let tunnel = if self.app.fleet.connected { "● tunnel up" } else { "○ tunnel down" };
         info = format!("  {} · {}", tunnel, info);
         // When the viewport is scrolled back from the live bottom, say so — a dead giveaway that
-        // keys won't take you to fresh output until you press Escape (or the b key).
+        // keys won't take you to fresh output until you press Escape (or the b key). Also show how
+        // far back we are as a percentage so a long agent log stays navigable.
         if self.scrolled {
-            info += "  ▾ scrolled (Esc/b to bottom)";
+            let pct = self
+                .app
+                .active_session()
+                .and_then(|s| {
+                    let g = s.term.lock();
+                    let hist = g.grid().history_size();
+                    if hist == 0 {
+                        None
+                    } else {
+                        let above = g.grid().display_offset().min(hist);
+                        Some(((hist - above) * 100 / hist).min(100))
+                    }
+                })
+                .unwrap_or(0);
+            let pct = if self.scrolled && pct >= 100 { 99 } else { pct };
+            info += &format!("  ▾ {pct}% (Esc/b to bottom)");
         }
         draw_text(fb, &mut self.cache, &info, 6, status_base, self.font_px, CHROME_FG);
         let hints = " prefix+/ palette  prefix+n new  prefix+r remote  prefix+s fleet  prefix+o busy  prefix+[ copy  prefix+p paste  prefix+l last  prefix+? help  prefix+q quit ";
