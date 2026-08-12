@@ -165,7 +165,7 @@ fn cell_at(g: &alacritty_terminal::term::Term<Listener>, row: usize, col: usize)
 fn draw_status(frame: &mut Frame, area: Rect, app: &App) {
     let mut text = String::new();
     if let Some(s) = app.active_session() {
-        text = format!(" {} · {} · {}", s.meta.host, s.meta.engine, s.meta.title);
+        text = format!(" {} · {} · {} · [{}]", s.meta.host, s.meta.engine, s.meta.title, s.kind());
     }
     let hints = "  [prefix+/] palette  [prefix+n] new  [prefix+q] quit  [1..9] jump";
     let line = Line::from(vec![

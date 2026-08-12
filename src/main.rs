@@ -111,6 +111,10 @@ fn handle_key(app: &mut App, key: KeyEvent, in_command: &mut bool) -> bool {
                 app.overlay = Overlay::NewSession;
                 app.selected = 0;
             }
+            KeyCode::Char('t') => {
+                // Spawn a session backed by a real tmux pane (TAB=SESSION=PANE@HOST).
+                app.spawn_tmux("this-host", "shell");
+            }
             KeyCode::Char('q') => return true,
             KeyCode::Char('c') => {
                 // clear / focus first tab

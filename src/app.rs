@@ -53,12 +53,27 @@ impl App {
     /// Create a new session tab running a local engine, and focus it.
     pub fn spawn_local(&mut self, host: &str, engine_id: &str) {
         let program = engine_cmd(engine_id).unwrap_or("bash");
+        self.spawn_kind(host, engine_id, program, false);
+    }
+
+    /// Create a new session tab running the engine inside a real tmux pane, and focus it.
+    pub fn spawn_tmux(&mut self, host: &str, engine_id: &str) {
+        let program = engine_cmd(engine_id).unwrap_or("bash");
+        self.spawn_kind(host, engine_id, program, true);
+    }
+
+    fn spawn_kind(&mut self, host: &str, engine_id: &str, program: &str, in_tmux: bool) {
         let meta = SessionMeta {
             host: host.to_string(),
             engine: engine_id.to_string(),
             title: format!("{} @ {}", engine_id, host),
         };
-        match Session::local(meta, program, Vec::new(), self.size) {
+        let res = if in_tmux {
+            Session::tmux(meta, program, self.size)
+        } else {
+            Session::local(meta, program, Vec::new(), self.size)
+        };
+        match res {
             Ok(session) => {
                 self.tabs.push(session);
                 self.active = self.tabs.len() - 1;

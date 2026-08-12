@@ -7,12 +7,12 @@
 use std::io;
 use std::sync::Arc;
 
-use alacritty_terminal::event::{Event, EventListener, WindowSize};
-use alacritty_terminal::event_loop::{EventLoop, EventLoopSender, Msg};
+use alacritty_terminal::event::{Event, EventListener};
 use alacritty_terminal::grid::Dimensions;
 use alacritty_terminal::sync::FairMutex;
 use alacritty_terminal::term::{Config, Term};
-use alacritty_terminal::tty;
+
+use crate::transport::{LocalPtyTransport, Transport};
 
 /// Reusable pane geometry.
 #[derive(Clone, Copy, Debug)]
@@ -44,11 +44,11 @@ pub struct SessionMeta {
     pub title: String,
 }
 
-/// A single terminal session: emulator surface + event-loop sender for I/O.
+/// A single terminal session: emulator surface + transport for I/O.
 pub struct Session {
     pub meta: SessionMeta,
     pub term: Arc<FairMutex<Term<Listener>>>,
-    input: EventLoopSender,
+    transport: Box<dyn Transport>,
 }
 
 impl Session {
@@ -60,46 +60,34 @@ impl Session {
         size: TermSize,
     ) -> io::Result<Session> {
         let term = Arc::new(FairMutex::new(Term::new(Config::default(), &size, Listener)));
+        let transport = LocalPtyTransport::spawn(program, args, size, Arc::clone(&term))?;
+        Ok(Session { meta, term, transport: Box::new(transport) })
+    }
 
-        let wsize = WindowSize {
-            num_lines: size.lines as u16,
-            num_cols: size.cols as u16,
-            cell_width: 0,
-            cell_height: 0,
-        };
-        // Local PTY. (Later: a remote transport swaps this for the tunnel-backed PTY.)
-        let pty = tty::new(
-            &tty::Options {
-                shell: Some(tty::Shell::new(program.into(), args)),
-                working_directory: None,
-                drain_on_exit: true,
-                env: Default::default(),
-            },
-            wsize,
-            /* window_id */ 0,
-        )?;
+    /// Create a session backed by a real tmux pane (control mode).
+    pub fn tmux(
+        meta: SessionMeta,
+        program: &str,
+        size: TermSize,
+    ) -> io::Result<Session> {
+        let term = Arc::new(FairMutex::new(Term::new(Config::default(), &size, Listener)));
+        let transport = crate::transport::TmuxTransport::spawn(program, size, Arc::clone(&term))?;
+        Ok(Session { meta, term, transport: Box::new(transport) })
+    }
 
-        // Event loop owns the PTY; we keep the sender to push input + resize.
-        let event_loop = EventLoop::new(Arc::clone(&term), Listener, pty, true, false)?;
-        let input = event_loop.channel();
-        let _handle = event_loop.spawn();
-
-        Ok(Session { meta, term, input })
+    /// Transport kind: "pty" or "tmux" (shown in the status line).
+    pub fn kind(&self) -> &'static str {
+        self.transport.kind()
     }
 
     /// Push keystrokes into the session's transport.
     pub fn write(&self, bytes: &[u8]) {
-        let _ = self.input.send(Msg::Input(bytes.to_vec().into()));
+        self.transport.write(bytes);
     }
 
-    /// Resize the session's screen + underlying PTY.
+    /// Resize the session's screen + underlying transport.
     pub fn resize(&self, size: TermSize) {
         self.term.lock().resize(size);
-        let _ = self.input.send(Msg::Resize(WindowSize {
-            num_lines: size.lines as u16,
-            num_cols: size.cols as u16,
-            cell_width: 0,
-            cell_height: 0,
-        }));
+        self.transport.resize(size);
     }
 }
