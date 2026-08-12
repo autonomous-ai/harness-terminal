@@ -102,10 +102,15 @@ pub fn load_zoom() -> f32 {
 mod tests {
     use super::*;
 
-    /// Run a closure with `HARNESS_CONFIG_DIR` pointed at a throwaway dir, then remove it. Gives
-    /// each file-backed test its own isolated config dir so parallel tests never fight over HOME.
+    /// A `HARNESS_CONFIG_DIR` override is process-global, so two tests redirecting it in parallel
+    /// can tear each other's mapping out mid-run. This mutex serializes every file-backed test:
+    /// only one redirects `HARNESS_CONFIG_DIR` at a time, each into its own dir.
     fn with_isolated_dir<F: FnOnce(&std::path::Path) + std::panic::UnwindSafe>(f: F) {
-        let dir = std::env::temp_dir().join(format!("ht-test-{}-{:?}", std::process::id(), std::thread::current().id()));
+        use std::sync::{Mutex, OnceLock};
+        static LOCK: OnceLock<Mutex<()>> = OnceLock::new();
+        let _guard = LOCK.get_or_init(|| Mutex::new(())).lock().unwrap();
+        static SEQ: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+        let dir = std::env::temp_dir().join(format!("ht-test-{}-{}", std::process::id(), SEQ.fetch_add(1, std::sync::atomic::Ordering::Relaxed)));
         let _ = std::fs::remove_dir_all(&dir);
         std::env::set_var("HARNESS_CONFIG_DIR", &dir);
         let r = std::panic::catch_unwind(|| f(&dir));

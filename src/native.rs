@@ -360,6 +360,7 @@ impl Application {
             ("g / b", "scroll up a page / jump to bottom"),
             ("Ctrl+= / Ctrl+-", "font zoom (Ctrl+0 reset)"),
             ("PgUp/PgDn", "scrollback"),
+            ("Cmd/Ctrl+click", "open URL / file path"),
             ("prefix q", "quit"),
         ];
         for (row, (k, d)) in bindings.iter().enumerate() {
@@ -969,6 +970,36 @@ impl Application {
         }
     }
 
+    /// Cmd/Ctrl+click: jump to whatever is under the cursor. A URL opens in the default browser; a
+    /// relative path opens in a text editor via `open` (macOS). Reads the word containing the
+    /// clicked cell by expanding to the nearest whitespace/bracket boundaries on the grid row.
+    /// Best-effort — a click on non-text just does nothing.
+    fn mouse_open(&mut self, x: f64, y: f64) {
+        let Some(pt) = self.mouse_to_cell(x, y) else { return };
+        if self.scrolled || pt.line.0 < 0 {
+            return;
+        }
+        let Some(active) = self.app.active_session() else { return };
+        let g = active.term.lock();
+        let row = pt.line.0 as usize;
+        let cols = g.columns();
+        if row >= g.screen_lines() {
+            return;
+        }
+        let col = (pt.column.0 as usize).min(cols - 1);
+        // Read the whole visible row and expand left/right from the click to word boundaries.
+        let line_text: String = g.grid()[Line(row as i32)][Column(0)..Column(cols)]
+            .iter().map(|c| c.c).collect();
+        drop(g);
+        let word = expand_click_word(&line_text, col);
+        if word.is_empty() {
+            return;
+        }
+        // Shell it through `open`: macOS routes `http(s)://…` to the browser and a relative path to
+        // a text editor (XDG on Linux needs a different incantation; we're the mac build today).
+        let _ = std::process::Command::new("open").arg(word).spawn();
+    }
+
     fn mouse_press(&mut self, x: f64, y: f64) {
         let Some(pt) = self.mouse_to_cell(x, y) else {
             // Click outside the grid (on chrome) clears any selection.
@@ -1034,6 +1065,23 @@ impl Application {
             let _ = cb.set_text(text);
         }
     }
+}
+
+/// Expand the word containing byte index `col` in a line of text, growing to whitespace/bracket
+/// boundaries on both sides. Returns the substring (may be empty if `col` sits on a boundary).
+fn expand_click_word(line: &str, col: usize) -> &str {
+    let bytes = line.as_bytes();
+    let col = col.min(bytes.len());
+    let is_boundary = |b: u8| b.is_ascii_whitespace() || matches!(b, b'(' | b')' | b'"' | b'\'' | b'<' | b'>' | b'[' | b']');
+    let mut start = col;
+    while start > 0 && !is_boundary(bytes[start - 1]) {
+        start -= 1;
+    }
+    let mut end = col;
+    while end < bytes.len() && !is_boundary(bytes[end]) {
+        end += 1;
+    }
+    &line[start..end]
 }
 
 /// Map a typed letter to its control byte (a-z → 1-26), for Ctrl+key.
@@ -1148,6 +1196,11 @@ impl ApplicationHandler for Application {
                                 self.mouse_alt_click(x, y);
                                 return;
                             }
+                            if self.mods.control_key() || self.mods.super_key() {
+                                // Cmd/Ctrl+click opens the URL/path under the cursor.
+                                self.mouse_open(x, y);
+                                return;
+                            }
                             self.mouse_press(x, y);
                             if let Some(w) = &self.window {
                                 w.request_redraw();
@@ -1181,4 +1234,30 @@ pub fn run(app: App) -> Result<(), Box<dyn std::error::Error>> {
     let mut application = Application::new(app);
     event_loop.run_app(&mut application)?;
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::expand_click_word;
+
+    /// Cmd+click word expansion picks the whole token, not the shell quoting around it.
+    #[test]
+    fn click_word_expands_to_token() {
+        let line = "see https://example.com/foo in the log (src/main.rs)";
+        assert_eq!(expand_click_word(line, 25), "https://example.com/foo");
+        // The substring is a byte index into the line; find it by locating the token start.
+        let url_start = line.find("https").unwrap();
+        assert_eq!(expand_click_word(line, url_start + 5), "https://example.com/foo");
+        // A path inside parens expands to the path, stopping at ')'.
+        let p = line.find("src/main.rs").unwrap();
+        assert_eq!(expand_click_word(line, p), "src/main.rs");
+        // A click on a boundary returns an empty token.
+        assert_eq!(expand_click_word("   ", 1), "");
+    }
+
+    /// A single word on its own line is returned whole.
+    #[test]
+    fn click_word_single_token() {
+        assert_eq!(expand_click_word("README.md", 3), "README.md");
+    }
 }
