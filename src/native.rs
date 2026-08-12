@@ -163,6 +163,24 @@ impl Application {
         flags
     }
 
+    /// `prefix+o`: jump to the next backgrounded tab that produced output since we last looked,
+    /// wrapping around. Makes the activity badge actionable — a key to reach 'the one that just
+    /// did something'. If none is flagged, does nothing.
+    fn next_busy(&mut self) {
+        let flags = self.activity_flags();
+        let n = self.app.tabs.len();
+        if n == 0 {
+            return;
+        }
+        for step in 1..=n {
+            let i = (self.app.active + step) % n;
+            if flags[i] {
+                self.app.active = i;
+                return;
+            }
+        }
+    }
+
     fn redraw(&mut self) {
         let (Some(w), Some(h)) = (NonZeroU32::new(self.size.width), NonZeroU32::new(self.size.height)) else {
             return;
@@ -376,7 +394,7 @@ impl Application {
     fn render_help(&mut self, fb: &mut Framebuffer) {
         let (base_y, line_px) = self.overlay_base_y();
         draw_text(fb, &mut self.cache, "  harness-terminal keys  ", 32, base_y, self.font_px, WHITE);
-        let bindings: [(&str, &str); 15] = [
+        let bindings: [(&str, &str); 16] = [
             ("Ctrl+Space", "prefix (then a command)"),
             ("prefix /", "palette: jump to any session"),
             ("prefix n", "new session (engine picker)"),
@@ -386,6 +404,7 @@ impl Application {
             ("prefix [", "copy mode"),
             ("prefix ?", "this help"),
             ("1-9 / Tab", "switch tab"),
+            ("prefix o", "jump to next busy tab"),
             ("x / c", "close tab / go to tab 0"),
             ("g / b", "scroll up a page / jump to bottom"),
             ("Ctrl+= / Ctrl+-", "font zoom (Ctrl+0 reset)"),
@@ -686,6 +705,7 @@ impl Application {
                     self.app.overlay = Overlay::Fleet;
                 }
                 "c" => { if !self.app.tabs.is_empty() { self.app.active = 0; } }
+                "o" => self.next_busy(),
                 "x" => { close_tab(&mut self.app); }
                 "g" => { scroll_active(self, 20); self.scrolled = true; }
                 "b" => self.scroll_to_bottom(),
