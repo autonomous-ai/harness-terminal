@@ -1,16 +1,15 @@
 //! Transports — the byte source backing a `Session`'s terminal grid.
 //!
 //! `TAB = SESSION = PANE@HOST`. Every transport drains raw bytes into the same alacritty `Term`
-//! grid (via `vte::ansi::Processor::advance`) and accepts keystrokes back out. Two shapes today:
+//! grid (via `vte::ansi::Processor::advance`) and accepts keystrokes back out. All three share one
+//! control-mode protocol (`ControlPipe`); only the spawned command differs:
 //!
 //! - `LocalPtyTransport`: a real PTY running a shell/engine CLI, using alacritty's own event loop.
-//! - `TmuxTransport`: a real tmux pane driven through tmux control mode (`tmux -C`). The pane
-//!   emits `%output` notifications, which we replay into the grid; keystrokes go to the control
-//!   client's stdin. This is the target: one pane per session, visible and attachable on the host.
-//! - `HarnessTransport`: runs an engine through the installed `harness` CLI on the joined machine.
-//!   The harness owns the e2ee tunnel to the fleet backend; the transport rides `harness <engine>`
-//!   (which launches into a tmux pane) and feeds that pane's bytes into the grid — the same pane
-//!   geometry as `TmuxTransport`, but with the harness identity/agent lifecycle applied.
+//! - `TmuxTransport`: a real LOCAL tmux pane driven through control mode (`tmux -C`). This is the
+//!   literal `pane@host` for the current machine.
+//! - `RemoteTransport`: a pane on ANOTHER machine, reached via `ssh <host> tmux -C`. Same `%output`
+//!   decode → `advance`; only the byte source crosses the network. This is `pane@host` across the
+//!   fleet (machines reachable by ssh; the harness `machine-ws` tunnel can back the same hop later).
 
 use std::io;
 use std::process::{Child, Command, Stdio};
@@ -102,34 +101,63 @@ use std::thread;
 
 /// A real tmux pane driven through control mode. A reader thread consumes tmux's `%output`
 /// notifications and replays them into the shared grid; a channel carries keystrokes to tmux's
-/// stdin. `close_tab` is expressed by sending `/` no—by killing the tmux client.
+/// stdin. Drop kills the tmux client.
 pub struct TmuxTransport {
+    pipe: ControlPipe,
+}
+
+impl TmuxTransport {
+    /// Spawn a control-mode tmux pane running `program` in a fresh, uniquely-named LOCAL session.
+    pub fn spawn(program: &str, size: TermSize, term: Arc<FairMutex<Term<Listener>>>) -> io::Result<TmuxTransport> {
+        let name = format!("auton-{}", program.replace('/', "-"));
+        let _ = Command::new("tmux").args(["kill-session", "-t", &name]).status();
+        let pipe = ControlPipe::spawn(
+            "tmux".to_string(),
+            vec!["-C".to_string()],
+            &name,
+            program,
+            size,
+            term,
+        )?;
+        Ok(TmuxTransport { pipe })
+    }
+}
+
+/// A tmux control-mode client split into a reader thread (parses `%output` → grid) and a writer
+/// thread (keystrokes/resize → tmux stdin). The client is spawned from an arbitrary command line,
+/// so the SAME protocol drives a local pane (`tmux -C`) or a remote pane (`ssh host tmux -C`).
+struct ControlPipe {
     child: Child,
     tx: mpsc::Sender<Vec<u8>>,
 }
 
-impl TmuxTransport {
-    /// Spawn a dedicated tmux session + pane running `program`, then control-mode into it.
-    /// Spawn a control-mode tmux pane running `program` in a fresh, uniquely-named session.
-    pub fn spawn(program: &str, size: TermSize, term: Arc<FairMutex<Term<Listener>>>) -> io::Result<TmuxTransport> {
-        // A fresh, uniquely-named tmux session with one pane. We run a bare `tmux -C` (control
-        // mode) and issue `new-session` on its stdin: that creates the session, makes this client
-        // the attached pane, and streams `%output` notifications back on stdout. No separate
-        // pre-creation — a second `-t` target would spawn a duplicate session.
-        let name = format!("auton-{}", program.replace('/', "-"));
-        let _ = Command::new("tmux").args(["kill-session", "-t", &name]).status();
-
-        let mut child = Command::new("tmux")
-            .arg("-C")
+impl ControlPipe {
+    /// Spawn a control-mode client with `argv` (the control-mode command), create `session` running
+    /// `program`, and stream its `%output` into `term`.
+    fn spawn(
+        argv0: String,
+        argv: Vec<String>,
+        session: &str,
+        program: &str,
+        size: TermSize,
+        term: Arc<FairMutex<Term<Listener>>>,
+    ) -> io::Result<ControlPipe> {
+        let mut cmd = Command::new(&argv0);
+        cmd.args(&argv)
             .stdin(Stdio::piped())
             .stdout(Stdio::piped())
-            .stderr(Stdio::null())
-            .spawn()?;
-        let child_stdin = child.stdin.take().expect("tmux stdin piped");
-        let mut child_stdout = child.stdout.take().expect("tmux stdout piped");
+            .stderr(Stdio::null());
+        let mut child = cmd.spawn()?;
+        let child_stdin = child.stdin.take().expect("control client stdin piped");
+        let mut child_stdout = child.stdout.take().expect("control client stdout piped");
 
         let (tx, rx) = mpsc::channel::<Vec<u8>>();
-        tx.send(format!("new-session -s {} -x {} -y {} {}\n", name, size.cols, size.lines, program).into_bytes()).ok();
+        // Create the session + pane on the control client's own stdin (no separate pre-spawn, so a
+        // remote hop doesn't need a second RTT).
+        tx.send(format!(
+            "new-session -s {} -x {} -y {} {}\n",
+            session, size.cols, size.lines, program
+        ).into_bytes()).ok();
 
         // Reader: parse control-mode notification lines; %output carries the pane's byte payload.
         let t = Arc::clone(&term);
@@ -153,8 +181,7 @@ impl TmuxTransport {
                 }
             })?;
 
-        // Writer thread: drain keystrokes (and resize commands) into tmux's control-client stdin.
-        // The stdin handle is moved in here; no other writer exists.
+        // Writer thread: drain keystrokes (and resize commands) into the client's stdin.
         let mut w = child_stdin;
         thread::Builder::new()
             .name("tmux-write".into())
@@ -167,13 +194,153 @@ impl TmuxTransport {
                 }
             })?;
 
-        Ok(TmuxTransport { child, tx })
+        Ok(ControlPipe { child, tx })
+    }
+
+    /// Encode a keystroke buffer as `send-keys` commands (see [`ControlPipe::write`]).
+    fn write(&self, bytes: &[u8]) {
+        // In control mode, typed bytes go to the pane as `send-keys -l '<text>'`. The pane gets a
+        // raw key press on CR/LF, which we submit as a separate `send-keys Enter` command (the -l
+        // form types literally, so it cannot carry key names). A trailing partial literal line is
+        // flushed without an Enter so backspace-then-type still works.
+        let mut cmd = String::new();
+        let mut literal = String::new();
+        let flush = |cmd: &mut String, literal: &mut String, enter: bool| {
+            if !literal.is_empty() {
+                cmd.push_str("send-keys -l '");
+                cmd.push_str(&escape_single_quote(literal));
+                cmd.push_str("'\n");
+                literal.clear();
+            }
+            if enter {
+                cmd.push_str("send-keys Enter\n");
+            }
+        };
+        for &b in bytes {
+            match b {
+                b'\r' | b'\n' => flush(&mut cmd, &mut literal, true),
+                b'\t' => {
+                    flush(&mut cmd, &mut literal, false);
+                    cmd.push_str("send-keys Tab\n");
+                }
+                _ => literal.push(b as char),
+            }
+        }
+        flush(&mut cmd, &mut literal, false);
+        let _ = self.tx.send(cmd.into_bytes());
+    }
+}
+
+impl Drop for ControlPipe {
+    fn drop(&mut self) {
+        let _ = self.child.kill();
+    }
+}
+
+impl Transport for TmuxTransport {
+    fn kind(&self) -> &'static str {
+        "tmux"
+    }
+
+    fn write(&self, bytes: &[u8]) {
+        self.pipe.write(bytes);
+    }
+
+    fn resize(&self, size: TermSize) {
+        let cmd = format!("resize-window -x {} -y {}\n", size.cols, size.lines);
+        let _ = self.pipe.tx.send(cmd.into_bytes());
+    }
+}
+
+/// A remote `PANE@HOST`: the same control-mode protocol, but the client runs over ssh so the pane
+/// lives (and is attachable) on another joined machine. `host` is the `@host` half of `pane@host`.
+pub struct RemoteTransport {
+    pipe: ControlPipe,
+}
+
+impl RemoteTransport {
+    /// Create a fresh remote session running `program` on `host`, then attach to it.
+    pub fn spawn(
+        host: &str,
+        program: &str,
+        size: TermSize,
+        term: Arc<FairMutex<Term<Listener>>>,
+    ) -> io::Result<RemoteTransport> {
+        let name = format!("auton-{}", program.replace('/', "-"));
+        // The control-mode client runs ON the remote host via ssh; its stdin/stdout carry the
+        // control-mode byte stream back through the (already-secured) ssh channel.
+        let pipe = ControlPipe::spawn(
+            "ssh".to_string(),
+            vec![
+                "-tt".to_string(), // force a tty so the remote tmux runs as an attached client
+                "-o".to_string(), "StrictHostKeyChecking=accept-new".to_string(),
+                host.to_string(),
+                "tmux".to_string(),
+                "-C".to_string(),
+            ],
+            &name,
+            program,
+            size,
+            term,
+        )?;
+        Ok(RemoteTransport { pipe })
+    }
+}
+
+impl Transport for RemoteTransport {
+    fn kind(&self) -> &'static str {
+        "remote"
+    }
+
+    fn write(&self, bytes: &[u8]) {
+        self.pipe.write(bytes);
+    }
+
+    fn resize(&self, size: TermSize) {
+        let cmd = format!("resize-window -x {} -y {}\n", size.cols, size.lines);
+        let _ = self.pipe.tx.send(cmd.into_bytes());
     }
 }
 
 /// Escape a single quote for embedding inside a tmux `send-keys -l '...'` value.
 fn escape_single_quote(s: &str) -> String {
     s.replace('\'', "\\'")
+}
+
+/// Candidate hosts for remote attach, in display order. Reads `~/.ssh/config` `Host` entries
+/// (excluding wildcard/`*` stanzas) plus the literal aliases localhost/this-host. This is the
+/// fleet's ssh-reachable surface; the harness `machine-ws` tunnel can add more later.
+pub fn discover_hosts() -> Vec<String> {
+    use std::fs;
+    let mut hosts: Vec<String> = Vec::new();
+    if let Ok(contents) = fs::read_to_string(dirs_home().join(".ssh/config")) {
+        for line in contents.lines() {
+            let line = line.trim();
+            // "Host foo bar" — take each whitespace-separated token.
+            if let Some(rest) = line.strip_prefix("Host") {
+                for tok in rest.split_whitespace() {
+                    if tok.contains('*') || tok.contains('?') {
+                        continue;
+                    }
+                    if !hosts.contains(&tok.to_string()) {
+                        hosts.push(tok.to_string());
+                    }
+                }
+            }
+        }
+    }
+    for local in ["localhost", "this-host"] {
+        if !hosts.contains(&local.to_string()) {
+            hosts.push(local.to_string());
+        }
+    }
+    hosts
+}
+
+fn dirs_home() -> std::path::PathBuf {
+    std::env::var_os("HOME")
+        .map(std::path::PathBuf::from)
+        .unwrap_or_else(|| std::path::PathBuf::from("."))
 }
 
 /// Extract the byte payload from a `%output` control-notification line, or None if it isn't one.
@@ -220,55 +387,3 @@ fn parse_escapes(s: &str) -> Option<Vec<u8>> {
     Some(out)
 }
 
-impl Drop for TmuxTransport {
-    fn drop(&mut self) {
-        let _ = self.child.kill();
-    }
-}
-
-impl Transport for TmuxTransport {
-    fn kind(&self) -> &'static str {
-        "tmux"
-    }
-
-    fn write(&self, bytes: &[u8]) {
-        // In control mode, typed bytes go to the pane as `send-keys -l '<text>'`. The pane gets a
-        // raw key press on CR/LF, which we submit as a separate `send-keys Enter` command (the -l
-        // form types literally, so it cannot carry key names). We flush an incomplete trailing
-        // literal line without an Enter so backspace-then-type still works.
-        let mut cmd = String::new();
-        let mut literal = String::new();
-        let flush = |cmd: &mut String, literal: &mut String, enter: bool| {
-            if !literal.is_empty() {
-                cmd.push_str("send-keys -l '");
-                cmd.push_str(&escape_single_quote(literal));
-                cmd.push_str("'\n");
-                literal.clear();
-            }
-            if enter {
-                cmd.push_str("send-keys Enter\n");
-            }
-        };
-        for &b in bytes {
-            match b {
-                b'\r' | b'\n' => flush(&mut cmd, &mut literal, true),
-                b'\t' => {
-                    // A raw Tab press: flush current literal, send Tab key.
-                    flush(&mut cmd, &mut literal, false);
-                    cmd.push_str("send-keys Tab\n");
-                }
-                _ => literal.push(b as char),
-            }
-        }
-        // Trailing partial literal (no Enter) — sends an incomplete command line so tmux holds it.
-        flush(&mut cmd, &mut literal, false);
-        let _ = self.tx.send(cmd.into_bytes());
-    }
-
-    fn resize(&self, size: TermSize) {
-        // Control-mode clients accept tmux commands as text on their stdin; resize the window's
-        // pane to match the TUI area. Rounded to tmux's character grid.
-        let cmd = format!("resize-window -x {} -y {}\n", size.cols, size.lines);
-        let _ = self.tx.send(cmd.into_bytes());
-    }
-}

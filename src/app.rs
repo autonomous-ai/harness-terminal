@@ -14,6 +14,8 @@ pub enum Overlay {
     Palette,
     /// New-session picker (choose engine + host).
     NewSession,
+    /// Remote-attach: type a host, choose an engine, attach to a pane@host on the fleet.
+    RemoteAttach,
 }
 
 pub struct App {
@@ -27,6 +29,8 @@ pub struct App {
     pub filtered: Vec<usize>,
     /// Terminal geometry every new tab starts at.
     pub size: TermSize,
+    /// Host text entry for the remote-attach overlay.
+    pub remote_host: String,
 }
 
 impl App {
@@ -39,6 +43,7 @@ impl App {
             selected: 0,
             filtered: Vec::new(),
             size,
+            remote_host: String::new(),
         }
     }
 
@@ -53,32 +58,39 @@ impl App {
     /// Create a new session tab running a local engine, and focus it.
     pub fn spawn_local(&mut self, host: &str, engine_id: &str) {
         let program = engine_cmd(engine_id).unwrap_or("bash");
-        self.spawn_kind(host, engine_id, program, false);
+        let meta = self.meta_for(host, engine_id);
+        self.push_ok(Session::local(meta, program, Vec::new(), self.size), engine_id, host);
     }
 
-    /// Create a new session tab running the engine inside a real tmux pane, and focus it.
+    /// Create a new session tab running the engine inside a real local tmux pane, and focus it.
     pub fn spawn_tmux(&mut self, host: &str, engine_id: &str) {
         let program = engine_cmd(engine_id).unwrap_or("bash");
-        self.spawn_kind(host, engine_id, program, true);
+        let meta = self.meta_for(host, engine_id);
+        self.push_ok(Session::tmux(meta, program, self.size), engine_id, host);
     }
 
-    fn spawn_kind(&mut self, host: &str, engine_id: &str, program: &str, in_tmux: bool) {
-        let meta = SessionMeta {
+    /// Create a remote session: the engine's pane runs on `host` (via ssh + tmux control mode).
+    pub fn spawn_remote(&mut self, host: &str, engine_id: &str) {
+        let program = engine_cmd(engine_id).unwrap_or("bash");
+        let meta = self.meta_for(host, engine_id);
+        self.push_ok(Session::remote(meta, program, self.size), engine_id, host);
+    }
+
+    fn meta_for(&self, host: &str, engine_id: &str) -> SessionMeta {
+        SessionMeta {
             host: host.to_string(),
             engine: engine_id.to_string(),
             title: format!("{} @ {}", engine_id, host),
-        };
-        let res = if in_tmux {
-            Session::tmux(meta, program, self.size)
-        } else {
-            Session::local(meta, program, Vec::new(), self.size)
-        };
+        }
+    }
+
+    fn push_ok(&mut self, res: std::io::Result<Session>, engine_id: &str, host: &str) {
         match res {
             Ok(session) => {
                 self.tabs.push(session);
                 self.active = self.tabs.len() - 1;
             }
-            Err(e) => eprintln!("spawn {engine_id}: {e}"),
+            Err(e) => eprintln!("spawn {engine_id}@{host}: {e}"),
         }
     }
 

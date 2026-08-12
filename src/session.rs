@@ -75,6 +75,18 @@ impl Session {
         Ok(Session { meta, term, transport: Box::new(transport) })
     }
 
+    /// Create a session whose pane lives on REMOTE host `host` (via ssh + tmux control mode).
+    /// `meta.host` carries the `@host` half of `pane@host`.
+    pub fn remote(
+        meta: SessionMeta,
+        program: &str,
+        size: TermSize,
+    ) -> io::Result<Session> {
+        let term = Arc::new(FairMutex::new(Term::new(Config::default(), &size, Listener)));
+        let transport = crate::transport::RemoteTransport::spawn(&meta.host, program, size, Arc::clone(&term))?;
+        Ok(Session { meta, term, transport: Box::new(transport) })
+    }
+
     /// Transport kind: "pty" or "tmux" (shown in the status line).
     pub fn kind(&self) -> &'static str {
         self.transport.kind()

@@ -135,3 +135,14 @@ per-pane byte stream over the tunnel. Two buildable paths, in preference order:
    how the web UI streams launcher frames today.
 
 Either slots into `Transport` behind `kind() == "remote"` with no session/tui changes.
+
+## 11. Remote attach — current state
+
+The remote transport is wired end-to-end (no harness change): `prefix + r` opens a
+remote-attach overlay (type host + pick engine), which calls `App::spawn_remote` →
+`Session::remote` → `RemoteTransport`, spawning `ssh -tt <host> tmux -C` and streaming that
+remote pane's `%output` through the identical `ControlPipe` decode → `advance` path.
+What's live today is geometric: bytes flow as fast as ssh will carry them; no latency
+smoothing, no local echo, no reconnect — those are refinements, not missing pieces.
+Host discovery (`transport::discover_hosts`) reads `~/.ssh/config` `Host` entries; the
+harness `machine-ws` tunnel can back the same attach later without touching this code.

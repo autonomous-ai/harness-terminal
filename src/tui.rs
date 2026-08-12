@@ -64,6 +64,7 @@ fn draw_frame(frame: &mut Frame, app: &mut App) {
     match app.overlay {
         Overlay::Palette => draw_palette(frame, chunks[1], app),
         Overlay::NewSession => draw_picker(frame, chunks[1], app),
+        Overlay::RemoteAttach => draw_remote_attach(frame, chunks[1], app),
         Overlay::None => {}
     }
 }
@@ -167,7 +168,7 @@ fn draw_status(frame: &mut Frame, area: Rect, app: &App) {
     if let Some(s) = app.active_session() {
         text = format!(" {} · {} · {} · [{}]", s.meta.host, s.meta.engine, s.meta.title, s.kind());
     }
-    let hints = "  [prefix+/] palette  [prefix+n] new  [prefix+q] quit  [1..9] jump";
+    let hints = "  [prefix+/] palette  [prefix+n] new  [prefix+r] remote  [prefix+q] quit";
     let line = Line::from(vec![
         Span::styled(text, Style::default().fg(Color::Cyan)),
         Span::styled(hints, Style::default().fg(Color::DarkGray)),
@@ -242,6 +243,42 @@ fn draw_picker(frame: &mut Frame, area: Rect, app: &mut App) {
     }
     let block = Block::default()
         .title(" engines ")
+        .borders(Borders::ALL)
+        .style(Style::default().fg(Color::Cyan));
+    frame.render_widget(Paragraph::new(lines).block(block), pop);
+}
+
+/// Remote-attach overlay: type a host, pick an engine, attach to a pane@host on the fleet.
+fn draw_remote_attach(frame: &mut Frame, area: Rect, app: &mut App) {
+    let pop = Rect::new(
+        area.x + 4,
+        area.y + 2,
+        area.width.saturating_sub(8).max(20),
+        16,
+    );
+    let mut lines: Vec<Line> = vec![Line::from(Span::styled(
+        "  attach to pane@host ",
+        Style::default().fg(Color::White).add_modifier(Modifier::BOLD),
+    ))];
+    lines.push(Line::from(vec![
+        Span::styled("  host: ", Style::default().fg(Color::Cyan)),
+        Span::raw(format!("{} ", app.remote_host)),
+    ]));
+    lines.push(Line::from(""));
+    for (i, e) in ENGINES.iter().enumerate() {
+        let sel = i == app.selected;
+        let sty = if sel {
+            Style::default().fg(Color::Black).bg(Color::Cyan)
+        } else {
+            Style::default()
+        };
+        lines.push(Line::from(Span::styled(
+            format!("  {}  {}", e.id, e.label),
+            sty,
+        )));
+    }
+    let block = Block::default()
+        .title(" remote attach ")
         .borders(Borders::ALL)
         .style(Style::default().fg(Color::Cyan));
     frame.render_widget(Paragraph::new(lines).block(block), pop);

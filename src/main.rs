@@ -61,6 +61,25 @@ fn handle_key(app: &mut App, key: KeyEvent, in_command: &mut bool) -> bool {
 
     // If we're inside a palette/picker overlay, handle its keys.
     match app.overlay {
+        Overlay::RemoteAttach => {
+            let host = app.remote_host.clone();
+            match key.code {
+                KeyCode::Esc => app.overlay = Overlay::None,
+                KeyCode::Enter => {
+                    if let Some(eng) = app.selected_engine() {
+                        let host = if host.trim().is_empty() { "localhost".to_string() } else { host.trim().to_string() };
+                        app.spawn_remote(&host, eng);
+                        app.overlay = Overlay::None;
+                    }
+                }
+                KeyCode::Down => app.selected = (app.selected + 1).min(engines_len() - 1),
+                KeyCode::Up => app.selected = app.selected.saturating_sub(1),
+                KeyCode::Char(c) => app.remote_host.push(c),
+                KeyCode::Backspace => { app.remote_host.pop(); }
+                _ => {}
+            }
+            return false;
+        }
         Overlay::Palette => {
             match key.code {
                 KeyCode::Esc => app.overlay = Overlay::None,
@@ -109,6 +128,12 @@ fn handle_key(app: &mut App, key: KeyEvent, in_command: &mut bool) -> bool {
             }
             KeyCode::Char('n') => {
                 app.overlay = Overlay::NewSession;
+                app.selected = 0;
+            }
+            KeyCode::Char('r') => {
+                // Remote attach: pick host + engine, spawn a pane on another machine.
+                app.overlay = Overlay::RemoteAttach;
+                app.remote_host.clear();
                 app.selected = 0;
             }
             KeyCode::Char('t') => {
