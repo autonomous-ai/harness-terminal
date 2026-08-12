@@ -31,6 +31,8 @@ pub enum Overlay {
     Broadcast,
     /// Peek: a picker of every session with a tail preview of its last lines; Enter jumps to it.
     Peek,
+    /// Command palette: a typed list of named prefix-commands; Enter runs the selected action.
+    CommandPalette,
 }
 
 pub struct App {

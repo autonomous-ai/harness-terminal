@@ -40,6 +40,46 @@ struct FleetMatch {
     col: usize,
 }
 
+/// A named action the command palette can run (the prefix+; palette). Each variant mirrors the
+/// effect of one existing prefix command, so the palette is one discoverable home for the growing
+/// set of prefix bindings.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum PaletteAction {
+    NewSession,
+    RemoteAttach,
+    SessionPalette,
+    FindInTab,
+    SearchAll,
+    CopyScrollback,
+    ExportLog,
+    Broadcast,
+    Peek,
+    UndoClose,
+    Help,
+    Quit,
+}
+
+impl PaletteAction {
+    /// The full, ordered list of palette rows, built once at startup.
+    fn all_rows() -> Vec<(&'static str, PaletteAction)> {
+        use PaletteAction::*;
+        vec![
+            ("new session (engine picker)", NewSession),
+            ("attach to a remote pane@host", RemoteAttach),
+            ("jump to a session (palette)", SessionPalette),
+            ("find in current tab", FindInTab),
+            ("search all sessions", SearchAll),
+            ("copy whole scrollback", CopyScrollback),
+            ("export scrollback to .log file", ExportLog),
+            ("broadcast a line to all sessions", Broadcast),
+            ("peek at all session tails", Peek),
+            ("undo close (reopen last)", UndoClose),
+            ("show this help", Help),
+            ("quit", Quit),
+        ]
+    }
+}
+
 /// The native application: window + framebuffer surface + app state + glyph cache.
 struct Application {
     window: Option<Rc<Window>>,
@@ -97,6 +137,17 @@ struct Application {
     fleet_filtered: Vec<usize>,
     /// Peek-overlay selection: which session row the highlight is on (index into `app.tabs`).
     peek_sel: usize,
+    /// Command-palette filter text (the prefix+; palette). Typing narrows `palette_filtered`.
+    palette_q: String,
+    /// The full, static list of (label, action) rows the palette filters over.
+    palette_rows: Vec<(&'static str, PaletteAction)>,
+    /// Indices into `palette_rows` matching `palette_q` (recomputed each render).
+    palette_filtered: Vec<usize>,
+    /// Command-palette selection: index into `palette_filtered`.
+    palette_sel: usize,
+    /// Set when any quit path fires (prefix+q, or the palette's Quit action); the event loop honors
+    /// it at the next `about_to_wait`, applying the same save-then-exit dance as CloseRequested.
+    quit_requested: bool,
     /// Mouse state: the cell anchor where a drag-selection started (Some while left button held).
     /// With winit 0.30 we track presses/releases ourselves; dragging updates the selection end.
     mouse_anchor: Option<Point>,
@@ -170,6 +221,11 @@ impl Application {
             notified: vec![false; tab_count],
             flash: None,
             peek_sel: 0,
+            palette_q: String::new(),
+            palette_rows: PaletteAction::all_rows(),
+            palette_filtered: Vec::new(),
+            palette_sel: 0,
+            quit_requested: false,
         }
     }
 
@@ -586,6 +642,7 @@ impl Application {
             Overlay::Rename => self.render_rename(fb),
             Overlay::Broadcast => self.render_broadcast(fb),
             Overlay::Peek => self.render_peek(fb),
+            Overlay::CommandPalette => self.render_command_palette(fb),
             Overlay::None => {}
         }
     }
@@ -718,9 +775,10 @@ impl Application {
     fn render_help(&mut self, fb: &mut Framebuffer) {
         let (base_y, line_px) = self.overlay_base_y();
         draw_text(fb, &mut self.cache, "  harness-terminal keys  ", 32, base_y, self.font_px, WHITE);
-        let bindings: [(&str, &str); 26] = [
+        let bindings: [(&str, &str); 27] = [
             ("Ctrl+Space", "prefix (then a command)"),
             ("prefix /", "palette: jump to any session"),
+            ("prefix ;", "command palette (all actions)"),
             ("prefix n", "new session (engine picker)"),
             ("prefix r", "attach to a remote pane@host"),
             ("prefix s", "fleet status"),
@@ -1063,6 +1121,99 @@ impl Application {
         }
     }
 
+    /// Recompute `palette_filtered` (indices into `palette_rows`) matching `palette_q` by
+    /// case-insensitive substring on the label, then clamp the selection into range. Mirrors the
+    /// other overlays' per-frame recompute.
+    fn palette_refresh_filter(&mut self) {
+        let q = self.palette_q.to_lowercase();
+        self.palette_filtered = (0..self.palette_rows.len())
+            .filter(|&i| q.is_empty() || self.palette_rows[i].0.to_lowercase().contains(&q))
+            .collect();
+        if self.palette_sel >= self.palette_filtered.len() {
+            self.palette_sel = self.palette_filtered.len().saturating_sub(1);
+        }
+    }
+
+    /// Render the command palette overlay: a filter prompt, then up to 12 matching action rows with
+    /// the selected one highlighted. `palette_filtered` is recomputed each frame, mirroring the
+    /// palette overlay.
+    fn render_command_palette(&mut self, fb: &mut Framebuffer) {
+        self.palette_refresh_filter();
+        let (base_y, line_px) = self.overlay_base_y();
+        let total = self.palette_rows.len();
+        let shown = self.palette_filtered.len();
+        draw_text(
+            fb,
+            &mut self.cache,
+            &format!("  ⚡ [action] {}  · {} of {}  ", self.palette_q, shown, total),
+            32,
+            base_y,
+            self.font_px,
+            WHITE,
+        );
+        if shown == 0 {
+            draw_text(fb, &mut self.cache, "  no actions match  ", 32, base_y + line_px, self.font_px, CHROME_DIM);
+            return;
+        }
+        for (row, &i) in self.palette_filtered.iter().enumerate().take(12) {
+            let sel = row == self.palette_sel;
+            let color = if sel { WHITE } else { CHROME_DIM };
+            let line = format!("  {}  {}", self.palette_rows[i].0, if sel { "◄" } else { "" });
+            draw_text(fb, &mut self.cache, &line, 32, base_y + (row + 1) * line_px, self.font_px, color);
+        }
+    }
+
+    /// Run a command-palette action: close the overlay first, then perform the same effect as the
+    /// corresponding prefix command so terminal state and overlays are kept consistent.
+    fn run_palette_action(&mut self, a: PaletteAction) {
+        use PaletteAction::*;
+        self.app.overlay = Overlay::None;
+        match a {
+            NewSession => {
+                self.app.overlay = Overlay::NewSession;
+                self.app.select_default_engine();
+            }
+            RemoteAttach => {
+                self.app.overlay = Overlay::RemoteAttach;
+                self.app.remote_host.clear();
+                self.app.selected = 0;
+            }
+            SessionPalette => {
+                self.app.overlay = Overlay::Palette;
+                self.app.query.clear();
+                self.app.selected = 0;
+                self.app.refresh_filter();
+            }
+            FindInTab => {
+                self.app.overlay = Overlay::Find;
+                self.find_query.clear();
+                self.find_hit = None;
+                self.find_all = Vec::new();
+            }
+            SearchAll => {
+                self.app.overlay = Overlay::FleetSearch;
+                self.fleet_q.clear();
+                self.fleet_matches.clear();
+                self.fleet_sel = 0;
+            }
+            CopyScrollback => self.copy_whole_scrollback(),
+            ExportLog => self.export_scrollback(),
+            Broadcast => {
+                self.broadcast_query.clear();
+                self.app.overlay = Overlay::Broadcast;
+            }
+            Peek => {
+                self.app.overlay = Overlay::Peek;
+                self.peek_sel = 0;
+            }
+            UndoClose => self.app.reopen_last_closed(),
+            Help => {
+                self.app.overlay = Overlay::Help;
+            }
+            Quit => self.quit(),
+        }
+    }
+
     /// Handle a key while in copy mode: vim-style motion keys move the read cursor; `v` starts
     /// (or re-anchors) a selection; Enter/Space copies and exits; Esc/Q exits; g/G go to top/bottom.
     fn handle_copy_key(&mut self, key: &Key, _mods: &ModifiersState) {
@@ -1214,12 +1365,21 @@ impl Application {
         if self.prefix_down && self.app.overlay == Overlay::None {
             self.prefix_down = false;
             if self.command_key(key) {
-                return; // quit handled by caller checking a flag — simplified: ignore for now
+                self.quit();
             }
             return;
         }
 
         self.forward_key(key, mods);
+    }
+
+    /// Apply the same save-then-exit dance as a window CloseRequested: persist open tabs, tab list,
+    /// and geometry, then flag the loop to exit at the next `about_to_wait`.
+    fn quit(&mut self) {
+        self.app.save_all_scrollbacks();
+        crate::restore::save(&self.app.tab_specs());
+        crate::restore::save_geometry(self.size.width, self.size.height);
+        self.quit_requested = true;
     }
 
     /// Command-mode (after prefix). Returns true to quit.
@@ -1265,6 +1425,12 @@ impl Application {
                 "}" => self.app.move_tab(1),
                 "[" => self.start_copy_mode(),
                 "?" => { self.app.overlay = Overlay::Help; }
+                ";" => {
+                    self.palette_q.clear();
+                    self.palette_sel = 0;
+                    self.palette_rows = PaletteAction::all_rows();
+                    self.app.overlay = Overlay::CommandPalette;
+                }
                 "," => {
                     // Rename the active tab. Pre-fill with the current custom name (if any) so
                     // editing doesn't start from scratch.
@@ -1500,6 +1666,57 @@ impl Application {
                             }
                         }
                         winit::keyboard::NamedKey::Escape => { self.app.overlay = Overlay::None; }
+                        _ => {}
+                    },
+                    _ => {}
+                }
+                return;
+            }
+            Overlay::CommandPalette => {
+                match key {
+                    Key::Character(c) => {
+                        self.palette_q.push_str(c);
+                        self.palette_refresh_filter();
+                    }
+                    Key::Named(n) => match n {
+                        winit::keyboard::NamedKey::Enter => {
+                            // Resolve the selected row to its action and run it (closes the overlay).
+                            if let Some(&i) = self.palette_filtered.get(self.palette_sel) {
+                                let a = self.palette_rows[i].1;
+                                self.run_palette_action(a);
+                            }
+                        }
+                        // Tab moves down, Shift+Tab up (wraps); arrows move within the filtered list.
+                        winit::keyboard::NamedKey::Tab if mods.shift_key() => {
+                            if self.palette_filtered.is_empty() {
+                                self.palette_sel = 0;
+                            } else {
+                                self.palette_sel = self.palette_sel.saturating_sub(1);
+                            }
+                        }
+                        winit::keyboard::NamedKey::Tab => {
+                            let len = self.palette_filtered.len();
+                            if len > 0 {
+                                self.palette_sel = (self.palette_sel + 1).min(len - 1);
+                            }
+                        }
+                        winit::keyboard::NamedKey::ArrowDown => {
+                            let len = self.palette_filtered.len();
+                            if len > 0 {
+                                self.palette_sel = (self.palette_sel + 1).min(len - 1);
+                            }
+                        }
+                        winit::keyboard::NamedKey::ArrowUp => {
+                            self.palette_sel = self.palette_sel.saturating_sub(1);
+                        }
+                        winit::keyboard::NamedKey::Backspace => {
+                            self.palette_q.pop();
+                            self.palette_refresh_filter();
+                        }
+                        winit::keyboard::NamedKey::Escape => {
+                            self.palette_q.clear();
+                            self.app.overlay = Overlay::None;
+                        }
                         _ => {}
                     },
                     _ => {}
@@ -2042,7 +2259,13 @@ impl ApplicationHandler for Application {
         }
     }
 
-    fn about_to_wait(&mut self, _event_loop: &ActiveEventLoop) {
+    fn about_to_wait(&mut self, event_loop: &ActiveEventLoop) {
+        // A quit request (prefix+q or the palette's Quit action) is honored here, after the key
+        // handler's borrows have ended.
+        if self.quit_requested {
+            event_loop.exit();
+            return;
+        }
         // Reconnect_sweep is throttled internally, so piggyback a cheap link-health refresh on it:
         // a periodic ping to the local harness daemon keeps the status-line tunnel badge current.
         self.app.reconnect_sweep_refresh();
