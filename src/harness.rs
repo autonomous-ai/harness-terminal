@@ -112,15 +112,26 @@ impl FleetStatus {
         })
     }
 
-    /// Short one-real-word summary for the status line, e.g. "3 agents / tunnel up".
+    /// Short one-real-word summary for the status line, e.g. "3 agents · 2 live · tunnel up".
+    ///
+    /// Distinguishes sessions that are *live* (recently updated, actively producing) from ones that
+    /// have gone idle (registered but quiet for a while) — a diver wants at-a-glance to know how
+    /// many agents are actually working right now, not just how many panes exist.
     pub fn summary(&self) -> String {
         let n = self.fleet.len();
+        let live = self.fleet.iter().filter(|s| s.is_live()).count();
         let tunnel = if self.connected {
             "tunnel up"
         } else {
             "tunnel down"
         };
-        format!("{n} agent{} · {tunnel}", if n == 1 { "" } else { "s" })
+        if n == 0 {
+            return format!("no agents · {tunnel}");
+        }
+        format!(
+            "{n} agent{} · {live} live · {tunnel}",
+            if n == 1 { "" } else { "s" }
+        )
     }
 }
 
@@ -161,7 +172,8 @@ mod tests {
         // updatedAt 0 (never) must never read as live.
         assert!(!st.engine_is_live("codex"));
         assert!(!st.engine_is_live("nope"));
-        assert_eq!(st.summary(), "2 agents · tunnel up");
+        // claude is live (recent heartbeat), codex is not (updatedAt 0).
+        assert_eq!(st.summary(), "2 agents · 1 live · tunnel up");
     }
 
     /// A `FleetSession` is live only when it has an identity AND a recent heartbeat; a stale or
