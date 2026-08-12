@@ -264,6 +264,23 @@ impl Application {
             let sel = g.selection.as_ref().and_then(|s| s.to_range(&g));
             let copy = if self.copy_mode { Some(self.copy_pos) } else { None };
             draw_grid(fb, &g, self.cell_w, self.cell_h, self.font_px, &mut self.cache, self.find_hit, &self.find_all, sel.as_ref(), copy);
+        } else {
+            // No sessions open — draw a short 'how to start' hint so the window isn't a blank void.
+            let cy = term_top + (grid_lines / 2) * gline_px;
+            let hint = "no sessions ·  Ctrl+Space n  new   Ctrl+Space r  attach remote   Ctrl+Space /  palette ";
+            let hw = draw_text(fb, &mut self.cache, hint, 0, cy, self.font_px, CHROME_DIM);
+            let cx = fb.width.saturating_sub(hw) / 2;
+            // Blank the row so the sizing pass above doesn't leave a left-aligned ghost, then paint
+            // a single centered copy. (All pixels are black here to begin; clearing is a no-op but
+            // keeps this robust if the grid later draws under the hint.)
+            for py in cy.saturating_sub(self.font_px as usize)..(cy + self.font_px as usize) {
+                for px in 0..fb.width {
+                    if py < fb.height {
+                        fb.pixels[py * fb.width + px] = argb(0, 0, 0, 0);
+                    }
+                }
+            }
+            draw_text(fb, &mut self.cache, hint, cx, cy, self.font_px, CHROME_DIM);
         }
 
         // Tab bar (top row). Flag backgrounded tabs that produced output since we last looked.
