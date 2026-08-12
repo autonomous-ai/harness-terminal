@@ -19,6 +19,9 @@ pub struct TabSpec {
     /// Tunnel/remote ports; only meaningful for "tunnel".
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub port: Option<u16>,
+    /// A user-assigned tab name (prefix+,). None = no custom name, fall back to the engine id.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub name: Option<String>,
 }
 
 impl App {
@@ -31,6 +34,7 @@ impl App {
                 host: s.meta.host.clone(),
                 engine: s.meta.engine.clone(),
                 port: None,
+                name: s.meta.name.clone(),
             })
             .collect()
     }
@@ -168,8 +172,8 @@ mod tests {
     #[test]
     fn tab_spec_roundtrips_through_json() {
         let specs = vec![
-            TabSpec { kind: "pty".into(), host: "this-host".into(), engine: "shell".into(), port: None },
-            TabSpec { kind: "tunnel".into(), host: "10.0.0.4".into(), engine: "codex".into(), port: Some(4321) },
+            TabSpec { kind: "pty".into(), host: "this-host".into(), engine: "shell".into(), port: None, name: None },
+            TabSpec { kind: "tunnel".into(), host: "10.0.0.4".into(), engine: "codex".into(), port: Some(4321), name: Some("db-migrate".into()) },
         ];
         let json = serde_json::to_string(&specs).unwrap();
         let back: Vec<TabSpec> = serde_json::from_str(&json).unwrap();
@@ -178,6 +182,8 @@ mod tests {
         assert_eq!(back[1].kind, "tunnel");
         assert_eq!(back[1].host, "10.0.0.4");
         assert_eq!(back[1].port, Some(4321));
+        assert_eq!(back[0].name, None);
+        assert_eq!(back[1].name.as_deref(), Some("db-migrate"));
     }
 
     /// Missing/absent state file loads as an empty vec, never an error.
@@ -222,6 +228,22 @@ mod tests {
             assert_eq!(load_active(), 0);
             save_active(3);
             assert_eq!(load_active(), 3);
+        });
+    }
+
+    /// A tab's custom name survives a save→load round-trip and stays None when unset.
+    #[test]
+    fn tab_name_roundtrips_through_specs() {
+        with_isolated_dir(|_| {
+            let specs = vec![
+                TabSpec { kind: "ssh".into(), host: "build-host".into(), engine: "claude".into(), port: None, name: None },
+                TabSpec { kind: "tunnel".into(), host: "10.0.0.9".into(), engine: "opencode".into(), port: Some(7000), name: Some("staging-deploy".into()) },
+            ];
+            save(&specs);
+            let back = load();
+            assert_eq!(back.len(), 2);
+            assert_eq!(back[0].name, None);
+            assert_eq!(back[1].name.as_deref(), Some("staging-deploy"));
         });
     }
 }

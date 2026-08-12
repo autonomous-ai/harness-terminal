@@ -143,12 +143,14 @@ impl EchoCanceller {
     }
 }
 
-/// Who owns this session (host · engine · title).
+/// Who owns this session (host · engine · title). `name` is an optional user-assigned tab label
+/// set via rename; None means "no custom name" and chrome falls back to the engine id.
 #[derive(Clone, Debug)]
 pub struct SessionMeta {
     pub host: String,
     pub engine: String,
     pub title: String,
+    pub name: Option<String>,
 }
 
 /// A single terminal session: emulator surface + transport for I/O.

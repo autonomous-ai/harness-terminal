@@ -22,6 +22,8 @@ pub enum Overlay {
     Fleet,
     /// Keybinding reference overlay (dismiss on any key).
     Help,
+    /// Rename the active tab: type a name, Enter commits, Esc cancels.
+    Rename,
 }
 
 pub struct App {
@@ -105,6 +107,7 @@ impl App {
             host: host.to_string(),
             engine: engine_id.to_string(),
             title: format!("{} @ {}", engine_id, host),
+            name: None,
         }
     }
 
@@ -177,7 +180,8 @@ impl App {
             "tunnel" => Session::tunnel(meta, &spec.host, spec.port.unwrap_or(crate::harness::HARNESS_PORT_DEFAULT), program, self.size),
             _ => Session::local(meta, program, Vec::new(), self.size),
         };
-        if let Ok(session) = res {
+        if let Ok(mut session) = res {
+            session.meta.name = spec.name.clone();
             self.tabs.push(session);
             // Don't steal focus on restore — keep whatever was active (usually tab 0) meaningful.
             if self.tabs.len() == 1 {

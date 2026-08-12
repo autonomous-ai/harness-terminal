@@ -49,6 +49,8 @@ struct Application {
     scrolled: bool,
     /// Active search query ("" when the Find overlay is closed).
     find_query: String,
+    /// In-progress rename for the active tab ("" when the Rename overlay is closed).
+    rename_query: String,
     /// The currently-focused search match (absolute line, col, width); recomputed on each query
     /// change / Enter and passed to draw_grid for highlighting.
     find_hit: Option<crate::render::Find>,
@@ -104,6 +106,7 @@ impl Application {
             mods: ModifiersState::default(),
             scrolled: false,
             find_query: String::new(),
+            rename_query: String::new(),
             find_hit: None,
             find_all: Vec::new(),
             find_index: 0,
@@ -278,7 +281,9 @@ impl Application {
             }
             // An exclamation marks a backgrounded tab that has scrolled since we last sampled it.
             let flag = if activity[i] { "!" } else { "" };
-            let label = format!(" {}{} {} {} ", flag, s.meta.engine, live, dot);
+            // Show the user's rename if set; otherwise the plain engine id.
+            let head = s.meta.name.clone().unwrap_or_else(|| s.meta.engine.clone());
+            let label = format!(" {}{} {} {} ", flag, head, live, dot);
             let color = if active { WHITE } else { CHROME_DIM };
             x += draw_text(fb, &mut self.cache, &label, x, tab_base, self.font_px, color) + 12;
             if x > fb.width.saturating_sub(20) {
@@ -292,7 +297,8 @@ impl Application {
         if let Some(s) = self.app.active_session() {
             let link = if s.alive() { "●" } else { "○ reconnecting" };
             let live = s.live_title().unwrap_or_else(|| s.meta.title.clone());
-            info = format!(" {} · {} · {} · [{} {}]", s.meta.host, s.meta.engine, live, s.kind(), link);
+            let head = s.meta.name.clone().unwrap_or_else(|| s.meta.engine.clone());
+            info = format!(" {} · {} · {} · [{} {}]", s.meta.host, head, live, s.kind(), link);
         }
         draw_text(fb, &mut self.cache, &info, 6, status_base, self.font_px, CHROME_FG);
         let hints = " prefix+/ palette  prefix+n new  prefix+r remote  prefix+s fleet  prefix+[ copy  prefix+? help  prefix+q quit ";
@@ -337,6 +343,7 @@ impl Application {
             Overlay::Find => self.render_find(fb),
             Overlay::Fleet => self.render_fleet(fb),
             Overlay::Help => self.render_help(fb),
+            Overlay::Rename => self.render_rename(fb),
             Overlay::None => {}
         }
     }
@@ -400,7 +407,7 @@ impl Application {
     fn render_help(&mut self, fb: &mut Framebuffer) {
         let (base_y, line_px) = self.overlay_base_y();
         draw_text(fb, &mut self.cache, "  harness-terminal keys  ", 32, base_y, self.font_px, WHITE);
-        let bindings: [(&str, &str); 16] = [
+        let bindings: [(&str, &str); 17] = [
             ("Ctrl+Space", "prefix (then a command)"),
             ("prefix /", "palette: jump to any session"),
             ("prefix n", "new session (engine picker)"),
@@ -408,6 +415,7 @@ impl Application {
             ("prefix s", "fleet status"),
             ("prefix f", "search scrollback"),
             ("prefix [", "copy mode"),
+            ("prefix ,", "rename the active tab"),
             ("prefix ?", "this help"),
             ("1-9 / Tab", "switch tab"),
             ("prefix o", "jump to next busy tab"),
@@ -569,6 +577,23 @@ impl Application {
         draw_text(fb, &mut self.cache, &line, 6, status_base, self.font_px, WHITE);
     }
 
+    /// Render the rename overlay: show what the tab is currently called and the in-progress name.
+    fn render_rename(&mut self, fb: &mut Framebuffer) {
+        let status_base = fb.height.saturating_sub(self.cell_h as usize / 2);
+        let cur = self
+            .app
+            .active_session()
+            .map(|s| s.meta.name.clone().unwrap_or_else(|| s.meta.engine.clone()))
+            .unwrap_or_default();
+        let prompt = if self.rename_query.is_empty() {
+            "  rename tab: (type a name, Enter keeps, Esc cancels)  ".to_string()
+        } else {
+            format!("  rename tab: {} ▏", self.rename_query)
+        };
+        draw_text(fb, &mut self.cache, &format!("  currently: {}  ", cur), 6, status_base - self.cell_h as usize, self.font_px, CHROME_DIM);
+        draw_text(fb, &mut self.cache, &prompt, 6, status_base, self.font_px, WHITE);
+    }
+
     /// Handle a key while in copy mode: vim-style motion keys move the read cursor; `v` starts
     /// (or re-anchors) a selection; Enter/Space copies and exits; Esc/Q exits; g/G go to top/bottom.
     fn handle_copy_key(&mut self, key: &Key, _mods: &ModifiersState) {
@@ -718,6 +743,16 @@ impl Application {
                 "f" => { self.app.overlay = Overlay::Find; self.find_query.clear(); self.find_hit = None; self.find_all = Vec::new(); },
                 "[" => self.start_copy_mode(),
                 "?" => { self.app.overlay = Overlay::Help; }
+                "," => {
+                    // Rename the active tab. Pre-fill with the current custom name (if any) so
+                    // editing doesn't start from scratch.
+                    self.rename_query = self
+                        .app
+                        .active_session()
+                        .map(|s| s.meta.name.clone().unwrap_or_default())
+                        .unwrap_or_default();
+                    self.app.overlay = Overlay::Rename;
+                }
                 // Numeric tabs 1-9.
                 _ if c.len() == 1 && c.chars().next().unwrap().is_ascii_digit() => {
                     let idx = c.chars().next().unwrap() as u8;
@@ -822,6 +857,26 @@ impl Application {
                 return;
             }
             Overlay::Help => { self.app.overlay = Overlay::None; return; }
+            Overlay::Rename => {
+                match key {
+                    Key::Character(c) => { self.rename_query.push_str(c); }
+                    Key::Named(n) => match n {
+                        winit::keyboard::NamedKey::Enter => {
+                            // Commit the rename (empty = clear back to the default engine label).
+                            let name = if self.rename_query.trim().is_empty() { None } else { Some(self.rename_query.trim().to_string()) };
+                            if let Some(s) = self.app.active_session_mut() {
+                                s.meta.name = name;
+                            }
+                            self.app.overlay = Overlay::None;
+                        }
+                        winit::keyboard::NamedKey::Backspace => { self.rename_query.pop(); }
+                        winit::keyboard::NamedKey::Escape => { self.app.overlay = Overlay::None; }
+                        _ => {}
+                    },
+                    _ => {}
+                }
+                return;
+            }
             Overlay::None => {}
         }
 

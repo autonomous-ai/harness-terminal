@@ -46,6 +46,7 @@ The prefix is `Ctrl+Space` (tmux-style), then a command:
 | `Ctrl+Space` `s` | fleet status (read-only) |
 | `Ctrl+Space` `f` | search scrollback |
 | `Ctrl+Space` `[` | copy mode (vim nav, block select, copy) |
+| `Ctrl+Space` `,` | rename the active tab (persisted, shown in tab bar) |
 | `Ctrl+Space` `?` | help (full keybinding reference) |
 | `Ctrl+Space` `o` | jump to the next busy (produced-output) tab |
 | `1-9` / `Tab` | switch tab |

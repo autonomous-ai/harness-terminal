@@ -132,6 +132,7 @@ fn handle_key_tui(app: &mut App, key: crossterm::event::KeyEvent, in_command: &m
         Overlay::Find => {} // native-only feature; the TUI fallback ignores it.
         Overlay::Fleet => {}
         Overlay::Help => {}
+        Overlay::Rename => {}
 
         Overlay::None => {}
     }
