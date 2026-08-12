@@ -56,14 +56,19 @@ Server/host side already has session→agent addressing and a `commander_event` 
 (`cli/src/lib/commander.ts`) that this client can piggyback for pane status (busy/idle/summary)
 without its own parse.
 
-## 4. Terminal engine decision (TODO)
+## 4. Terminal engine decision (DECIDED)
 
-Candidate: WezTerm `termwiz` / `wezterm-mux-server` (client-server mux model + tmux control mode +
-local echo) vs `alacritty_terminal` (clean pure engine, bring our own mux). Decision recorded in
-task #4.
+**Use `alacritty_terminal` (MIT/Apache, Rust) as the raw emulator engine; we own the slim client
+shell.** Rationale: our differentiator is the fleet/session layer, not terminal intrinsics. The
+clean engine gives full control of the shell while keeping dependency surface small, and avoids
+inheriting WezTerm's whole opinionated mux architecture. Local echo for remote tabs is a small
+addition (optimistic render + echo suppression on returned bytes).
+
+Rust toolchain: **1.97 stable** (was pinned 1.57 — upgraded; modern terminal crates require it).
 
 ## 5. Open questions
 
-- Engine: WezTerm vs Alacritty (and web/Electron vs native).
+- Native UI layer: how to render tab bar + palette around the terminal surface (TUI framework —
+  e.g. ratatui-ish shell — vs desktop). TODO.
 - Control plane: how `harness join`'s discovery/presence feeds the palette.
 - Concurrency model for many simultaneous attached panes.

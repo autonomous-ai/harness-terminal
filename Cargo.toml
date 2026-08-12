@@ -1,0 +1,12 @@
+[package]
+name = "autonomous-term"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+# Terminal engine (borrowed layer): MIT/Apache, clean pure emulator. We drive PTY I/O.
+alacritty_terminal = "0.26"
+parking_lot = "0.12.5"
+
+[profile.release]
+lto = true
