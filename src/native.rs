@@ -288,6 +288,10 @@ struct Application {
     drag_tab: Option<usize>,
     /// The focused tile in the fleet-grid overlay (prefix+e); Enter dives into this session.
     grid_sel: usize,
+    /// Tiles marked (Space toggles) in the fleet grid for a targeted-`b` broadcast. Grows/shrinks
+    /// with the tab set like the other aux vectors; `b` in the grid pre-scopes `broadcast_targets`
+    /// to exactly these sessions.
+    grid_marks: Vec<bool>,
     /// Monotonic frame counter, bumped each redraw, so frame-animated affordances (the per-tab
     /// streaming spinner) can cycle without a wall-clock dependency.
     frame: u64,
@@ -412,6 +416,7 @@ impl Application {
             tooltip_box: None,
             frame: 0,
             grid_sel: 0,
+            grid_marks: vec![false; tab_count],
         }
     }
 
@@ -585,6 +590,7 @@ impl Application {
         self.muted.resize(n, false);
         self.pinned.resize(n, false);
         self.grew_delta.resize(n, 0);
+        self.grid_marks.resize(n, false);
         let mut flags = vec![false; n];
         // Collect the indices that first went busy so we can queue after the immutable tab-borrow
         // loop ends (`queue_notify` needs `&mut self`).
@@ -637,6 +643,29 @@ impl Application {
         }
         self.app.active = i.min(self.app.tabs.len().saturating_sub(1));
         crate::restore::save_active(self.app.active);
+    }
+
+    /// Open the broadcast overlay pre-scoped to exactly the tiles marked in the fleet grid (`b`).
+    /// If nothing is marked, fall back to opening broadcast on all sessions (safety — you can't
+    /// silently broadcast to zero). Marks are consumed (cleared) once applied.
+    fn grid_broadcast_marked(&mut self) {
+        let n = self.app.tabs.len();
+        let marked: Vec<usize> = (0..n)
+            .filter(|&i| self.grid_marks.get(i).copied().unwrap_or(false))
+            .collect();
+        self.broadcast_targets = vec![false; n];
+        for &i in &marked {
+            self.broadcast_targets[i] = true;
+        }
+        self.grid_marks = vec![false; n];
+        // If the diver marked nothing, don't open an overlay that would send to zero — reset all-on
+        // (the broadcast overlay's default) and let them narrow from there.
+        if marked.is_empty() {
+            self.broadcast_targets.iter_mut().for_each(|t| *t = true);
+        }
+        self.broadcast_query = self.last_broadcast.clone();
+        self.broadcast_sel = 0;
+        self.app.overlay = Overlay::Broadcast;
     }
 
     /// `prefix+l`: flip to the tab that was active just before this one (tmux last-window).
@@ -2819,7 +2848,7 @@ impl Application {
             fb,
             &mut self.cache,
             &format!(
-                "  fleet grid · {} session{} · ↑/↓/1-9 select · Enter dive · Esc close  ",
+                "  fleet grid · {} session{} · ↑/↓/1-9 select · Space mark · b→broadcast marked · Enter dive · Esc close  ",
                 n,
                 if n == 1 { "" } else { "s" }
             ),
@@ -2917,9 +2946,14 @@ impl Application {
                 format!("{glyph_s} ")
             };
             let header = format!(
-                "  {}{}  {head}{} {}",
+                "  {}{}{}  {head}{} {}",
                 idx + 1,
                 host,
+                if self.grid_marks.get(idx).copied().unwrap_or(false) {
+                    " ●"
+                } else {
+                    ""
+                },
                 if selected { " ◄" } else { "" },
                 pfx
             );
@@ -3973,22 +4007,34 @@ impl Application {
                                 self.app.overlay = Overlay::None;
                             }
                         }
+                        winit::keyboard::NamedKey::Space => {
+                            if self.grid_sel < self.app.tabs.len() {
+                                let m = self.grid_marks.get_mut(self.grid_sel).unwrap();
+                                *m = !*m;
+                            }
+                        }
                         winit::keyboard::NamedKey::Escape => {
                             self.app.overlay = Overlay::None;
                         }
                         _ => {}
                     },
-                    // 1-9 jump straight to a tile by session number; a character that maps to a
-                    // session index (1..=9) does the same. Everything else is ignored — it's a
-                    // viewer, not a prompt.
+                    // session index (1..=9) does the same. Space toggles a mark on the focused tile
+                    // (a multi-select for the targeted-`b` broadcast); `b` opens the broadcast
+                    // overlay pre-scoped to every marked tile. Everything else is ignored.
                     Key::Character(c) => {
-                        if let Some(d) = c.chars().next().and_then(|ch| ch.to_digit(10)) {
+                        let ch = c.chars().next();
+                        if let Some(d) = ch.and_then(|ch| ch.to_digit(10)) {
                             if d >= 1 && d <= 9 {
                                 let i = (d - 1) as usize;
                                 if i < self.app.tabs.len() {
                                     self.grid_sel = i;
                                 }
                             }
+                        } else if ch == Some(' ') && self.grid_sel < self.app.tabs.len() {
+                            let m = self.grid_marks.get_mut(self.grid_sel).unwrap();
+                            *m = !*m;
+                        } else if ch == Some('b') {
+                            self.grid_broadcast_marked();
                         }
                     }
                     _ => {}

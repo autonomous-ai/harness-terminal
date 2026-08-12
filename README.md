@@ -51,7 +51,7 @@ The prefix is `Ctrl+Space` (tmux-style), then a command:
 | `Ctrl+Space` `,` | rename the active tab (persisted, shown in tab bar) |
 | `Ctrl+Space` `a` | broadcast a line (per-session checkboxes target it) |
 | `Ctrl+Space` `y` | peek the tail of every session, then jump |
-| `Ctrl+Space` `e` | fleet grid: live tails of every session at once (war-room view) |
+| `Ctrl+Space` `e` | fleet grid: live tails of every session at once (war-room view; `Space` mark a tile, `b` broadcast to marked) |
 | `Ctrl+Space` `d` | copy the whole scrollback to the clipboard |
 | `Ctrl+Space` `j` | copy the session identity (`engine@host`) to the clipboard |
 | `Ctrl+Space` `E` | copy a one-line summary of every open tab (the fleet, grep-friendly) |

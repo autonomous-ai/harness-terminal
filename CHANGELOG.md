@@ -6,6 +6,11 @@ entries record user-visible and architectural changes since the last tagged mile
 ## Unreleased / 0.1.0 (in progress)
 
 ### Added
+- **Targeted broadcast from the fleet grid** — the war-room grid (`prefix+e`) is now more than a
+  viewer: `Space` toggles a mark (●) on the focused tile and `b` opens the broadcast overlay
+  pre-scoped to exactly the marked sessions, so commanding a subset of hosts is two keys instead of
+  a checkbox walk. Marks are shown on the tile header, consumed on broadcast, and fall back to
+  all-on if nothing is marked (you can never broadcast to zero by accident).
 - **Busy-tab tooltip shows settled scrollback** — hovering a tab that's actively streaming now shows
   the freshly-printed rows that have frozen into history (a stable read of what the agent decided to
   print) instead of the live screen tail, which reflows every frame into an unreadable blur. Idle
