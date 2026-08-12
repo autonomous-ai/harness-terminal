@@ -30,6 +30,15 @@ pub trait Transport: Send {
     fn write(&self, bytes: &[u8]);
     /// Resize the underlying pane/PTY to match the TUI's terminal area.
     fn resize(&self, size: TermSize);
+    /// Whether the underlying connection/pane is still alive. Default true, so transports that
+    /// cannot drop (a local PTY) needn't opt in.
+    fn alive(&self) -> bool {
+        true
+    }
+    /// Re-establish a dropped connection. Default no-op for transports that can't drop.
+    fn reconnect(&mut self) -> io::Result<()> {
+        Ok(())
+    }
 }
 
 // ── local PTY (alacritty event loop) ────────────────────────────────────────────────────────────
@@ -127,13 +136,27 @@ impl TmuxTransport {
 /// thread (keystrokes/resize → tmux stdin). The client is spawned from an arbitrary command line,
 /// so the SAME protocol drives a local pane (`tmux -C`) or a remote pane (`ssh host tmux -C`).
 struct ControlPipe {
+    /// The control-mode command line (`argv0` + `argv`) this pipe was spawned with, so reconnect can
+    /// re-run the same attach. For a local pane it is `tmux -C`; for a remote pane `ssh host tmux -C`.
+    argv0: String,
+    argv: Vec<String>,
+    session: String,
+    program: String,
+    size: TermSize,
+    /// The shared grid the reader thread replays `%output` into; kept so a reconnect can hand a
+    /// fresh pipe a live view of the same `Term`.
+    term: Arc<FairMutex<Term<Listener>>>,
     child: Child,
+    /// Set false by the reader thread as soon as the control client's stdout closes — the pane
+    /// (and thus the tab) is gone, so the watchdog knows to reconnect.
+    alive: Arc<std::sync::atomic::AtomicBool>,
     tx: mpsc::Sender<Vec<u8>>,
 }
 
 impl ControlPipe {
     /// Spawn a control-mode client with `argv` (the control-mode command), create `session` running
-    /// `program`, and stream its `%output` into `term`.
+    /// `program`, and stream its `%output` into `term`. A closure so [`ControlPipe::reconnect`] can
+    /// rebuild a fresh pipe against the same `term`.
     fn spawn(
         argv0: String,
         argv: Vec<String>,
@@ -142,8 +165,32 @@ impl ControlPipe {
         size: TermSize,
         term: Arc<FairMutex<Term<Listener>>>,
     ) -> io::Result<ControlPipe> {
-        let mut cmd = Command::new(&argv0);
-        cmd.args(&argv)
+        let (child, tx, alive) = ControlPipe::build(&argv0, &argv, session, program, size, &term)?;
+        Ok(ControlPipe {
+            argv0,
+            argv,
+            session: session.to_string(),
+            program: program.to_string(),
+            size,
+            term,
+            child,
+            alive,
+            tx,
+        })
+    }
+
+    /// Build a fresh control client + reader/writer threads against `term`, without owning the
+    /// respawn identity. Shared by initial [`ControlPipe::spawn`] and [`ControlPipe::reconnect`].
+    fn build(
+        argv0: &str,
+        argv: &[String],
+        session: &str,
+        program: &str,
+        size: TermSize,
+        term: &Arc<FairMutex<Term<Listener>>>,
+    ) -> io::Result<(Child, mpsc::Sender<Vec<u8>>, Arc<std::sync::atomic::AtomicBool>)> {
+        let mut cmd = Command::new(argv0);
+        cmd.args(argv)
             .stdin(Stdio::piped())
             .stdout(Stdio::piped())
             .stderr(Stdio::null());
@@ -152,15 +199,19 @@ impl ControlPipe {
         let mut child_stdout = child.stdout.take().expect("control client stdout piped");
 
         let (tx, rx) = mpsc::channel::<Vec<u8>>();
-        // Create the session + pane on the control client's own stdin (no separate pre-spawn, so a
-        // remote hop doesn't need a second RTT).
+        let alive = Arc::new(std::sync::atomic::AtomicBool::new(true));
+        // Create the session + pane on the control client's own stdin (no separate pre-spawn,
+        // so a remote hop doesn't need a second RTT). Kill any stale session of the same name first
+        // (ignoring failure) so a reconnect can't trip tmux's "duplicate session".
+        tx.send(format!("kill-session -t {session}\n").into_bytes()).ok();
         tx.send(format!(
             "new-session -s {} -x {} -y {} {}\n",
             session, size.cols, size.lines, program
         ).into_bytes()).ok();
 
         // Reader: parse control-mode notification lines; %output carries the pane's byte payload.
-        let t = Arc::clone(&term);
+        let a = Arc::clone(&alive);
+        let t = Arc::clone(term);
         thread::Builder::new()
             .name("tmux-read".into())
             .spawn(move || {
@@ -170,7 +221,10 @@ impl ControlPipe {
                 loop {
                     line.clear();
                     match out.read_line(&mut line) {
-                        Ok(0) | Err(_) => break,
+                        Ok(0) | Err(_) => {
+                            a.store(false, std::sync::atomic::Ordering::Relaxed);
+                            break;
+                        }
                         Ok(_) => {
                             if let Some(payload) = parse_output(&line) {
                                 let mut term = t.lock();
@@ -193,13 +247,32 @@ impl ControlPipe {
                     let _ = w.flush();
                 }
             })?;
-
-        Ok(ControlPipe { child, tx })
+        Ok((child, tx, alive))
     }
 
     /// Encode a keystroke buffer as `send-keys` commands (see [`encode_keys`]).
     fn write(&self, bytes: &[u8]) {
         let _ = self.tx.send(encode_keys(bytes).into_bytes());
+    }
+
+    /// Re-attach after the client died: kill the old child, spawn a fresh control client with the
+    /// same identity, and stream it into the same grid. The pane is recreated from scratch (a new
+    /// `new-session`), so any in-flight agent state is lost — reconnect re-establishes the session,
+    /// not its history.
+    fn reconnect(&mut self) -> io::Result<()> {
+        let _ = self.child.kill();
+        let (child, tx, alive) = ControlPipe::build(
+            &self.argv0,
+            &self.argv,
+            &self.session,
+            &self.program,
+            self.size,
+            &self.term,
+        )?;
+        self.child = child;
+        self.tx = tx;
+        self.alive = alive;
+        Ok(())
     }
 }
 
@@ -256,6 +329,14 @@ impl Transport for TmuxTransport {
         let cmd = format!("resize-window -x {} -y {}\n", size.cols, size.lines);
         let _ = self.pipe.tx.send(cmd.into_bytes());
     }
+
+    fn alive(&self) -> bool {
+        self.pipe.alive.load(std::sync::atomic::Ordering::Relaxed)
+    }
+
+    fn reconnect(&mut self) -> io::Result<()> {
+        self.pipe.reconnect()
+    }
 }
 
 /// A remote `PANE@HOST`: the same control-mode protocol, but the client runs over ssh so the pane
@@ -306,6 +387,14 @@ impl Transport for RemoteTransport {
         let cmd = format!("resize-window -x {} -y {}\n", size.cols, size.lines);
         let _ = self.pipe.tx.send(cmd.into_bytes());
     }
+
+    fn alive(&self) -> bool {
+        self.pipe.alive.load(std::sync::atomic::Ordering::Relaxed)
+    }
+
+    fn reconnect(&mut self) -> io::Result<()> {
+        self.pipe.reconnect()
+    }
 }
 
 /// Tunnel-backed remote transport — ARCHITECTURE §10 path 1, now real.
@@ -317,6 +406,15 @@ impl Transport for RemoteTransport {
 /// joined machine is reached over the e2ee harness fabric instead of raw ssh. The `%output` decode →
 /// `advance` path is byte-identical to the local tmux transport, proven against the live relay.
 pub struct TunnelTransport {
+    /// Where the pane-relay lives (the `@host` + its harness control port), so reconnect can find it.
+    host: String,
+    port: u16,
+    program: String,
+    size: TermSize,
+    /// The shared grid; a reconnect hands the fresh connection the same `Term`.
+    term: Arc<FairMutex<Term<Listener>>>,
+    /// Set false by the connection thread the moment the WebSocket closes or errors.
+    alive: Arc<std::sync::atomic::AtomicBool>,
     tx: mpsc::Sender<Vec<u8>>,
 }
 
@@ -329,8 +427,30 @@ impl TunnelTransport {
         size: TermSize,
         term: Arc<FairMutex<Term<Listener>>>,
     ) -> io::Result<TunnelTransport> {
+        let (tx, alive) = TunnelTransport::build_connection(host, port, program, size, &term)?;
+        Ok(TunnelTransport {
+            host: host.to_string(),
+            port,
+            program: program.to_string(),
+            size,
+            term,
+            alive,
+            tx,
+        })
+    }
+
+    /// Open one WebSocket to `/api/pane-ws`, create the pane, and spawn the connection thread.
+    /// Shared by initial [`TunnelTransport::spawn`] and [`TunnelTransport::reconnect`].
+    fn build_connection(
+        host: &str,
+        port: u16,
+        program: &str,
+        size: TermSize,
+        term: &Arc<FairMutex<Term<Listener>>>,
+    ) -> io::Result<(mpsc::Sender<Vec<u8>>, Arc<std::sync::atomic::AtomicBool>)> {
         let name = format!("auton-{}", program.replace('/', "-"));
         let (tx, rx) = mpsc::channel::<Vec<u8>>();
+        let alive = Arc::new(std::sync::atomic::AtomicBool::new(true));
 
         // Build the connection by hand so the underlying socket can be set nonblocking before the
         // upgrade (tungstenite's `connect` owns the socket and gives no way in).
@@ -347,14 +467,18 @@ impl TunnelTransport {
         // With a raw TcpStream the upgrade produces a MaybeTlsStream wrapping it; set the underlying
         // socket nonblocking so the read/write loop below can service both directions on one connection.
         let _ = ws.get_ref().set_nonblocking(true);
-        // Create the pane + start the program, mirroring ControlPipe's first on-stdin command.
+        // Create the pane + start the program, mirroring ControlPipe's first on-stdin command. Kill
+        // any stale session of the same name first so a reconnect can't trip "duplicate session".
+        ws.send(tungstenite::Message::Text(format!("kill-session -t {name}\n")))
+            .ok();
         ws.send(tungstenite::Message::Text(format!(
             "new-session -s {} -x {} -y {} {}\n", name, size.cols, size.lines, program,
         )))
         .map_err(|e| io::Error::new(io::ErrorKind::Other, e.to_string()))?;
 
         // One thread owns the single connection: read `%output` → grid, drain tx → send-keys.
-        let t = Arc::clone(&term);
+        let a = Arc::clone(&alive);
+        let t = Arc::clone(term);
         thread::Builder::new().name("tunnel".into()).spawn(move || {
             let mut parser: Processor<StdSyncHandler> = Processor::default();
             loop {
@@ -378,7 +502,10 @@ impl TunnelTransport {
                     Ok(_) => {}
                     // Nonblocking: nothing to read yet is not an error — keep draining keystrokes.
                     Err(tungstenite::Error::Io(ref e)) if e.kind() == io::ErrorKind::WouldBlock => {}
-                    Err(_) => break, // closed
+                    Err(_) => {
+                        a.store(false, std::sync::atomic::Ordering::Relaxed);
+                        break; // closed
+                    }
                 }
                 while let Ok(bytes) = rx.try_recv() {
                     if let Ok(text) = String::from_utf8(bytes) {
@@ -389,7 +516,23 @@ impl TunnelTransport {
             }
         })?;
 
-        Ok(TunnelTransport { tx })
+        Ok((tx, alive))
+    }
+
+    /// Re-attach after the WebSocket died: open a fresh connection to the same daemon/pane identity
+    /// and stream it into the same grid. The pane is recreated — any in-flight agent state is lost;
+    /// reconnect re-establishes the session, not its history.
+    fn reconnect(&mut self) -> io::Result<()> {
+        let (tx, alive) = TunnelTransport::build_connection(
+            &self.host,
+            self.port,
+            &self.program,
+            self.size,
+            &self.term,
+        )?;
+        self.tx = tx;
+        self.alive = alive;
+        Ok(())
     }
 }
 
@@ -406,6 +549,14 @@ impl Transport for TunnelTransport {
 
     fn resize(&self, size: TermSize) {
         let _ = self.tx.send(format!("resize-window -x {} -y {}\n", size.cols, size.lines).into_bytes());
+    }
+
+    fn alive(&self) -> bool {
+        self.alive.load(std::sync::atomic::Ordering::Relaxed)
+    }
+
+    fn reconnect(&mut self) -> io::Result<()> {
+        self.reconnect()
     }
 }
 

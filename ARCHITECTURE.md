@@ -159,7 +159,16 @@ Remote attach is live two ways, both streaming `%output` → `advance` behind `T
     `tests/tunnel_live.rs`, a live E2E that types a marker over the tunnel and asserts it echoes
     back into the grid.
 
-What's still refinements on both: no latency smoothing, no reconnect — geometric/VM until asked for.
+- **Auto-reconnect** (tmux/ssh/tunnel): each drop-prone transport tracks liveness
+  (`Transport::alive` — the tmux/ssh reader sets it false when the control client's stdout closes;
+  the tunnel thread when the WebSocket closes) and can `reconnect` against its saved identity +
+  grid. A main-loop watchdog (`App::reconnect_sweep`) re-attaches any dead tab on a 5s throttle,
+  killing a stale same-name session first so it can't trip tmux's "duplicate session". The harness
+  relay teardown is what makes this prompt: on `%exit` it closes the connection so the client sees
+  the drop. Locked in by `tests/tunnel_reconnect.rs`, a live E2E that kills the pane and asserts a
+  reconnect round-trips a fresh marker. Only local PTYs (which can't drop) skip all of this.
+
+What's still refinements: no latency smoothing — geometric until asked for.
 What's live today is geometric: bytes flow as fast as ssh will carry them; no latency
 smoothing, no local echo, no reconnect — those are refinements, not missing pieces.
 Host discovery (`transport::discover_hosts`) reads `~/.ssh/config` `Host` entries; the

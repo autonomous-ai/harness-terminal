@@ -102,9 +102,21 @@ impl Session {
         Ok(Session { meta, term, transport: Box::new(transport) })
     }
 
-    /// Transport kind: "pty" or "tmux" (shown in the status line).
+    /// Transport kind: "pty" / "tmux" / "ssh" / "tunnel" (shown in the status line).
     pub fn kind(&self) -> &'static str {
         self.transport.kind()
+    }
+
+    /// Whether the session's transport is still live. Local PTYs are always alive; tmux/ssh/tunnel
+    /// transports report false once their connection or pane dies.
+    pub fn alive(&self) -> bool {
+        self.transport.alive()
+    }
+
+    /// Re-attach after a dropped connection. Local PTYs are a no-op. Returns an error only if the
+    /// immediate re-spawn fails (e.g. tunnel daemon unreachable again) — callers retry later.
+    pub fn reconnect(&mut self) -> io::Result<()> {
+        self.transport.reconnect()
     }
 
     /// Push keystrokes into the session's transport.

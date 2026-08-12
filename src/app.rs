@@ -33,6 +33,8 @@ pub struct App {
     pub remote_host: String,
     /// Cached harness fleet status (best-effort from the local daemon's /api/status).
     pub fleet: crate::harness::FleetStatus,
+    /// Time of the next reconnect sweep (monotonic), so a dead daemon can't hammer it every frame.
+    next_reconnect: std::time::Instant,
 }
 
 impl App {
@@ -47,6 +49,7 @@ impl App {
             size,
             remote_host: String::new(),
             fleet: crate::harness::FleetStatus::default(),
+            next_reconnect: std::time::Instant::now(),
         }
     }
 
@@ -96,6 +99,28 @@ impl App {
             host: host.to_string(),
             engine: engine_id.to_string(),
             title: format!("{} @ {}", engine_id, host),
+        }
+    }
+
+    /// Auto-heal dead tabs: any tmux/ssh/tunnel transport whose connection or pane dropped gets
+    /// re-attached (same identity, same grid). Runs from the main loop at a throttled rate so a
+    /// temporarily-unreachable daemon retries rather than spinning. Local PTY tabs are no-ops.
+    pub fn reconnect_sweep(&mut self) {
+        if self.tabs.is_empty() || std::time::Instant::now() < self.next_reconnect {
+            return;
+        }
+        self.next_reconnect = std::time::Instant::now() + std::time::Duration::from_secs(5);
+        for i in 0..self.tabs.len() {
+            let dead = !self.tabs[i].alive();
+            if dead {
+                match self.tabs[i].reconnect() {
+                    Ok(()) => {}
+                    // Re-spawn failed — leave it dead and retry on the next sweep.
+                    Err(e) => {
+                        let _ = e;
+                    }
+                }
+            }
         }
     }
 

@@ -35,6 +35,8 @@ fn main() -> io::Result<()> {
     let mut in_command = false;
 
     loop {
+        // Auto-heal dropped tmux/ssh/tunnel tabs before drawing so a reconnect shows up promptly.
+        app.reconnect_sweep();
         tui::draw(&mut term, &mut app);
         if event::poll(Duration::from_millis(16))? {
             if let CTEvent::Key(key) = event::read()? {
