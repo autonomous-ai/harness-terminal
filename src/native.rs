@@ -824,7 +824,7 @@ impl Application {
     fn render_help(&mut self, fb: &mut Framebuffer) {
         let (base_y, line_px) = self.overlay_base_y();
         draw_text(fb, &mut self.cache, "  harness-terminal keys  ", 32, base_y, self.font_px, WHITE);
-        let bindings: [(&str, &str); 28] = [
+        let bindings: [(&str, &str); 29] = [
             ("Ctrl+Space", "prefix (then a command)"),
             ("prefix /", "palette: jump to any session"),
             ("prefix ;", "command palette (all actions)"),
@@ -850,6 +850,7 @@ impl Application {
             ("prefix w", "write scrollback to a .log file"),
             ("prefix y", "peek tails of all sessions"),
             ("Ctrl+= / Ctrl+-", "font zoom (Ctrl+0 reset)"),
+            ("Ctrl+Enter", "toggle fullscreen"),
             ("PgUp/PgDn", "scrollback"),
             ("Cmd/Ctrl+click", "open URL / file path"),
             ("prefix q", "quit"),
@@ -1832,6 +1833,17 @@ impl Application {
                         _ => {}
                     }
                 }
+            }
+            // Fullscreen toggle (Ctrl+Enter). A fleet diver drops a busy pane fullscreen to watch it
+            // without the OS chrome; pressing again returns to windowed. Window-size events reflow
+            // the grid automatically.
+            if mods.control_key() && matches!(key, Key::Named(winit::keyboard::NamedKey::Enter)) {
+                if let Some(w) = &self.window {
+                    let fs = w.fullscreen().is_some();
+                    w.set_fullscreen(if fs { None } else { Some(winit::window::Fullscreen::Borderless(None)) });
+                    self.flash = Some((if fs { "windowed" } else { "fullscreen" }.to_string(), std::time::Instant::now()));
+                }
+                return;
             }
             // Copy mode intercepts keystrokes (navigation + selection) instead of forwarding.
             if self.copy_mode {
