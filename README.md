@@ -102,6 +102,10 @@ copy_cursor = [30, 255, 138] # copy-mode read cursor block
 [theme.ansi]                # 0 black..7 white, 8-15 bright; only listed change
 0 = [0, 0, 0]
 1 = [205, 49, 49]
+
+[theme.accents]             # per-engine inactive-tab tints; unlisted keep brand color
+claude = [200, 120, 255]
+codex = [0, 122, 204]
 ```
 
 Set `HARNESS_CONFIG_DIR` to override the config/persistence directory (useful for portable or CI

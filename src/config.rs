@@ -57,6 +57,10 @@ pub struct Theme {
     pub selection: Option<[u8; 3]>,
     /// Copy-mode read cursor block color. Falls back to bright green.
     pub copy_cursor: Option<[u8; 3]>,
+    /// Per-engine accent tints (the inactive-tab label color), keyed by engine id (`claude`,
+    /// `codex`, …). Absent or unknown engines keep their built-in brand color. Sparse map.
+    #[serde(default)]
+    pub accents: std::collections::BTreeMap<String, [u8; 3]>,
     /// Overrides for the 16-color ANSI palette. Only `Some` slots override the built-in defaults;
     /// the rest keep the classic palette. Index order: black, red, green, yellow, blue, magenta,
     /// cyan, white, bright black, bright red, … bright white.
@@ -119,6 +123,7 @@ impl Default for Theme {
             cursor: None,
             selection: None,
             copy_cursor: None,
+            accents: std::collections::BTreeMap::new(),
             ansi: None,
         }
     }
@@ -233,6 +238,7 @@ mod tests {
         assert_eq!(t.background, None);
         assert_eq!(t.cursor, None);
         assert_eq!(t.ansi, None);
+        assert!(t.accents.is_empty(), "absent accents stay empty");
     }
 
     /// Full theme with ANSI overrides round-trips.
@@ -285,5 +291,28 @@ mod tests {
         assert_eq!(kb.get("search").map(String::as_str), Some("f"));
         let d: Config = toml::from_str("font_px = 14").unwrap();
         assert_eq!(d.keybindings, None);
+    }
+
+    /// A `[theme.accents]` block overrides per-engine tab tints; absent keyed entries keep defaults.
+    #[test]
+    fn theme_accents_parse() {
+        let c: Config = toml::from_str(
+            r#"
+            [theme]
+            foreground = [0, 0, 0]
+
+            [theme.accents]
+            claude = [255, 0, 0]
+            codex = [0, 255, 0]
+        "#,
+        )
+        .unwrap();
+        let t = c.theme.expect("theme should parse");
+        assert_eq!(t.accents.get("claude"), Some(&[255, 0, 0]));
+        assert_eq!(t.accents.get("codex"), Some(&[0, 255, 0]));
+        assert!(
+            !t.accents.contains_key("opencode"),
+            "absent engine stays unset"
+        );
     }
 }

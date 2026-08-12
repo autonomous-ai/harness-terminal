@@ -37,6 +37,13 @@ default_engine = "claude"
 # 0 = [0, 0, 0]
 # 1 = [205, 49, 49]
 # 9 = [241, 76, 76]
+#
+# Override a per-engine tab accent (the inactive-tab label tint), keyed by engine
+# id (claude, codex, opencode, ...). Unlisted engines keep their built-in brand
+# color. Sparse map; only the engines you list change.
+# [theme.accents]
+# claude = [154, 77, 255]
+# codex = [0, 122, 204]
 
 # Remap the keys pressed right after Ctrl+Space (tmux-style prefix). The map is
 # action name -> key. Only the actions you list here change; every other action

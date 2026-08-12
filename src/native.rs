@@ -735,7 +735,7 @@ impl Application {
                 let color = if active {
                     host_color(&s.meta.host)
                 } else {
-                    engine_accent(&s.meta.engine)
+                    engine_accent(&s.meta.engine, &self.colors.accents)
                 };
                 x += draw_text(
                     fb,
@@ -3155,8 +3155,15 @@ impl Application {
 /// Deterministic — same host always yields the same color, across sessions and restarts.
 /// The engine's own accent color as an RGB tuple, for the inactive-tab label. This is the deliberate
 /// "which engine is this" signal (a brand color from the engine table), complementing `host_color`
-/// which tells you *which machine*. Unknown engines fall back to the neutral chrome dim.
-fn engine_accent(engine: &str) -> (u8, u8, u8) {
+/// which tells you *which machine*. A `[theme.accents]` override for the engine wins; otherwise the
+/// built-in brand accent. Unknown engines fall back to the neutral chrome dim.
+fn engine_accent(
+    engine: &str,
+    accents: &std::collections::BTreeMap<String, (u8, u8, u8)>,
+) -> (u8, u8, u8) {
+    if let Some(c) = accents.get(engine) {
+        return *c;
+    }
     static CACHE: std::sync::OnceLock<std::collections::HashMap<&'static str, (u8, u8, u8)>> =
         std::sync::OnceLock::new();
     let map = CACHE.get_or_init(|| {
@@ -3560,14 +3567,19 @@ mod tests {
     fn engine_accent_unpacks_argb_and_falls_back() {
         assert_eq!(argb_to_rgb(0xff_9a4dff), (0x9a, 0x4d, 0xff));
         // Claude's accent is purple-ish; it must differ from a randomly-picked unknown's fallback.
-        let cl = engine_accent("claude");
+        let empty = std::collections::BTreeMap::new();
+        let cl = engine_accent("claude", &empty);
         assert_eq!(cl, (0x9a, 0x4d, 0xff));
-        let unknown = engine_accent("no-such-engine");
+        let unknown = engine_accent("no-such-engine", &empty);
         assert_ne!(
             unknown,
             (0, 0, 0),
             "unknown-engine fallback must still be visible"
         );
+        // A `[theme.accents]` override wins over the built-in brand accent.
+        let mut accents = std::collections::BTreeMap::new();
+        accents.insert("claude".to_string(), (255, 0, 0));
+        assert_eq!(engine_accent("claude", &accents), (255, 0, 0));
     }
 
     /// Cmd+click word expansion picks the whole token, not the shell quoting around it.

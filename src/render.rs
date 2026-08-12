@@ -116,6 +116,9 @@ pub struct Colors {
     pub copy_cursor: (u8, u8, u8),
     /// The 16-color ANSI palette.
     pub ansi: [(u8, u8, u8); 16],
+    /// Per-engine accent tints (inactive-tab label color), overridden by `[theme.accents]`. Empty
+    /// means every engine keeps its built-in brand accent.
+    pub accents: std::collections::BTreeMap<String, (u8, u8, u8)>,
 }
 
 impl Default for Colors {
@@ -127,6 +130,7 @@ impl Default for Colors {
             selection: (0x26, 0x4f, 0x8c),
             copy_cursor: (0x1e, 0xff, 0x8a),
             ansi: ANSI,
+            accents: std::collections::BTreeMap::new(),
         }
     }
 }
@@ -153,6 +157,11 @@ impl From<&crate::config::Theme> for Colors {
             selection: set(t.selection, c.selection),
             copy_cursor: set(t.copy_cursor, c.copy_cursor),
             ansi,
+            accents: t
+                .accents
+                .iter()
+                .map(|(k, v)| (k.clone(), (v[0], v[1], v[2])))
+                .collect(),
         }
     }
 }
