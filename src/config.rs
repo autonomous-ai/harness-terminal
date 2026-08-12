@@ -20,11 +20,21 @@ pub struct Config {
     /// to the platform default (macOS SF Mono), which `HARNESS_FONT` can override in a pinch.
     #[serde(default)]
     pub font_path: Option<String>,
+    /// Cap on persisted per-tab scrollback, in bytes. Absent uses the built-in default (~256KB);
+    /// raise it to keep more cross-restart history, or lower it to trim disk use. Only the tail
+    /// beyond the cap is dropped, so the newest lines always survive.
+    #[serde(default)]
+    pub scrollback_cap: Option<usize>,
 }
 
 impl Default for Config {
     fn default() -> Self {
-        Config { font_px: 14, default_engine: "claude".to_string(), font_path: None }
+        Config {
+            font_px: 14,
+            default_engine: "claude".to_string(),
+            font_path: None,
+            scrollback_cap: None,
+        }
     }
 }
 
@@ -60,6 +70,15 @@ mod tests {
             font_path = "/Users/d/.fonts/JetBrainsMono-Nerd-Font.ttf"
         "#).unwrap();
         assert_eq!(c.font_path.as_deref(), Some("/Users/d/.fonts/JetBrainsMono-Nerd-Font.ttf"));
+    }
+
+    /// An explicit scrollback cap round-trips; absent falls back to None (built-in default).
+    #[test]
+    fn scrollback_cap_roundtrips() {
+        let c: Config = toml::from_str("scrollback_cap = 1048576").unwrap();
+        assert_eq!(c.scrollback_cap, Some(1_048_576));
+        let d: Config = toml::from_str("font_px = 14").unwrap();
+        assert_eq!(d.scrollback_cap, None);
     }
 
     /// Malformed TOML must fall back to defaults, never panic.

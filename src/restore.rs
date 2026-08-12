@@ -153,6 +153,22 @@ fn scrollback_path() -> std::path::PathBuf {
     config_dir().join("scrollback")
 }
 
+/// Hard cap on one tab's persisted scrollback (bytes). A session's history can be megabytes long;
+/// we persist only its tail so scrollback files stay bounded and the config dir can't balloon under
+/// a long-running pane. Trade-off: across-restart history is "last ~256KB", which is plenty of
+/// context to resume from while keeping disk use flat. (Granted, the full scrollback is what
+/// `export_scrollback` writes to a `.log` file in cwd — the user opts into that copy.)
+const MAX_SCROLLBACK_BYTES: usize = 256 * 1024;
+
+/// The effective per-tab scrollback cap in bytes. The config's `scrollback_cap` overrides the
+/// built-in default when present (and sane); otherwise the default applies.
+fn scrollback_cap() -> usize {
+    match crate::config::Config::load().scrollback_cap {
+        Some(n) if n > 0 => n,
+        _ => MAX_SCROLLBACK_BYTES,
+    }
+}
+
 fn scrollback_file(kind: &str, host: &str, engine: &str) -> std::path::PathBuf {
     // Bullet-proof file name: only alnum/`_`/`-` survive, host may be an IP or machine id.
     let k: String = (kind.to_owned() + host + engine)
@@ -162,16 +178,26 @@ fn scrollback_file(kind: &str, host: &str, engine: &str) -> std::path::PathBuf {
     scrollback_path().join(format!("{}.txt", k))
 }
 
-/// Persist a captured scrollback for one tab's identity (kind + host + engine). Best-effort like the
-/// other state files; a full disk must not crash the app. Old snapshots of the same identity are
-/// overwritten.
+/// Persist a captured scrollback for one tab's identity (kind + host + engine), capped at the last
+/// ~256KB (or the config's `scrollback_cap`) so a giant history can't balloon the config dir.
+/// Best-effort like the other state files; a full disk must not crash the app. Old snapshots of the
+/// same identity are overwritten.
 pub fn save_scrollback(kind: &str, host: &str, engine: &str, text: &str) {
     if text.trim().is_empty() {
         return;
     }
+    // Persist only the tail — the recent context that matters for a resume. Trimming in bytes keeps
+    // the file below the cap even for multi-megabyte histories; the cut may split a multi-byte
+    // UTF-8 char on the boundary, but the emulator's parser tolerates partial-char byte streams.
+    let cap = scrollback_cap();
+    let mut tail = text;
+    let skip = text.len().saturating_sub(cap);
+    if skip > 0 {
+        tail = &text[skip..];
+    }
     let path = scrollback_file(kind, host, engine);
     let _ = std::fs::create_dir_all(scrollback_path());
-    let _ = std::fs::write(path, text);
+    let _ = std::fs::write(path, tail);
 }
 
 /// Load a previously-captured scrollback for a tab identity. Empty string on any error/missing.
@@ -296,6 +322,14 @@ mod tests {
             // An all-whitespace snapshot is refused (nothing meaningful to persist).
             save_scrollback("ssh", "10.0.0.9", "codex", "   \n  ");
             assert_eq!(load_scrollback("ssh", "10.0.0.9", "codex"), "");
+
+            // A huge snapshot is capped at MAX_SCROLLBACK_BYTES so a multi-megabyte history can't
+            // balloon the config dir; the persisted tail keeps the most recent bytes.
+            let hugo = "x".repeat(MAX_SCROLLBACK_BYTES + 10) + "TAIL";
+            save_scrollback("tunnel", "10.0.0.7", "claude", &hugo);
+            let loaded = load_scrollback("tunnel", "10.0.0.7", "claude");
+            assert!(loaded.len() <= MAX_SCROLLBACK_BYTES);
+            assert!(loaded.ends_with("TAIL"), "cap must keep the tail, not the head");
         });
     }
 }
