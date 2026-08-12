@@ -190,8 +190,16 @@ impl ControlPipe {
         term: Arc<FairMutex<Term<Listener>>>,
         echo: Option<Arc<EchoCanceller>>,
     ) -> io::Result<ControlPipe> {
-        let (child, tx, alive) =
-            ControlPipe::build(&argv0, &argv, session, program, size, &term, echo.as_ref())?;
+        let (child, tx, alive) = ControlPipe::build(
+            &argv0,
+            &argv,
+            session,
+            program,
+            size,
+            &term,
+            echo.as_ref(),
+            true,
+        )?;
         Ok(ControlPipe {
             argv0,
             argv,
@@ -206,6 +214,30 @@ impl ControlPipe {
         })
     }
 
+    /// Create the session + pane on the control client's own stdin (no separate pre-spawn, so a
+    /// remote hop doesn't need a second RTT). `recreate` keeps the fresh-spawn contract: kill any
+    /// stale session of the same name first (ignoring failure) so a new attach can't trip tmux's
+    /// "duplicate session". When `recreate` is false (reconnect) we DON'T kill — the whole point is
+    /// to re-attach to a surviving remote pane after a blip, not to wipe its in-flight agent run.
+    fn attach_cmds(session: &str, size: TermSize, program: &str, recreate: bool) -> Vec<String> {
+        let mut cmds = Vec::new();
+        if recreate {
+            cmds.push(format!("kill-session -t {session}\n"));
+            cmds.push(format!(
+                "new-session -s {} -x {} -y {} {}\n",
+                session, size.cols, size.lines, program
+            ));
+        } else {
+            // -A re-attaches if the session exists, else creates it fresh; no kill, so an agent run
+            // still alive on the host survives a dropped client link.
+            cmds.push(format!(
+                "new-session -A -s {} -x {} -y {} {}\n",
+                session, size.cols, size.lines, program
+            ));
+        }
+        cmds
+    }
+
     /// Build a fresh control client + reader/writer threads against `term`, without owning the
     /// respawn identity. Shared by initial [`ControlPipe::spawn`] and [`ControlPipe::reconnect`].
     fn build(
@@ -216,6 +248,7 @@ impl ControlPipe {
         size: TermSize,
         term: &Arc<FairMutex<Term<Listener>>>,
         echo: Option<&Arc<EchoCanceller>>,
+        recreate: bool,
     ) -> io::Result<(
         Child,
         mpsc::Sender<Vec<u8>>,
@@ -232,19 +265,9 @@ impl ControlPipe {
 
         let (tx, rx) = mpsc::channel::<Vec<u8>>();
         let alive = Arc::new(std::sync::atomic::AtomicBool::new(true));
-        // Create the session + pane on the control client's own stdin (no separate pre-spawn,
-        // so a remote hop doesn't need a second RTT). Kill any stale session of the same name first
-        // (ignoring failure) so a reconnect can't trip tmux's "duplicate session".
-        tx.send(format!("kill-session -t {session}\n").into_bytes())
-            .ok();
-        tx.send(
-            format!(
-                "new-session -s {} -x {} -y {} {}\n",
-                session, size.cols, size.lines, program
-            )
-            .into_bytes(),
-        )
-        .ok();
+        for cmd in Self::attach_cmds(session, size, program, recreate) {
+            tx.send(cmd.into_bytes()).ok();
+        }
 
         // Reader: parse control-mode notification lines; %output carries the pane's byte payload.
         // When the transport is remote, filter the returned bytes through echo cancellation before
@@ -308,10 +331,11 @@ impl ControlPipe {
             .send(format!("kill-session -t {}\n", self.session).into_bytes());
     }
 
-    /// Re-attach after the client died: kill the old child, spawn a fresh control client with the
-    /// same identity, and stream it into the same grid. The pane is recreated from scratch (a new
-    /// `new-session`), so any in-flight agent state is lost — reconnect re-establishes the session,
-    /// not its history.
+    /// Re-attach after the client died: kill the old local/ssh client, spawn a fresh control client
+    /// with the same identity, and stream it into the same grid. Unlike an initial spawn, no
+    /// `kill-session` runs first — `new-session -A` re-attaches to the pane if the server session
+    /// survived the blip (only creating one if it's truly gone), so a long agent run isn't wiped by a
+    /// dropped link.
     fn reconnect(&mut self) -> io::Result<()> {
         let _ = self.child.kill();
         let (child, tx, alive) = ControlPipe::build(
@@ -322,6 +346,7 @@ impl ControlPipe {
             self.size,
             &self.term,
             self.echo.as_ref(),
+            false,
         )?;
         self.child = child;
         self.tx = tx;
@@ -496,7 +521,7 @@ impl TunnelTransport {
         echo: Arc<EchoCanceller>,
     ) -> io::Result<TunnelTransport> {
         let (tx, alive) =
-            TunnelTransport::build_connection(host, port, program, size, &term, &echo)?;
+            TunnelTransport::build_connection(host, port, program, size, &term, &echo, true)?;
         Ok(TunnelTransport {
             host: host.to_string(),
             port,
@@ -510,7 +535,9 @@ impl TunnelTransport {
     }
 
     /// Open one WebSocket to `/api/pane-ws`, create the pane, and spawn the connection thread.
-    /// Shared by initial [`TunnelTransport::spawn`] and [`TunnelTransport::reconnect`].
+    /// Shared by initial [`TunnelTransport::spawn`] and [`TunnelTransport::reconnect`]. `recreate`
+    /// mirrors [`ControlPipe`] semantics: a fresh spawn kills any stale session first, a reconnect
+    /// re-attaches (`new-session -A`) so a pane that survived the blip keeps its agent run.
     fn build_connection(
         host: &str,
         port: u16,
@@ -518,6 +545,7 @@ impl TunnelTransport {
         size: TermSize,
         term: &Arc<FairMutex<Term<Listener>>>,
         echo: &Arc<EchoCanceller>,
+        recreate: bool,
     ) -> io::Result<(mpsc::Sender<Vec<u8>>, Arc<std::sync::atomic::AtomicBool>)> {
         let name = format!("auton-{}", program.replace('/', "-"));
         let (tx, rx) = mpsc::channel::<Vec<u8>>();
@@ -539,17 +567,26 @@ impl TunnelTransport {
         // With a raw TcpStream the upgrade produces a MaybeTlsStream wrapping it; set the underlying
         // socket nonblocking so the read/write loop below can service both directions on one connection.
         let _ = ws.get_ref().set_nonblocking(true);
-        // Create the pane + start the program, mirroring ControlPipe's first on-stdin command. Kill
-        // any stale session of the same name first so a reconnect can't trip "duplicate session".
-        ws.send(tungstenite::Message::Text(format!(
-            "kill-session -t {name}\n"
-        )))
-        .ok();
-        ws.send(tungstenite::Message::Text(format!(
-            "new-session -s {} -x {} -y {} {}\n",
-            name, size.cols, size.lines, program,
-        )))
-        .map_err(|e| io::Error::new(io::ErrorKind::Other, e.to_string()))?;
+        // Create the pane + start the program, mirroring ControlPipe's first on-stdin command. A
+        // fresh spawn kills any stale session of the same name first so the pane starts clean; a
+        // reconnect does NOT — it re-attaches to a pane that survived the blip.
+        if recreate {
+            ws.send(tungstenite::Message::Text(format!(
+                "kill-session -t {name}\n"
+            )))
+            .ok();
+            ws.send(tungstenite::Message::Text(format!(
+                "new-session -s {} -x {} -y {} {}\n",
+                name, size.cols, size.lines, program,
+            )))
+            .map_err(|e| io::Error::new(io::ErrorKind::Other, e.to_string()))?;
+        } else {
+            ws.send(tungstenite::Message::Text(format!(
+                "new-session -A -s {} -x {} -y {} {}\n",
+                name, size.cols, size.lines, program,
+            )))
+            .map_err(|e| io::Error::new(io::ErrorKind::Other, e.to_string()))?;
+        }
 
         // One thread owns the single connection: read `%output` → grid, drain tx → send-keys. The
         // returned bytes are echo-cancelled (see EchoCanceller) so the optimistic echo isn't doubled.
@@ -600,8 +637,8 @@ impl TunnelTransport {
     }
 
     /// Re-attach after the WebSocket died: open a fresh connection to the same daemon/pane identity
-    /// and stream it into the same grid. The pane is recreated — any in-flight agent state is lost;
-    /// reconnect re-establishes the session, not its history.
+    /// and stream it into the same grid. Re-attaches (`new-session -A`) so a pane that survived the
+    /// blip keeps its agent run; only creates a fresh pane if the session is truly gone.
     fn reconnect(&mut self) -> io::Result<()> {
         let (tx, alive) = TunnelTransport::build_connection(
             &self.host,
@@ -610,6 +647,7 @@ impl TunnelTransport {
             self.size,
             &self.term,
             &self.echo,
+            false,
         )?;
         self.tx = tx;
         self.alive = alive;
@@ -736,4 +774,35 @@ fn parse_escapes(s: &str) -> Option<Vec<u8>> {
         }
     }
     Some(out)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// A fresh spawn kills any stale session and creates a new one; a reconnect neither kills nor
+    /// recreates a surviving pane — it re-attaches so the in-flight agent run isn't wiped by a blip.
+    #[test]
+    fn attach_cmds_recreate_vs_preserve() {
+        let size = TermSize {
+            cols: 80,
+            lines: 24,
+        };
+        let fresh = ControlPipe::attach_cmds("auton-claude", size, "claude", true);
+        assert_eq!(fresh.len(), 2, "fresh spawn kills + creates");
+        assert!(fresh[0].starts_with("kill-session -t auton-claude"));
+        assert!(fresh[1].starts_with("new-session -s auton-claude -x 80 -y 24 claude"));
+
+        let resume = ControlPipe::attach_cmds("auton-claude", size, "claude", false);
+        assert_eq!(resume.len(), 1, "reconnect only re-attaches");
+        assert!(
+            resume[0].starts_with("new-session -A -s auton-claude"),
+            "must use -A to attach-if-exists: {}",
+            resume[0]
+        );
+        assert!(
+            !resume[0].contains("kill-session"),
+            "never kill on reconnect"
+        );
+    }
 }
