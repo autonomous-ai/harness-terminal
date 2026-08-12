@@ -6,6 +6,14 @@ entries record user-visible and architectural changes since the last tagged mile
 ## Unreleased / 0.1.0 (in progress)
 
 ### Added
+- **Space actually types again.** macOS's winit reports the spacebar as `Named(Space)` while the
+  rest of the app matches `Character(" ")`, so a plain space was silently swallowed *everywhere* —
+  the shell (commands like `ls -la`, `git commit -m "…"` had untypeable spaces), every text field
+  (palette, find, rename, broadcast, remote host, new-session cwd, copy-search), and the broadcast
+  overlay's "Space toggles target" was dead code on macOS. Keys are now normalized once at the top
+  of the key handler (`Named(Space)` → `Character(" ")`), copy mode keeps its "Space = copy" arm,
+  and the fleet-grid mark toggle + broadcast target toggle work on every platform. Unit-tested via
+  a new `keys::normalize_space`.
 - **Prefix dislikes being dead: `Ctrl+\\` is now a working fallback chord.** macOS silently eats
   `Ctrl+Space` for its *input-source switcher* whenever a second layout is enabled (English + a
   Vietnamese Telex IM is the classic case) — the keystroke never reaches the app, so a tmux-style

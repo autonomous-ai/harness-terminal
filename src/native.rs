@@ -3317,6 +3317,7 @@ impl Application {
         }
         match key {
             Key::Character(c) => match c.as_str() {
+                " " => self.copy_mode_copy(),
                 "/" => {
                     self.copy_query.clear();
                     self.copy_searching = true;
@@ -3337,7 +3338,7 @@ impl Application {
                         "h" => (0, -1),
                         "j" => (1, 0),
                         "k" => (-1, 0),
-                        "l" | " " => (0, 1),
+                        "l" => (0, 1),
                         "w" => {
                             self.copy_word(true);
                             (0, 0)
@@ -3456,11 +3457,17 @@ impl Application {
     /// Handle a key. Mirrors the TUI's prefix→command→forward logic; prefix here is Ctrl+Space
     /// (tmux-like), so a plain space still types normally.
     fn handle_key(&mut self, key: &Key, mods: &ModifiersState) {
+        // Normalize the spacebar once: macOS winit reports it as Named(Space), but every text
+        // field, the live shell, and the broadcast toggle match Character(" "). Without this a
+        // plain space is silently swallowed everywhere; copy mode keeps its own "space = copy"
+        // handling below.
+        let key = crate::keys::normalize_space(key);
+
         // Enter command mode: Ctrl+Space is primary; Ctrl+\ is the fallback. On a mac with a
         // second input source enabled, macOS itself owns Ctrl+Space (input-source switcher) and the
         // keystroke never arrives — so the first time the fallback chord works, explain once that
         // the canonical prefix is being eaten by the OS rather than the app being broken.
-        if crate::keys::is_prefix_press(key, mods) && self.app.overlay == Overlay::None {
+        if crate::keys::is_prefix_press(&key, mods) && self.app.overlay == Overlay::None {
             if matches!(key, Key::Character(c) if c == "\\")
                 && self.prefix_claimed
                 && !self.prefix_alt_notice
@@ -3475,13 +3482,13 @@ impl Application {
 
         if self.prefix_down && self.app.overlay == Overlay::None {
             self.prefix_down = false;
-            if self.command_key(key, mods) {
+            if self.command_key(&key, mods) {
                 self.quit();
             }
             return;
         }
 
-        self.forward_key(key, mods);
+        self.forward_key(&key, mods);
     }
 
     /// Persist which tabs are muted (prefix+m) so a restart brings them back muted instead of the
@@ -4332,6 +4339,7 @@ impl Application {
                         winit::keyboard::NamedKey::ArrowDown => s.write(b"\x1b[B"),
                         winit::keyboard::NamedKey::ArrowRight => s.write(b"\x1b[C"),
                         winit::keyboard::NamedKey::ArrowLeft => s.write(b"\x1b[D"),
+                        winit::keyboard::NamedKey::Space => s.write(b" "),
                         _ => {}
                     },
                     _ => {}

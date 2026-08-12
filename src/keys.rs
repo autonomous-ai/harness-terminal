@@ -59,6 +59,17 @@ pub const ACTIONS: &[(&str, &str)] = &[
     ("destroy", "D"),
 ];
 
+/// Normalize the spacebar to the `Character(" ")` the rest of the codebase matches. macOS's
+/// winit reports the space key as `Named(Space)` (it routes through `code_to_key`), while every
+/// other path in the app matches `Character(" ")` — so without this, a plain space is silently
+/// swallowed by the shell and every text field. Other keys pass through untouched.
+pub fn normalize_space(key: &Key) -> Key {
+    match key {
+        Key::Named(NamedKey::Space) => Key::Character(" ".into()),
+        other => other.clone(),
+    }
+}
+
 /// Prefix *chord* detection: the key(s) that enter command mode, as opposed to the single key
 /// pressed after the prefix. Ctrl+Space is the primary, tmux-style chord; Ctrl+\\ is the
 /// fallback because on macOS the system's input-source switcher owns Ctrl+Space when a second
@@ -200,5 +211,16 @@ mod tests {
         let mut ctrl_shift = ctrl;
         ctrl_shift.insert(ModifiersState::SHIFT);
         assert!(is_prefix_press(&Key::Character("|".into()), &ctrl_shift));
+    }
+
+    #[test]
+    fn normalize_space_rewrites_named_space_to_a_character_space() {
+        // The (macOS) spacebar arrives as Named(Space); it must become Character(" ").
+        assert_eq!(normalize_space(&Key::Named(NamedKey::Space)), Key::Character(" ".into()));
+        // Everything else is untouched.
+        assert_eq!(normalize_space(&Key::Character("a".into())), Key::Character("a".into()));
+        assert_eq!(normalize_space(&Key::Named(NamedKey::Enter)), Key::Named(NamedKey::Enter));
+        assert_eq!(normalize_space(&Key::Named(NamedKey::Escape)), Key::Named(NamedKey::Escape));
+        assert_eq!(normalize_space(&Key::Named(NamedKey::ArrowUp)), Key::Named(NamedKey::ArrowUp));
     }
 }
