@@ -103,6 +103,10 @@ struct Application {
     /// In-progress broadcast line ("" when the Broadcast overlay is closed). Enter sends it to every
     /// session; backspace/escape edit/cancel it.
     broadcast_query: String,
+    /// Per-tab broadcast target selection. Grows/shrinks to match `tabs`; open targets are is_static, closed toggled off. Defaults all-on.
+    broadcast_targets: Vec<bool>,
+    /// Index of the row the broadcast overlay's focus is on (all-on by default).
+    broadcast_sel: usize,
     /// The currently-focused search match (absolute line, col, width); recomputed on each query
     /// change / Enter and passed to draw_grid for highlighting.
     find_hit: Option<crate::render::Find>,
@@ -198,6 +202,8 @@ impl Application {
             find_query: String::new(),
             rename_query: String::new(),
             broadcast_query: String::new(),
+            broadcast_targets: vec![true; tab_count],
+            broadcast_sel: 0,
             find_hit: None,
             find_all: Vec::new(),
             find_index: 0,
@@ -1068,21 +1074,25 @@ impl Application {
         draw_text(fb, &mut self.cache, &prompt, 6, status_base, self.font_px, WHITE);
     }
 
-    /// Render the broadcast overlay: a live count of target sessions, the in-progress line, and a
-    /// dim list of everyone about to receive it (their engine/name @ host labels).
+    /// Render the broadcast overlay: the in-progress line, then a checkbox list of every session
+    /// with its target state. Space toggles the focused row; Enter sends only the marked targets.
     fn render_broadcast(&mut self, fb: &mut Framebuffer) {
         let (base_y, line_px) = self.overlay_base_y();
-        let n = self.app.tabs.len();
+        let n = self.broadcast_targets.iter().filter(|&&t| t).count();
         let prompt = if self.broadcast_query.is_empty() {
-            format!("  send line to {} session{} (type …, Enter=broadcast, Esc=cancel)  ", n, if n == 1 { "" } else { "s" })
+            format!("  send line to {n} of {} session{} (↑/↓ focus, Space=toggle, Enter=broadcast, Esc=cancel)  ",
+                self.app.tabs.len(), if n == 1 { "" } else { "s" })
         } else {
-            format!("  broadcast to {} session{}: {} ▏", n, if n == 1 { "" } else { "s" }, self.broadcast_query)
+            format!("  broadcast to {n} session{}: {} ▏", if n == 1 { "" } else { "s" }, self.broadcast_query)
         };
         draw_text(fb, &mut self.cache, &prompt, 32, base_y, self.font_px, WHITE);
         for (row, s) in self.app.tabs.iter().enumerate().take(20) {
+            let on = self.broadcast_targets.get(row).copied().unwrap_or(false);
+            let mark = if on { "☑" } else { "☐" };
             let name = s.meta.name.clone().unwrap_or_else(|| s.meta.engine.clone());
-            let line = format!("  {} @ {}", name, s.meta.host);
-            draw_text(fb, &mut self.cache, &line, 32, base_y + (row + 2) * line_px, self.font_px, CHROME_DIM);
+            let line = format!("  {} {} @ {}", mark, name, s.meta.host);
+            let color = if row == self.broadcast_sel { WHITE } else { CHROME_DIM };
+            draw_text(fb, &mut self.cache, &line, 32, base_y + (row + 2) * line_px, self.font_px, color);
         }
     }
 
@@ -1619,19 +1629,42 @@ impl Application {
                 return;
             }
             Overlay::Broadcast => {
+                // Keep the target list sized to the current tab set (a tab may have opened/closed).
+                if self.broadcast_targets.len() != self.app.tabs.len() {
+                    self.broadcast_targets.resize(self.app.tabs.len(), true);
+                    self.broadcast_sel = self.broadcast_sel.min(self.app.tabs.len().saturating_sub(1));
+                }
                 match key {
-                    Key::Character(c) => { self.broadcast_query.push_str(c); }
+                    Key::Character(c) => {
+                        if c == " " {
+                            // Space toggles the focused session's target.
+                            if let Some(on) = self.broadcast_targets.get_mut(self.broadcast_sel) {
+                                *on = !*on;
+                            }
+                        } else {
+                            self.broadcast_query.push_str(c);
+                        }
+                    }
                     Key::Named(n) => match n {
                         winit::keyboard::NamedKey::Enter => {
-                            // Fan the line out to EVERY session (active one included), then close.
+                            // Fan the line out to the MARKED sessions only, then close. Unchecked
+                            // sessions are left untouched — the whole point of targeting.
                             let bytes = broadcast_bytes(&self.broadcast_query);
                             if !bytes.is_empty() {
-                                for s in &self.app.tabs {
-                                    s.write(&bytes);
+                                for (i, s) in self.app.tabs.iter().enumerate() {
+                                    if self.broadcast_targets.get(i).copied().unwrap_or(false) {
+                                        s.write(&bytes);
+                                    }
                                 }
                             }
                             self.broadcast_query.clear();
                             self.app.overlay = Overlay::None;
+                        }
+                        winit::keyboard::NamedKey::ArrowDown => {
+                            self.broadcast_sel = (self.broadcast_sel + 1).min(self.app.tabs.len().saturating_sub(1));
+                        }
+                        winit::keyboard::NamedKey::ArrowUp => {
+                            self.broadcast_sel = self.broadcast_sel.saturating_sub(1);
                         }
                         winit::keyboard::NamedKey::Backspace => { self.broadcast_query.pop(); }
                         winit::keyboard::NamedKey::Escape => {
