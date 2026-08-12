@@ -839,6 +839,20 @@ impl Application {
                     color,
                 ) + 12;
                 if x > fb.width.saturating_sub(20) {
+                    // Tabs past the window edge get clipped with no hint. Show how many are hidden
+                    // so a fleet diver knows the bar is truncating rather than assuming fewer tabs.
+                    let hidden = self.app.tabs.len() - i - 1;
+                    if hidden > 0 {
+                        draw_text(
+                            fb,
+                            &mut self.cache,
+                            &format!("⋯ +{hidden}"),
+                            fb.width.saturating_sub(58),
+                            tab_base,
+                            self.font_px,
+                            CHROME_DIM,
+                        );
+                    }
                     break;
                 }
             }
