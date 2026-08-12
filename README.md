@@ -41,27 +41,37 @@ The prefix is `Ctrl+Space` (tmux-style), then a command:
 | Keys | Action |
 |------|--------|
 | `Ctrl+Space` `/` | palette: fuzzy-jump to any session |
-| `Ctrl+Space` `n` | new session (engine picker) |
+| `Ctrl+Space` `;` | command palette: run any action by name |
+| `Ctrl+Space` `n` | new session (engine picker; type a working dir) |
 | `Ctrl+Space` `r` | attach to a remote `pane@host` |
 | `Ctrl+Space` `s` | fleet status (Up/Down + Enter to dive into a session) |
 | `Ctrl+Space` `f` | search scrollback |
+| `Ctrl+Space` `h` | search all sessions (fleet-wide) |
 | `Ctrl+Space` `[` | copy mode (vim nav, block select, copy) |
 | `Ctrl+Space` `,` | rename the active tab (persisted, shown in tab bar) |
+| `Ctrl+Space` `a` | broadcast a line (per-session checkboxes target it) |
+| `Ctrl+Space` `y` | peek the tail of every session, then jump |
+| `Ctrl+Space` `d` | copy the whole scrollback to the clipboard |
+| `Ctrl+Space` `w` | write the scrollback to a `.log` file |
+| `Ctrl+Space` `u` | undo close (reopen the last closed tab) |
+| `Ctrl+Space` `m` | mute/unmute the active tab (no more busy nagging) |
 | `Ctrl+Space` `?` | help (full keybinding reference) |
 | `Ctrl+Space` `o` | jump to the next busy (produced-output) tab |
 | `Ctrl+Space` `l` | flip back to the previous tab |
 | `1-9` / `Tab` | switch tab |
+| `Ctrl+Space` `{` / `}` | move the active tab left / right |
 | `x` / `c` | close tab / jump to tab 0 |
 | `g` / `b` | scroll up a page / jump to bottom |
+| `Ctrl+Enter` | toggle fullscreen |
 | `Ctrl+=` / `Ctrl+-` | font zoom (`Ctrl+0` resets) |
 | `PgUp` / `PgDn` | scrollback |
 | `Cmd`/`Ctrl`+click | open the URL / file path under the cursor |
 | `Alt`+click | move the shell cursor (click-to-move) |
 | `Cmd+C` | copy selection |
 | `Ctrl+Space` `p` | paste clipboard (bracketed) |
-| `Ctrl+Space` `l` | flip to the previous tab |
 
-Backgrounded tabs that keep producing output are flagged with a `!` in the tab bar.
+Backgrounded tabs that keep producing output are flagged with a magnitude badge in the tab bar
+(e.g. `!43` — how many new lines since you last looked). Muted tabs show a dim `M` instead.
 
 ## Config
 
