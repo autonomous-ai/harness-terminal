@@ -42,6 +42,7 @@ pub const ACTIONS: &[(&str, &str)] = &[
     ("help", "?"),
     ("command_palette", ";"),
     ("rename", ","),
+    ("interrupt", "!"),
     ("session_info", "i"),
     ("toggle_focus", "v"),
     ("pin", "A"),

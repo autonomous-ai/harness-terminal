@@ -68,6 +68,7 @@ enum PaletteAction {
     NextDown,
     Reconnect,
     Destroy,
+    Interrupt,
     Help,
     Quit,
 }
@@ -98,6 +99,7 @@ impl PaletteAction {
             ("jump to next down/reconnecting tab", NextDown),
             ("force reconnect active tab (bypass backoff)", Reconnect),
             ("kill active tab's pane (destroy remote session)", Destroy),
+            ("send Ctrl-C to active tab (stop the run)", Interrupt),
             ("show this help", Help),
             ("quit", Quit),
         ]
@@ -916,6 +918,26 @@ impl Application {
                 .map(|s| s.meta.name.clone().unwrap_or_else(|| s.meta.engine.clone()))
                 .unwrap_or_default();
             self.flash = Some((format!("{head} {state}"), std::time::Instant::now()));
+        }
+    }
+
+    /// `prefix+!`: send an interrupt (Ctrl-C) to the active session so a diver can stop a runaway agent
+    /// run without dropping into its raw terminal. `Session::write` handles the typing — buffered
+    /// into `pending` if the transport is momentarily down, flushed on reconnect.
+    fn interrupt_active(&mut self) {
+        let Some(head) = self
+            .app
+            .active_session()
+            .map(|s| s.meta.name.clone().unwrap_or_else(|| s.meta.engine.clone()))
+        else {
+            return;
+        };
+        if let Some(s) = self.app.active_session() {
+            s.write(b"\x03");
+            self.flash = Some((
+                format!("{head} interrupted (Ctrl-C)"),
+                std::time::Instant::now(),
+            ));
         }
     }
 
@@ -1957,6 +1979,7 @@ impl Application {
             ("next_pinned", "jump to next pinned tab"),
             ("reconnect", "force reconnect active tab (bypass backoff)"),
             ("destroy", "kill active tab's remote pane"),
+            ("interrupt", "send Ctrl-C to active tab (stop the run)"),
             ("mute", "mute/unmute the active tab"),
             ("pin", "pin/unpin the active tab (protect from close)"),
             ("last_window", "flip to the previous tab"),
@@ -2799,6 +2822,7 @@ impl Application {
             NextDown => self.next_down(),
             Reconnect => self.reconnect_active(),
             Destroy => self.destroy_active(),
+            Interrupt => self.interrupt_active(),
             Help => {
                 self.app.overlay = Overlay::Help;
             }
@@ -3102,6 +3126,7 @@ impl Application {
                 Some("next_quiet") => self.next_quiet(),
                 Some("next_down") => self.next_down(),
                 Some("mute") => self.toggle_mute_active(),
+                Some("interrupt") => self.interrupt_active(),
                 Some("pin") => self.toggle_pin_active(),
                 Some("next_pinned") => self.next_pinned(),
                 Some("reconnect") => self.reconnect_active(),

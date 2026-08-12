@@ -6,6 +6,10 @@ entries record user-visible and architectural changes since the last tagged mile
 ## Unreleased / 0.1.0 (in progress)
 
 ### Added
+- **Interrupt (prefix+!)** — send Ctrl-C to the active session so a diver can stop a runaway agent run
+  without dropping into its raw terminal. Works over every transport; bytes ride the same
+  `Session::write` path (buffered type-ahead if the pane is momentarily down). Also in the command
+  palette. Complements `destroy` (kill the whole pane) as the lighter, non-destructive stop.
 - **Fleet grid (prefix+e)** — a war-room view of the whole fleet: every session's live tail drawn
   in tiled panes that update each frame, so a diver sees what all agents are doing at once instead
   of hopping tab to tab. Up/Down/1-9 focus a tile, Enter dives into it; per-tile `@host` headers
