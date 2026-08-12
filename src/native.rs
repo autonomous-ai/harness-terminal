@@ -136,6 +136,12 @@ struct Application {
     /// by `activity_flags`; the tab bar shows it as the badge magnitude so a diver reads how hot a
     /// pane is, not just *that* it moved.
     grew_delta: Vec<usize>,
+    /// Pending OS notifications not yet delivered this frame, (kind "busy"|"bell", session index).
+    /// Queued by `poll_bells`/`activity_flags` and drained together at the end of the frame so
+    /// simultaneous busy/bell events across the fleet coalesce into ONE notification instead of one
+    /// osascript popup per tab (a `broadcast` to every host would otherwise fan out N launches).
+    /// Muted tabs are never queued. Emptied each frame by `flush_notifications`.
+    pending_notify: Vec<(String, usize)>,
     /// The currently-focused search match (absolute line, col, width); recomputed on each query
     /// change / Enter and passed to draw_grid for highlighting.
     find_hit: Option<crate::render::Find>,
@@ -301,6 +307,7 @@ impl Application {
             muted,
             pinned,
             grew_delta: vec![0; tab_count],
+            pending_notify: Vec::new(),
             find_hit: None,
             find_all: Vec::new(),
             find_index: 0,
@@ -371,12 +378,14 @@ impl Application {
         let n = self.app.tabs.len();
         self.bell_until.resize(n, None);
         let now = std::time::Instant::now();
+        // Events drained together at the end of this frame so same-burst bells coalesce.
+        let mut bells: Vec<usize> = Vec::new();
         for (i, s) in self.app.tabs.iter().enumerate() {
             if s.take_bell() {
                 // A bell while focused is a "your run finished" cue in view — just a badge. A bell in
-                // a backgrounded (unmuted) tab nudges with a notification so a diver doesn't miss it.
+                // a backgrounded (unmuted) tab queues an OS notification (coalesced below).
                 if i != self.app.active && !self.muted.get(i).copied().unwrap_or(false) {
-                    notify_bell(&s.meta.engine, &s.meta.host, &s.meta.name);
+                    bells.push(i);
                 }
                 self.bell_until[i] = Some(now + std::time::Duration::from_secs(5));
             }
@@ -386,6 +395,74 @@ impl Application {
                     self.bell_until[i] = None;
                 }
             }
+        }
+        // Queue each bell for (coalesced) delivery rather than notifying per-tab here.
+        for i in bells {
+            self.queue_notify("bell", i);
+        }
+    }
+
+    /// Queue an OS notification for later this frame. Events of the same kind in the same frame are
+    /// merged by `flush_notifications` into ONE popup listing every tab, so a `broadcast` to every
+    /// host (which produces output in N tabs at once) fans out as a single notification instead of N
+    /// osascript launches.
+    fn queue_notify(&mut self, kind: &str, tab: usize) {
+        self.pending_notify.push((kind.to_string(), tab));
+    }
+
+    /// Drain queued notifications, merging same-kind events that arrived in this frame into one
+    /// notification listing every affected tab. Runs once at the end of each `activity_flags` pass;
+    /// a frame with nothing queued drains nothing.
+    fn flush_notifications(&mut self) {
+        if self.pending_notify.is_empty() {
+            return;
+        }
+        let pending = std::mem::take(&mut self.pending_notify);
+        for (kind, tabs) in group_notifications(&pending) {
+            self.fire(&kind, &tabs);
+        }
+    }
+
+    /// Imperatively fire one coalesced notification of `kind` for the given (deduped) tab indices.
+    fn fire(&mut self, kind: &str, tabs: &[usize]) {
+        let labels: Vec<String> = tabs
+            .iter()
+            .filter_map(|&i| self.app.tabs.get(i))
+            .map(|s| s.meta.name.clone().unwrap_or_else(|| s.meta.engine.clone()))
+            .collect();
+        let n = labels.len();
+        if n == 0 {
+            return;
+        }
+        let list = join_labels(&labels);
+        match kind {
+            "bell" => {
+                let title = if n == 1 {
+                    format!("{list} — bell")
+                } else {
+                    format!("{n} sessions — bell")
+                };
+                let body = if n == 1 {
+                    format!("Session {list} rang the terminal bell.")
+                } else {
+                    format!("Fleet bells: {list}.")
+                };
+                notify_simple(&title, &body);
+            }
+            "busy" => {
+                let title = if n == 1 {
+                    format!("{list} · busy")
+                } else {
+                    format!("{n} sessions busy")
+                };
+                let body = if n == 1 {
+                    format!("{list} produced new output.")
+                } else {
+                    format!("New output from {list}.")
+                };
+                notify_simple(&title, &body);
+            }
+            _ => {}
         }
     }
 
@@ -398,6 +475,9 @@ impl Application {
         self.pinned.resize(n, false);
         self.grew_delta.resize(n, 0);
         let mut flags = vec![false; n];
+        // Collect the indices that first went busy so we can queue after the immutable tab-borrow
+        // loop ends (`queue_notify` needs `&mut self`).
+        let mut fresh_busy: Vec<usize> = Vec::new();
         for (i, s) in self.app.tabs.iter().enumerate() {
             if i == self.app.active {
                 // We're looking at it now: re-baseline, don't flag, and reset any pending nudge.
@@ -421,9 +501,15 @@ impl Application {
             // settles), `notified` is reset and the next transition nags again.
             if grew && !self.notified[i] {
                 self.notified[i] = true;
-                notify_busy(&s.meta.engine, &s.meta.host, &s.meta.name);
+                fresh_busy.push(i);
             }
         }
+        for i in fresh_busy {
+            self.queue_notify("busy", i);
+        }
+        // Every caller of this pass (render badge + next_busy + tab-bar) expects the queued busy and
+        // bell events to have been delivered; flush the merged batch into one notification per kind.
+        self.flush_notifications();
         flags
     }
 
@@ -3966,13 +4052,10 @@ impl ApplicationHandler for Application {
     }
 }
 
-/// One-shot macOS notification that a backgrounded agent session went busy (produced new output).
-/// Shells out to `osascript` — no extra crate dependency, and the terminal already assumes macOS.
-/// Best-effort: a missing/denied osascript (rare, headless) must not touch the terminal.
-fn notify_busy(engine: &str, host: &str, name: &Option<String>) {
-    let label = name.as_deref().unwrap_or(engine);
-    let title = format!("{label} · {host} — busy");
-    let body = format!("Session {engine}@{host} produced new output.");
+/// Fire one coalesced macOS notification (title + body). Shells out to `osascript` — no extra crate
+/// dependency, and the terminal already assumes macOS. Best-effort: a missing/denied osascript
+/// (rare, headless) must not touch the terminal.
+fn notify_simple(title: &str, body: &str) {
     let script = format!("display notification \"{body}\" with title \"{title}\"");
     let _ = std::process::Command::new("osascript")
         .arg("-e")
@@ -3982,19 +4065,31 @@ fn notify_busy(engine: &str, host: &str, name: &Option<String>) {
         .spawn();
 }
 
-/// One-shot macOS notification that a backgrounded agent session rang its terminal bell (a long run
-/// finishing, e.g.). Same osascript mechanism as `notify_busy`; best-effort and never fatal.
-fn notify_bell(engine: &str, host: &str, name: &Option<String>) {
-    let label = name.as_deref().unwrap_or(engine);
-    let title = format!("{label} · {host} — bell");
-    let body = format!("Session {engine}@{host} rang the terminal bell.");
-    let script = format!("display notification \"{body}\" with title \"{title}\"");
-    let _ = std::process::Command::new("osascript")
-        .arg("-e")
-        .arg(script)
-        .stdout(std::process::Stdio::null())
-        .stderr(std::process::Stdio::null())
-        .spawn();
+/// Group queued (kind, tab) notifications into coalesced batches: one batch per kind, in queued
+/// order, listing every tab of that kind. Pure so it's unit-testable without an Application.
+/// `pending` is drained by the caller; a multi-tab `broadcast` (busy in N tabs at once) collapses
+/// to one "busy" batch instead of N popups.
+pub(crate) fn group_notifications(pending: &[(String, usize)]) -> Vec<(String, Vec<usize>)> {
+    // One bucket per kind, in first-seen order, collecting every tab of that kind regardless of how
+    // busy/bell interleave — a frame with mixed kinds still yields exactly two popups (one per kind).
+    let mut batches: Vec<(String, Vec<usize>)> = Vec::new();
+    for (kind, tab) in pending {
+        match batches.iter_mut().find(|(k, _)| *k == *kind) {
+            Some((_, tabs)) => tabs.push(*tab),
+            None => batches.push((kind.clone(), vec![*tab])),
+        }
+    }
+    batches
+}
+
+/// Join session labels for a coalesced-notification list. A handful reads as `a, b, c`; a fleet-wide
+/// broadcast (every host) collapses to `all N` so the popup stays short.
+fn join_labels(labels: &[String]) -> String {
+    if labels.len() <= 3 {
+        labels.join(", ")
+    } else {
+        format!("all {} sessions", labels.len())
+    }
 }
 
 /// Entry point: create the native window and run the event loop.
@@ -4009,7 +4104,7 @@ pub fn run(app: App) -> Result<(), Box<dyn std::error::Error>> {
 mod tests {
     use super::{
         argb_to_rgb, broadcast_bytes, collect_fleet_matches, engine_accent, expand_click_word,
-        host_color, FleetMatch,
+        group_notifications, host_color, join_labels, FleetMatch,
     };
 
     use std::sync::Arc;
@@ -4082,6 +4177,70 @@ mod tests {
         assert_eq!(collect_fleet_matches(&terms, "FIX").len(), 3);
         // A query in no tab matches nothing.
         assert!(collect_fleet_matches(&terms, "zzz").is_empty());
+    }
+
+    /// Same-kind queued notifications (a multi-tab broadcast) coalesce into ONE batch, in order,
+    /// instead of one popup per tab.
+    #[test]
+    fn group_notifications_coalesces_same_kind() {
+        let pending = vec![
+            ("busy".to_string(), 0),
+            ("busy".to_string(), 2),
+            ("busy".to_string(), 5),
+        ];
+        let batches = group_notifications(&pending);
+        assert_eq!(
+            batches.len(),
+            1,
+            "three simltaneous busy events -> one batch"
+        );
+        assert_eq!(batches[0].0, "busy");
+        assert_eq!(batches[0].1, vec![0, 2, 5]);
+    }
+
+    /// Mixed busy and bell events in one frame stay in separate batches so each kind gets its own
+    /// (title-accurate) popup, but same-kind events still merge across the alternation.
+    #[test]
+    fn group_notifications_splits_busy_and_bell() {
+        let pending = vec![
+            ("busy".to_string(), 1),
+            ("bell".to_string(), 2),
+            ("busy".to_string(), 3),
+        ];
+        let batches = group_notifications(&pending);
+        assert_eq!(
+            batches.len(),
+            2,
+            "one bucket per kind, even when interleaved"
+        );
+        assert_eq!(batches[0].0, "busy");
+        assert_eq!(batches[0].1, vec![1, 3]);
+        assert_eq!(batches[1].0, "bell");
+        assert_eq!(batches[1].1, vec![2]);
+    }
+
+    /// A single backgrounded tab going busy stays a single-notification event (no spurious merge
+    /// or split).
+    #[test]
+    fn group_notifications_single_stays_single() {
+        let pending = vec![("busy".to_string(), 7)];
+        let batches = group_notifications(&pending);
+        assert_eq!(batches.len(), 1);
+        assert_eq!(batches[0], ("busy".to_string(), vec![7]));
+    }
+
+    /// A fleet-wide broadcast produces N busy events; the list should collapse to "all N sessions"
+    /// rather than a long comma list.
+    #[test]
+    fn join_labels_collapses_large_fleet() {
+        assert_eq!(
+            join_labels(&["a".into(), "b".into(), "c".into()]),
+            "a, b, c"
+        );
+        assert_eq!(
+            join_labels(&["w".into(), "x".into(), "y".into(), "z".into()]),
+            "all 4 sessions"
+        );
     }
 
     /// Every host gets a stable, in-table color; the same host never changes across calls, and two
