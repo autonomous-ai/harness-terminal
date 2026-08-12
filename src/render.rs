@@ -251,6 +251,7 @@ pub fn draw_grid(
     find: Option<Find>,
     matches: &[Find],
     sel: Option<&alacritty_terminal::selection::SelectionRange>,
+    copy: Option<(i32, usize)>,
 ) {
     let cols = term.columns();
     // Cursor cell (block) — draw on top of its own cell after painting the background.
@@ -262,6 +263,8 @@ pub fn draw_grid(
     const HIT_FG: (u8, u8, u8) = (0x00, 0x00, 0x00);
     const HIT_BG: (u8, u8, u8) = (0xff, 0xd2, 0x00);
     const FOCUS_BG: (u8, u8, u8) = (0xff, 0x99, 0x00);
+    // Copy-mode cursor: a bright green block so the user can see exactly where selection starts.
+    const COPY_CURSOR: (u8, u8, u8) = (0x1e, 0xff, 0x8a);
     // Text-selection highlight (soft blue background).
     const SEL_BG: (u8, u8, u8) = (0x26, 0x4f, 0x8c);
 
@@ -287,6 +290,8 @@ pub fn draw_grid(
         // the overlay is open so the user sees all landing spots at once.
         let in_match = !in_focus && matches.iter().any(|&(l, c, w)| row == l && col >= c && col < c + w);
         let in_sel = sel.map(|s| s.contains(idx.point)).unwrap_or(false);
+        // Is this the copy-mode read cursor? (line, col) grid coords, drawn as a green block below.
+        let is_copy_cursor = copy.is_some_and(|(l, c)| row == l && col == c);
 
         // Resolve effective fg/bg, applying SGR inverse first (so cursor/match still take visual
         // precedence while keeping the right base colors to swap).
@@ -321,6 +326,12 @@ pub fn draw_grid(
             // Block cursor: fill with the effective foreground, draw the glyph in the bg color.
             bgc = fg;
             fg = PaletteColor::Spec { r: DEFAULT_BG.0, g: DEFAULT_BG.1, b: DEFAULT_BG.2 };
+        }
+        // Copy-mode cursor: fill the cell with the bright green read cursor and draw the glyph in
+        // black so it's always legible, regardless of scroll/selection state.
+        if is_copy_cursor {
+            bgc = PaletteColor::Spec { r: COPY_CURSOR.0, g: COPY_CURSOR.1, b: COPY_CURSOR.2 };
+            fg = PaletteColor::Spec { r: 0, g: 0, b: 0 };
         }
         // Paint the background (uses the resolved bgc).
         paint_bg(buf, x0 as usize, y0 as usize, cell_w as usize, cell_h as usize, bgc);
@@ -613,7 +624,7 @@ mod tests {
         let mut cache = GlyphCache::load();
         {
             let g = term.lock();
-            draw_grid(&mut fb, &g, 9, 18, 12, &mut cache, None, &[], None);
+            draw_grid(&mut fb, &g, 9, 18, 12, &mut cache, None, &[], None, None);
         }
 
         // At least some pixel is non-background (glyphs drawn).
@@ -670,7 +681,7 @@ mod tests {
         let mut cache = GlyphCache::load();
         {
             let g = term.lock();
-            draw_grid(&mut fb, &g, 9, 18, 12, &mut cache, None, &[], None);
+            draw_grid(&mut fb, &g, 9, 18, 12, &mut cache, None, &[], None, None);
         }
         let non_blank = fb.pixels.iter().filter(|&&p| p != 0x0000_0000).count();
         assert!(non_blank > 20, "expected scrollback glyphs when scrolled, got {non_blank}");
@@ -727,7 +738,7 @@ mod tests {
         let mut cache = GlyphCache::load();
         {
             let g = term.lock();
-            draw_grid(&mut fb, &g, 9, 18, 12, &mut cache, None, &[], None);
+            draw_grid(&mut fb, &g, 9, 18, 12, &mut cache, None, &[], None, None);
         }
         // Cell (0,0) bg should be green-ish (the original fg became the bg).
         let cell0 = fb.pixels[0];
@@ -762,7 +773,7 @@ mod tests {
         let mut fb = Framebuffer::new(5 * 9, 18);
         let mut cache = GlyphCache::load();
         let g = term.lock();
-        draw_grid(&mut fb, &g, 9, 18, 12, &mut cache, None, &[], None);
+        draw_grid(&mut fb, &g, 9, 18, 12, &mut cache, None, &[], None, None);
         drop(g);
 
         let cell_x = 0;
@@ -773,6 +784,32 @@ mod tests {
         // fg (white) color. Compare RGB only (alpha is always 255 in the framebuffer).
         let corner = fb.pixels[17 * fb.width + (9 - 1)] & 0x00ff_ffff;
         assert_eq!(corner, 0, "beam cursor must not fill the cell to its bottom-right corner");
+    }
+
+    /// Copy-mode read cursor: drawing with a `copy` point fills exactly that cell with the bright
+    /// green block cursor color (so the user can see where selection starts).
+    #[test]
+    fn copy_cursor_draws_green_block() {
+        use alacritty_terminal::sync::FairMutex;
+        use alacritty_terminal::term::{Config, Term};
+        use alacritty_terminal::vte::ansi::{Processor, StdSyncHandler};
+
+        use crate::session::Listener;
+
+        let size = crate::session::TermSize { lines: 2, cols: 6 };
+        let term = FairMutex::new(Term::new(Config::default(), &size, Listener::default()));
+        let mut p: Processor<StdSyncHandler> = Processor::default();
+        p.advance(&mut *term.lock(), b"abc\r\n123");
+        let mut fb = Framebuffer::new(6 * 9, 2 * 18);
+        let mut cache = GlyphCache::load();
+        let g = term.lock();
+        // Copy cursor at grid (line 0, col 1) = the "b" cell.
+        draw_grid(&mut fb, &g, 9, 18, 12, &mut cache, None, &[], None, Some((0, 1)));
+        drop(g);
+        // Center pixel of cell (line 0, col 1) should be green (0x1eff8a).
+        let px = fb.pixels[0 * 18 * fb.width + 1 * 9 + 4];
+        let (r, gg, b) = ((px >> 16) & 0xff, (px >> 8) & 0xff, px & 0xff);
+        assert!(gg > 200 && r < 100, "copy cursor should paint the target cell green, got rgb({r},{gg},{b})");
     }
 
     /// Match counting: a query present multiple times across history counts all non-overlapping

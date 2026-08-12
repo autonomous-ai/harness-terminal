@@ -22,7 +22,7 @@ use softbuffer::{Context, Surface};
 
 use crate::app::{App, Overlay};
 use crate::engines::ENGINES;
-use crate::render::{draw_grid, draw_text, Framebuffer, GlyphCache};
+use crate::render::{argb, draw_grid, draw_text, Framebuffer, GlyphCache};
 use crate::session::TermSize;
 
 /// Chromeless text colors (macOS style).
@@ -57,6 +57,13 @@ struct Application {
     find_all: Vec<crate::render::Find>,
     /// Index into `find_all` of the currently-focused match (the "N of M" cursor).
     find_index: usize,
+    /// Whether we're in tmux-style copy mode (prefix+[). While active, keystrokes navigate a read
+    /// cursor instead of reaching the shell, and `v` starts/extends a selection to copy.
+    copy_mode: bool,
+    /// Copy-mode read cursor: (line, col) grid coordinates in the scrollback.
+    copy_pos: (i32, usize),
+    /// Copy-mode anchor: where the block selection started (Some while selecting), in grid coords.
+    copy_anchor: Option<(i32, usize)>,
     /// Mouse state: the cell anchor where a drag-selection started (Some while left button held).
     /// With winit 0.30 we track presses/releases ourselves; dragging updates the selection end.
     mouse_anchor: Option<Point>,
@@ -89,6 +96,9 @@ impl Application {
             find_hit: None,
             find_all: Vec::new(),
             find_index: 0,
+            copy_mode: false,
+            copy_pos: (0, 0),
+            copy_anchor: None,
             mouse_anchor: None,
             cursor: (0.0, 0.0),
             last_press: None,
@@ -177,7 +187,8 @@ impl Application {
             }
             // Compute the current text-selection range (if any) so draw_grid can highlight it.
             let sel = g.selection.as_ref().and_then(|s| s.to_range(&g));
-            draw_grid(fb, &g, self.cell_w, self.cell_h, self.font_px, &mut self.cache, self.find_hit, &self.find_all, sel.as_ref());
+            let copy = if self.copy_mode { Some(self.copy_pos) } else { None };
+            draw_grid(fb, &g, self.cell_w, self.cell_h, self.font_px, &mut self.cache, self.find_hit, &self.find_all, sel.as_ref(), copy);
         }
 
         // Tab bar (top row).
@@ -209,7 +220,7 @@ impl Application {
             info = format!(" {} · {} · {} · [{} {}]", s.meta.host, s.meta.engine, live, s.kind(), link);
         }
         draw_text(fb, &mut self.cache, &info, 6, status_base, self.font_px, CHROME_FG);
-        let hints = " prefix+/ palette  prefix+n new  prefix+r remote  prefix+q quit ";
+        let hints = " prefix+/ palette  prefix+n new  prefix+r remote  prefix+[ copy  prefix+q quit ";
         let hw = draw_text(fb, &mut self.cache, hints, 6, status_base, self.font_px, CHROME_DIM);
         // Move the hint to the right edge by re-drawing after clearing a wide column is complex;
         // simplest right-align: draw hints over the info end offset. We draw at the right edge:
@@ -223,6 +234,25 @@ impl Application {
             }
         }
         draw_text(fb, &mut self.cache, hints, hx, status_base, self.font_px, CHROME_DIM);
+
+        // Copy mode banner: a prominent green status bar so the user knows keystrokes are captured
+        // for navigation, with the current motion hints.
+        if self.copy_mode {
+            let selecting = if self.copy_anchor.is_some() { "[selecting]" } else { "[v=select]" };
+            let msg = format!(" COPY MODE · h/j/k/l/w/b move {} · Enter copy · Esc quit ", selecting);
+            let cw = draw_text(fb, &mut self.cache, &msg, 6, status_base, self.font_px, (0x00, 0x00, 0x00));
+            // Clear the region background to green behind the message for contrast.
+            let green = argb(255, 0x18, 0xe0, 0x8a);
+            for py in status_base.saturating_sub(self.font_px as usize)..(status_base + self.font_px as usize) {
+                for px in 0..cw.min(fb.width) {
+                    if py < fb.height {
+                        fb.pixels[py * fb.width + px] = green;
+                    }
+                }
+            }
+            // Re-draw the message in black on green.
+            draw_text(fb, &mut self.cache, &msg, 6, status_base, self.font_px, (0x00, 0x00, 0x00));
+        }
 
         // Overlays.
         match self.app.overlay {
@@ -330,6 +360,69 @@ impl Application {
         true
     }
 
+    /// Enter copy mode: anchor the read cursor at the top-left visible cell so the user starts
+    /// where they can see, and keep the view scrolled (copy mode lives in the scrollback).
+    fn start_copy_mode(&mut self) {
+        let Some(active) = self.app.active_session() else { return };
+        let g = active.term.lock();
+        if g.grid().history_size() == 0 {
+            return; // nothing to scroll/copy yet
+        }
+        // Place the cursor at the first visible (top of viewport) cell.
+        let top = g.grid().display_offset();
+        self.copy_pos = ((top as i32 * -1), 0);
+        self.copy_anchor = None;
+        self.copy_mode = true;
+        self.scrolled = true;
+    }
+
+    /// Copy the current copy-mode selection (anchor→pos inclusive) to the clipboard via
+    /// selection_to_string, then leave copy mode. No-op if nothing is selected.
+    fn copy_mode_copy(&mut self) {
+        if self.copy_anchor.is_none() {
+            self.copy_mode = false;
+            return;
+        }
+        let Some(active) = self.app.active_session() else { return };
+        let mut g = active.term.lock();
+        // Build a simple rectangular selection from the two grid points, install it as the live
+        // selection, and read it via alacritty's range-to-string so line handling (wrap vs hard
+        // newline) is correct. We restore/clear the live selection afterward.
+        let (a, b) = (self.copy_anchor.unwrap(), self.copy_pos);
+        let (lo, hi) = if (a, b) < (b, a) { (a, b) } else { (b, a) };
+        use alacritty_terminal::index::{Column, Line, Point, Side};
+        use alacritty_terminal::selection::{Selection, SelectionType};
+        let start = Point::new(Line(lo.0), Column(lo.1));
+        let end = Point::new(Line(hi.0), Column(hi.1));
+        let mut sel = Selection::new(SelectionType::Simple, start, Side::Left);
+        sel.update(end, Side::Right);
+        g.selection = Some(sel);
+        let text = g.selection_to_string().unwrap_or_default();
+        g.selection = None;
+        self.copy_mode = false;
+        self.copy_anchor = None;
+        if !text.is_empty() {
+            drop(g);
+            if let Ok(mut cb) = arboard::Clipboard::new() {
+                let _ = cb.set_text(text);
+            }
+        }
+    }
+
+    /// Move the copy-mode read cursor by a grid delta, keeping it in-bounds and extending the
+    /// selection if one is active.
+    fn copy_move(&mut self, dl: i32, dc: i32) {
+        let Some(active) = self.app.active_session() else { return };
+        let g = active.term.lock();
+        let cols = g.columns() as i32;
+        let max_line = g.grid().bottommost_line().0;
+        let min_line = g.grid().topmost_line().0;
+        let (l, c) = self.copy_pos;
+        let l = (l + dl).clamp(min_line, max_line);
+        let c = (c as i32 + dc).clamp(0, cols - 1) as usize;
+        self.copy_pos = (l, c);
+    }
+
     /// Render the search overlay: query prompt + current match location in the status area.
     fn render_find(&mut self, fb: &mut Framebuffer) {
         let status_base = fb.height.saturating_sub(self.cell_h as usize / 2);
@@ -346,6 +439,108 @@ impl Application {
             }
         };
         draw_text(fb, &mut self.cache, &line, 6, status_base, self.font_px, WHITE);
+    }
+
+    /// Handle a key while in copy mode: vim-style motion keys move the read cursor; `v` starts
+    /// (or re-anchors) a selection; Enter/Space copies and exits; Esc/Q exits; g/G go to top/bottom.
+    fn handle_copy_key(&mut self, key: &Key, _mods: &ModifiersState) {
+        match key {
+            Key::Character(c) => match c.as_str() {
+                // vim motions
+                "h" | "j" | "k" | "l" | "w" | "b" => {
+                    let (dl, dc) = match c.as_str() {
+                        "h" => (0, -1),
+                        "j" => (1, 0),
+                        "k" => (-1, 0),
+                        "l" | " " => (0, 1),
+                        "w" => { self.copy_word(true); (0, 0) }
+                        "b" => { self.copy_word(false); (0, 0) }
+                        _ => (0, 0),
+                    };
+                    self.copy_move(dl, dc);
+                }
+                "v" => {
+                    // Start/re-anchor the selection at the read cursor.
+                    self.copy_anchor = Some(self.copy_pos);
+                }
+                "g" => {
+                    let Some(active) = self.app.active_session() else { return };
+                    let g = active.term.lock();
+                    self.copy_pos = (g.grid().topmost_line().0, 0);
+                }
+                "G" => {
+                    let Some(active) = self.app.active_session() else { return };
+                    let g = active.term.lock();
+                    self.copy_pos = (g.grid().bottommost_line().0, 0);
+                }
+                "q" => { self.copy_mode = false; self.copy_anchor = None; }
+                _ => {}
+            },
+            Key::Named(n) => match n {
+                winit::keyboard::NamedKey::Enter => self.copy_mode_copy(),
+                winit::keyboard::NamedKey::Space => self.copy_mode_copy(),
+                winit::keyboard::NamedKey::ArrowUp => self.copy_move(-1, 0),
+                winit::keyboard::NamedKey::ArrowDown => self.copy_move(1, 0),
+                winit::keyboard::NamedKey::ArrowLeft => self.copy_move(0, -1),
+                winit::keyboard::NamedKey::ArrowRight => self.copy_move(0, 1),
+                winit::keyboard::NamedKey::PageUp => self.copy_move(-20, 0),
+                winit::keyboard::NamedKey::PageDown => self.copy_move(20, 0),
+                winit::keyboard::NamedKey::Escape => { self.copy_mode = false; self.copy_anchor = None; }
+                _ => {}
+            },
+            _ => {}
+        }
+    }
+
+    /// Jump the copy cursor to the next/previous word boundary. `forward` moves right, otherwise
+    /// left. Wraps selection extension implicitly because it just moves `copy_pos`.
+    fn copy_word(&mut self, forward: bool) {
+        let Some(active) = self.app.active_session() else { return };
+        let g = active.term.lock();
+        let cols = g.columns();
+        let (mut l, mut cur) = self.copy_pos;
+        let max_line = g.grid().bottommost_line().0;
+        // Work on the current line's text; map from copy_pos col to a byte index.
+        use alacritty_terminal::index::{Column, Line};
+        let line_text: String = g.grid()[Line(l)][Column(0)..Column(cols)].iter().map(|c| c.c).collect();
+        let ci = cur.min(line_text.len().saturating_sub(1));
+        let bytes = line_text.as_bytes();
+        let is_space_at = |i: usize| bytes.get(i).map_or(true, |b| b.is_ascii_whitespace());
+        if forward {
+            // Skip current word (or spaces), land on next word start.
+            let mut i = ci;
+            // If on a space, skip spaces first.
+            while i < bytes.len() && is_space_at(i) {
+                i += 1;
+            }
+            while i < bytes.len() && !is_space_at(i) {
+                i += 1;
+            }
+            // If still within the line, land at the next non-space.
+            let mut ni = i;
+            while ni < bytes.len() && is_space_at(ni) {
+                ni += 1;
+            }
+            if ni < bytes.len() {
+                cur = ni;
+            } else if l < max_line {
+                l += 1;
+                cur = 0;
+            }
+        } else {
+            // Walk back over the current word, then any spaces, to the previous word's start.
+            let mut i = ci;
+            while i > 0 && !is_space_at(i.saturating_sub(1)) {
+                i -= 1;
+            }
+            // i is now the start of the current word (or 0). Skip spaces before it.
+            let mut si = i;
+            while si > 0 && is_space_at(si.saturating_sub(1)) {
+                si -= 1;
+            }
+            cur = if si < i { si } else { i };
+        }
+        self.copy_pos = (l, cur);
     }
 
     /// Handle a key. Mirrors the TUI's prefix→command→forward logic; prefix here is Ctrl+Space
@@ -399,6 +594,7 @@ impl Application {
                 "g" => { scroll_active(self, 20); self.scrolled = true; }
                 "b" => self.scroll_to_bottom(),
                 "f" => { self.app.overlay = Overlay::Find; self.find_query.clear(); self.find_hit = None; self.find_all = Vec::new(); },
+                "[" => self.start_copy_mode(),
                 // Numeric tabs 1-9.
                 _ if c.len() == 1 && c.chars().next().unwrap().is_ascii_digit() => {
                     let idx = c.chars().next().unwrap() as u8;
@@ -498,6 +694,11 @@ impl Application {
 
         // Normal mode: send keystrokes to the active session.
         if self.app.overlay == Overlay::None {
+            // Copy mode intercepts keystrokes (navigation + selection) instead of forwarding.
+            if self.copy_mode {
+                self.handle_copy_key(key, mods);
+                return;
+            }
             // Scrollback navigation takes precedence over forwarding to the shell. While scrolled,
             // page/arrow keys move the viewport; Esc returns to the live (bottom) view. PageUp from
             // the live view also enters scroll mode.
