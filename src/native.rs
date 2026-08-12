@@ -65,6 +65,9 @@ struct Application {
     /// Last (press-time, press-position, accumulated-click-count) to detect double/triple clicks.
     /// winit 0.30 doesn't hand us a click count, so we time consecutive presses ourselves.
     last_press: Option<(std::time::Instant, (f64, f64), u32)>,
+    /// Last OS window title we set, so we only call set_title when it changes (each call is a
+    /// platform round-trip).
+    window_title: String,
 }
 
 impl Application {
@@ -89,6 +92,7 @@ impl Application {
             mouse_anchor: None,
             cursor: (0.0, 0.0),
             last_press: None,
+            window_title: String::new(),
         }
     }
 
@@ -113,6 +117,22 @@ impl Application {
         }
         // Render into the CPU framebuffer first (doesn't borrow the surface).
         self.render(&mut fb);
+
+        // Sync the OS window title to the active tab's live OSC title so the fleet Diver sees at a
+        // glance what the pane is doing even when the window is minimized/unfocused. Only call
+        // set_title when the string actually changed.
+        if let Some(w) = &self.window {
+            let title = self
+                .app
+                .active_session()
+                .and_then(|s| s.live_title())
+                .unwrap_or_else(|| "harness-terminal".to_string());
+            let title = format!("{} — harness-terminal", title);
+            if title != self.window_title {
+                w.set_title(&title);
+                self.window_title = title;
+            }
+        }
 
         // Then present it via the softbuffer surface.
         let Some(surface) = &mut self.surface else { return };
