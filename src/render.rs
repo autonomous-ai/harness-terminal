@@ -12,7 +12,7 @@ use alacritty_terminal::grid::Dimensions;
 use alacritty_terminal::term::cell::Flags;
 use alacritty_terminal::term::Term;
 use alacritty_terminal::index::{Column, Line};
-use alacritty_terminal::vte::ansi;
+use alacritty_terminal::vte::ansi::{self, CursorShape};
 
 use crate::session::Listener;
 
@@ -297,7 +297,11 @@ pub fn draw_grid(
             fg = PaletteColor::Spec { r: HIT_FG.0, g: HIT_FG.1, b: HIT_FG.2 };
             bgc = PaletteColor::Spec { r: HIT_BG.0, g: HIT_BG.1, b: HIT_BG.2 };
         }
-        if is_cursor {
+        let cursor_shape = if is_cursor { term.cursor_style().shape } else { CursorShape::Hidden };
+        // Block cursor (and its hollow/hidden variants) fills the whole cell; underline/beam draw
+        // a thinner bar and leave the cell background intact, colored by the cursor color.
+        let is_bar = matches!(cursor_shape, CursorShape::Underline | CursorShape::Beam);
+        if is_cursor && matches!(cursor_shape, CursorShape::Block | CursorShape::HollowBlock) {
             // Block cursor: fill with the effective foreground, draw the glyph in the bg color.
             bgc = fg;
             fg = PaletteColor::Spec { r: DEFAULT_BG.0, g: DEFAULT_BG.1, b: DEFAULT_BG.2 };
@@ -369,6 +373,36 @@ pub fn draw_grid(
             }
             if cell.flags.contains(Flags::STRIKEOUT) {
                 draw_rule(strike_y);
+            }
+        }
+
+        // Bar cursors (underline / beam): draw over the cell after its glyph+rules, in the cursor
+        // fg color. Underline = a bar at the bottom; beam = a vertical bar on the left edge.
+        if is_cursor && is_bar {
+            let (cr, cg, cb) = fg.to_rgb();
+            match cursor_shape {
+                CursorShape::Underline => {
+                    let barw = x0 as usize + cell_w as usize;
+                    let btop = y0 as usize + cell_h as usize - (cell_h as usize / 5).max(2);
+                    for py in btop..y0 as usize + cell_h as usize {
+                        for px in x0 as usize..barw {
+                            if px < buf.width && py < buf.height {
+                                buf.pixels[py * buf.width + px] = argb(255, cr, cg, cb);
+                            }
+                        }
+                    }
+                }
+                CursorShape::Beam => {
+                    let barw = (cell_w as usize / 6).max(2);
+                    for py in y0 as usize..y0 as usize + cell_h as usize {
+                        for px in x0 as usize..(x0 as usize + barw).min(buf.width) {
+                            if py < buf.height {
+                                buf.pixels[py * buf.width + px] = argb(255, cr, cg, cb);
+                            }
+                        }
+                    }
+                }
+                _ => {}
             }
         }
     }
@@ -653,5 +687,45 @@ mod tests {
         let g = (cell0 >> 8) & 0xff;
         let b = cell0 & 0xff;
         assert!(g > 100 && r < 100 && b < 160, "inverse cell bg should be green, got rgb({r},{g},{b})");
+    }
+
+    /// Cursor shapes: force the emulator to a beam cursor and assert the glyph cell is drawn plus a
+    /// vertical bar on the left edge (i.e. the beam is distinct from a full block fill).
+    #[test]
+    fn beam_cursor_draws_vbar_not_block() {
+        use alacritty_terminal::sync::FairMutex;
+        use alacritty_terminal::term::{Config, Term};
+        use alacritty_terminal::vte::ansi::{Processor, StdSyncHandler};
+
+        use crate::session::Listener;
+
+        let size = crate::session::TermSize { lines: 1, cols: 5 };
+        let term = FairMutex::new(Term::new(Config::default(), &size, Listener));
+        // Request a beam cursor (DECSCUSR 5 = beam; alacritty maps it to CursorShape::Beam). The
+        // cursor stays at (0,0), so the beam is drawn over cell (0,0). No glyph is typed (space), so
+        // the only non-background pixels come from the cursor itself.
+        let mut p: Processor<StdSyncHandler> = Processor::default();
+        {
+            let mut g = term.lock();
+            p.advance(&mut *g, b"\x1b[5 q"); // beam cursor
+        }
+        // Render: the left edge of cell (0,0) should be a non-blank beam bar, while the bottom-right
+        // corner of the cell stays background (a full block cursor would fill it).
+        let mut fb = Framebuffer::new(5 * 9, 18);
+        let mut cache = GlyphCache::load();
+        let g = term.lock();
+        draw_grid(&mut fb, &g, 9, 18, 12, &mut cache, None, None);
+        drop(g);
+
+        let cell_x = 0;
+        // Left-edge column (x=0) of the cursor cell should be non-black (beam top-to-bottom).
+        let left_edge_filled = (0..18).any(|py| fb.pixels[py * fb.width + cell_x] != 0);
+        assert!(left_edge_filled, "beam cursor should draw a vertical bar at cell's left edge");
+        // The bottom-right corner must be background — a block cursor would fill it with the cursor
+        // fg color (the "A" glyph doesn't reach the corner).
+        // The bottom-right corner must be background — a block cursor would fill it with the cursor
+        // fg (white) color. Compare RGB only (alpha is always 255 in the framebuffer).
+        let corner = fb.pixels[17 * fb.width + (9 - 1)] & 0x00ff_ffff;
+        assert_eq!(corner, 0, "beam cursor must not fill the cell to its bottom-right corner");
     }
 }

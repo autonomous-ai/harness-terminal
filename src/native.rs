@@ -694,6 +694,28 @@ impl ApplicationHandler for Application {
                     }
                 }
             }
+            WindowEvent::MouseWheel { delta, .. } => {
+                // Scroll wheel navigates the scrollback: up = back into history, down = forward.
+                // Natural/line/other deltas are normalized to a sign; each notch ~3 lines keeps it
+                // snappy without racing the keyboard.
+                use winit::event::MouseScrollDelta;
+                let mag = match delta {
+                    MouseScrollDelta::LineDelta(_, y) => y as f64,
+                    MouseScrollDelta::PixelDelta(p) => -p.y / 40.0,
+                };
+                if mag == 0.0 {
+                    return;
+                }
+                // Positive magnitude = scroll up (into history), negative = down (toward live).
+                let lines = (mag * 3.0) as i32;
+                scroll_active(self, lines);
+                if lines > 0 {
+                    self.scrolled = true;
+                }
+                if let Some(w) = &self.window {
+                    w.request_redraw();
+                }
+            }
             WindowEvent::MouseInput { state, button, .. } => {
                 if button == MouseButton::Left && self.app.overlay == Overlay::None {
                     let (x, y) = self.cursor;
