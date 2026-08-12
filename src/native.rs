@@ -977,10 +977,13 @@ impl Application {
         }
 
         // Tab bar (top row). Flag backgrounded tabs that produced output since we last looked.
+        // The activity pass (busy/bell detection + coalesced notifications) runs EVERY frame,
+        // including focus mode where the bar is hidden — hiding the chrome must not silence the
+        // fleet: a backgrounded agent finishing still nudges there.
+        let activity = self.activity_flags();
         if self.focus {
             // Focus mode: no tab bar — the grid owns the full height.
         } else {
-            let activity = self.activity_flags();
             let tab_base = self.cell_h as usize / 2;
             let mut x = 6usize;
             for (i, s) in self.app.tabs.iter().enumerate() {
