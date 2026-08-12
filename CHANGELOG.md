@@ -19,6 +19,17 @@ entries record user-visible and architectural changes since the last tagged mile
 - **Orphan-state purge at startup** — scrollback files and muted-tab entries for tabs that no
   longer exist (closed or renamed) are removed, keeping the state dir from accumulating stale data.
 
+- **Last-broadcast persistence** — `prefix+a` pre-fills the last line sent fleet-wide so a repeat
+  command (e.g. `git pull` on every host) is one keypress.
+- **Type-ahead buffering** — typing into a dead remote pane buffers the keystrokes (visible as
+  `⏳N` in the tab bar, the fleet triage, and `prefix+i`) and flushes them into the pane on the
+  next successful reconnect, so a command you queue for a host that's coming back actually lands.
+- **Broadcast history** — `Shift+Up` / `Shift+Down` in the broadcast overlay recalls previously sent
+  lines (MRU, persisted), so alternating commands across machines doesn't need retyping.
+- **MRU working directories** — `prefix+n` pre-fills `dir:` from the last repo a local tab spawned
+  in, so respawning in the same repo is one Enter.
+- **Remote attach `host:port`** — `prefix+r` accepts a `:port` to reach a non-default harness daemon.
+
 ### Changed
 - Codebase reformatted with `cargo fmt` (drift from many hand-edits); CI now enforces it.
 - `ARCHITECTURE.md` updated to describe the winit + softbuffer native layer (the ratatui TUI is
