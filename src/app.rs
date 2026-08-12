@@ -115,7 +115,13 @@ impl App {
     /// re-attached (same identity, same grid). Runs from the main loop at a throttled rate so a
     /// temporarily-unreachable daemon retries rather than spinning. Local PTY tabs are no-ops.
     pub fn reconnect_sweep(&mut self) {
-        if self.tabs.is_empty() || std::time::Instant::now() < self.next_reconnect {
+        self.reconnect_sweep_refresh();
+    }
+
+    /// The throttled sweep: reconnect dead tabs and refresh the fleet/link-health status so the
+    /// status line shows a live tunnel badge. Shared so the native loop calls one entry point.
+    pub fn reconnect_sweep_refresh(&mut self) {
+        if std::time::Instant::now() < self.next_reconnect {
             return;
         }
         self.next_reconnect = std::time::Instant::now() + std::time::Duration::from_secs(5);
@@ -130,6 +136,10 @@ impl App {
                     }
                 }
             }
+        }
+        // Refresh link-health + fleet state used by the status-line badge and the fleet overlay.
+        if let Ok(st) = crate::harness::HarnessClient::local().status() {
+            self.fleet = st;
         }
     }
 

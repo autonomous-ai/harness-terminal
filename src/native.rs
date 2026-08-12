@@ -349,6 +349,10 @@ impl Application {
             let head = s.meta.name.clone().unwrap_or_else(|| s.meta.engine.clone());
             info = format!(" {} · {} · {} · [{} {}]", s.meta.host, head, live, s.kind(), link);
         }
+        // Link-health badge for the whole fleet (refreshed on the throttled reconnect sweep): a
+        // diver wants to know the e2ee tunnel to the harness daemon is up without opening the panel.
+        let tunnel = if self.app.fleet.connected { "● tunnel up" } else { "○ tunnel down" };
+        info = format!("  {} · {}", tunnel, info);
         // When the viewport is scrolled back from the live bottom, say so — a dead giveaway that
         // keys won't take you to fresh output until you press Escape (or the b key).
         if self.scrolled {
@@ -1417,7 +1421,9 @@ impl ApplicationHandler for Application {
     }
 
     fn about_to_wait(&mut self, _event_loop: &ActiveEventLoop) {
-        self.app.reconnect_sweep();
+        // Reconnect_sweep is throttled internally, so piggyback a cheap link-health refresh on it:
+        // a periodic ping to the local harness daemon keeps the status-line tunnel badge current.
+        self.app.reconnect_sweep_refresh();
         if let Some(w) = &self.window {
             w.request_redraw();
         }
