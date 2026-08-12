@@ -2830,13 +2830,18 @@ impl Application {
             .map(|c| c.c)
             .collect();
         drop(g);
-        let word = expand_click_word(&line_text, col);
-        if word.is_empty() {
+        // Prefer the detected URL at the clicked cell; fall back to the historical "word under the
+        // cursor" (which covers relative file paths like `src/main.rs`).
+        let target = crate::links::url_span(&line_text, col)
+            .map(|s| s.as_str(&line_text).to_owned())
+            .filter(|s| !s.is_empty())
+            .unwrap_or_else(|| expand_click_word(&line_text, col).to_owned());
+        if target.is_empty() {
             return;
         }
         // Shell it through `open`: macOS routes `http(s)://…` to the browser and a relative path to
         // a text editor (XDG on Linux needs a different incantation; we're the mac build today).
-        let _ = std::process::Command::new("open").arg(word).spawn();
+        let _ = std::process::Command::new("open").arg(&target).spawn();
     }
 
     fn mouse_press(&mut self, x: f64, y: f64) {

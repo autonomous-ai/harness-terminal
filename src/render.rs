@@ -7,6 +7,7 @@
 
 use std::collections::HashMap;
 
+use crate::links::{self, UrlSpan};
 use ab_glyph::{Font as _, FontArc, Glyph as AbsGlyph, PxScale, ScaleFont as _};
 use alacritty_terminal::grid::Dimensions;
 use alacritty_terminal::index::{Column, Line};
@@ -409,6 +410,49 @@ pub fn draw_grid(
     const HIT_FG: (u8, u8, u8) = (0x00, 0x00, 0x00);
     const HIT_BG: (u8, u8, u8) = (0xff, 0xd2, 0x00);
     const FOCUS_BG: (u8, u8, u8) = (0xff, 0x99, 0x00);
+    // Detected-link tint: a light blue (distinct from the default fg) so clickable URLs read as
+    // links. The underline beneath them is drawn in whatever foreground the cell already resolves to.
+    const LINK_FG: (u8, u8, u8) = (0x5c, 0xb8, 0xff);
+
+    // Pre-pass: detect the URL span in each *visible* row once, before drawing any cell, so link
+    // detection is O(rows) per frame rather than O(cells) and runs only on rows being drawn.
+    // Rows are visited in screen order (row 0..screen_lines), each row's text collected once. A URL
+    // that wraps across grid rows is rendered as one contiguous span per row — the common case of a
+    // single-line URL shows all its cells, and a wrapped one is per-row segments.
+    let mut url_for_row: HashMap<i32, Vec<UrlSpan>> = HashMap::new();
+    let wanted_rows: Vec<(i32, String)> = term
+        .grid()
+        .display_iter()
+        .filter_map(|idx| {
+            let row = idx.point.line.0;
+            (row >= 0 && (idx.point.column.0 as usize) < cols).then(|| (row, idx.cell.c))
+        })
+        .fold(Vec::new(), |mut acc, (row, c)| {
+            if let Some((last, last_c)) = acc.last_mut() {
+                if *last == row {
+                    last_c.push(c);
+                    return acc;
+                }
+            }
+            acc.push((row, c.to_string()));
+            acc
+        });
+    for (row, text) in &wanted_rows {
+        // Detect every URL span in the row (start-of-line and scheme URLs), deduplicated.
+        let mut spans = Vec::new();
+        let mut i = 0usize;
+        while i < text.len() {
+            if let Some(sp) = links::url_span(text, i) {
+                if sp.end > i && !spans.iter().any(|p: &UrlSpan| p.start == sp.start) {
+                    spans.push(sp);
+                }
+                i = sp.end.max(i + 1);
+            } else {
+                i += 1;
+            }
+        }
+        url_for_row.insert(*row, spans);
+    }
 
     // Iterate the grid in *display* order (rows scrolled into the viewport), so a non-zero
     // `display_offset` (history scrollback) renders correctly rather than the raw storage lines.
@@ -437,6 +481,10 @@ pub fn draw_grid(
         let in_sel = sel.map(|s| s.contains(idx.point)).unwrap_or(false);
         // Is this the copy-mode read cursor? (line, col) grid coords, drawn as a green block below.
         let is_copy_cursor = copy.is_some_and(|(l, c)| row == l && col == c);
+        // Is this cell part of a detected URL? (link spans are byte offsets == column for ASCII URLs.)
+        let in_link = url_for_row
+            .get(&row)
+            .is_some_and(|spans| spans.iter().any(|s| col >= s.start && col < s.end));
 
         // Resolve effective fg/bg, applying SGR inverse first (so cursor/match still take visual
         // precedence while keeping the right base colors to swap).
@@ -525,6 +573,12 @@ pub fn draw_grid(
         }
         // SGR dim: scale the foreground toward black (kept simple: halve toward black).
         let (mut r, mut g, mut b) = fg.to_rgb(colors);
+        // Detected link: tint the glyph toward link-blue so it reads as clickable.
+        if in_link {
+            r = (r as u16 * 2 / 3 + LINK_FG.0 as u16 / 3) as u8;
+            g = (g as u16 * 2 / 3 + LINK_FG.1 as u16 / 3) as u8;
+            b = (b as u16 * 2 / 3 + LINK_FG.2 as u16 / 3) as u8;
+        }
         if cell.flags.contains(Flags::DIM) {
             r = (r as u16 / 2) as u8;
             g = (g as u16 / 2) as u8;
@@ -562,12 +616,14 @@ pub fn draw_grid(
         let line_px = (cell_h as usize / 10).max(1);
         let underline_y = y0 as usize + cell_h as usize - line_px - (cell_h as usize / 12);
         let strike_y = y0 as usize + (cell_h as usize * 5) / 12;
-        let rule_color =
-            if cell.flags.contains(Flags::UNDERLINE) || cell.flags.contains(Flags::STRIKEOUT) {
-                Some((r, g, b))
-            } else {
-                None
-            };
+        let rule_color = if in_link
+            || cell.flags.contains(Flags::UNDERLINE)
+            || cell.flags.contains(Flags::STRIKEOUT)
+        {
+            Some((r, g, b))
+        } else {
+            None
+        };
         if let Some((rr, gg, bb)) = rule_color {
             let x0u = x0 as usize;
             let mut draw_rule = |yb: usize| {
@@ -581,7 +637,7 @@ pub fn draw_grid(
                     }
                 }
             };
-            if cell.flags.contains(Flags::UNDERLINE) {
+            if in_link || cell.flags.contains(Flags::UNDERLINE) {
                 draw_rule(underline_y);
             }
             if cell.flags.contains(Flags::STRIKEOUT) {
