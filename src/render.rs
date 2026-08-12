@@ -77,40 +77,98 @@ impl Default for PaletteColor {
 const DEFAULT_FG: (u8, u8, u8) = (0xea, 0xea, 0xea);
 const DEFAULT_BG: (u8, u8, u8) = (0, 0, 0);
 
+/// Classic 16-color ANSI palette. Matches the terminal's default Config::default() colors so we
+/// stay consistent with the local PTY tabs. A config theme can override individual entries.
+const ANSI: [(u8, u8, u8); 16] = [
+    (0, 0, 0),       // black
+    (205, 49, 49),   // red
+    (13, 188, 121),  // green
+    (229, 229, 16),  // yellow
+    (36, 114, 200),  // blue
+    (188, 63, 188),  // magenta
+    (17, 168, 205),  // cyan
+    (229, 229, 229), // white
+    (102, 102, 102), // bright black
+    (241, 76, 76),   // bright red
+    (35, 209, 139),  // bright green
+    (245, 245, 67),  // bright yellow
+    (59, 142, 234),  // bright blue
+    (214, 112, 214), // bright magenta
+    (41, 184, 219),  // bright cyan
+    (255, 255, 255), // bright white
+];
+
+/// The resolved runtime palette the renderer actually paints with, built from an optional
+/// `config::Theme` at startup. `Default` reproduces the exact built-in colors, so a config with no
+/// `[theme]` block renders identically to before theming existed.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct Colors {
+    /// Default foreground (normal text).
+    pub fg: (u8, u8, u8),
+    /// Default background.
+    pub bg: (u8, u8, u8),
+    /// Underline/beam cursor color.
+    pub cursor: (u8, u8, u8),
+    /// Text-selection highlight background.
+    pub selection: (u8, u8, u8),
+    /// Copy-mode read cursor block color.
+    pub copy_cursor: (u8, u8, u8),
+    /// The 16-color ANSI palette.
+    pub ansi: [(u8, u8, u8); 16],
+}
+
+impl Default for Colors {
+    fn default() -> Self {
+        Colors {
+            fg: DEFAULT_FG,
+            bg: DEFAULT_BG,
+            cursor: DEFAULT_FG,
+            selection: (0x26, 0x4f, 0x8c),
+            copy_cursor: (0x1e, 0xff, 0x8a),
+            ansi: ANSI,
+        }
+    }
+}
+
+impl From<&crate::config::Theme> for Colors {
+    fn from(t: &crate::config::Theme) -> Self {
+        let c = Colors::default();
+        let set = |v: Option<[u8; 3]>, def: (u8, u8, u8)| match v {
+            Some([r, g, b]) => (r, g, b),
+            None => def,
+        };
+        let mut ansi = c.ansi;
+        if let Some(overrides) = &t.ansi {
+            for (i, v) in overrides.iter().enumerate() {
+                if let Some([r, g, b]) = v {
+                    ansi[i] = (*r, *g, *b);
+                }
+            }
+        }
+        Colors {
+            fg: set(t.foreground, c.fg),
+            bg: set(t.background, c.bg),
+            cursor: set(t.cursor, c.cursor),
+            selection: set(t.selection, c.selection),
+            copy_cursor: set(t.copy_cursor, c.copy_cursor),
+            ansi,
+        }
+    }
+}
+
 impl PaletteColor {
-    /// Convert to concrete RGB using the terminal's theme. A simple built-in palette for now;
-    /// a config-provided theme slots in here later.
-    pub fn to_rgb(&self) -> (u8, u8, u8) {
-        // Classic 16-color ANSI palette. Matches the terminal's default Config::default() colors
-        // so we stay consistent with the local PTY tabs.
-        const ANSI: [(u8, u8, u8); 16] = [
-            (0, 0, 0),       // black
-            (205, 49, 49),   // red
-            (13, 188, 121),  // green
-            (229, 229, 16),  // yellow
-            (36, 114, 200),  // blue
-            (188, 63, 188),  // magenta
-            (17, 168, 205),  // cyan
-            (229, 229, 229), // white
-            (102, 102, 102), // bright black
-            (241, 76, 76),   // bright red
-            (35, 209, 139),  // bright green
-            (245, 245, 67),  // bright yellow
-            (59, 142, 234),  // bright blue
-            (214, 112, 214), // bright magenta
-            (41, 184, 219),  // bright cyan
-            (255, 255, 255), // bright white
-        ];
+    /// Convert to concrete RGB using the resolved theme palette.
+    pub fn to_rgb(&self, colors: &Colors) -> (u8, u8, u8) {
         match *self {
             PaletteColor::Spec { r, g, b } => (r, g, b),
-            PaletteColor::Indexed(i) => color256(i),
+            PaletteColor::Indexed(i) => color256(i, colors),
             PaletteColor::Named { bright, index } => {
                 let i = if bright {
                     (index as usize) + 8
                 } else {
                     index as usize
                 };
-                ANSI[i.min(15)]
+                colors.ansi[i.min(15)]
             }
         }
     }
@@ -119,8 +177,9 @@ impl PaletteColor {
 /// Map the alacritty cell color enum into our stable `PaletteColor`.
 ///
 /// `NamedColor` carries both the 16 ANSI colors (discriminants 0–15) and specials (Foreground=256,
-/// Background, Dim*, …). We keep only the ANSI 0–15; the specials are folded to the theme defaults.
-pub fn cell_color(c: &ansi::Color) -> PaletteColor {
+/// Background, Dim*, …). We keep only the ANSI 0–15; the specials are folded to the theme defaults
+/// (fg/bg), so `colors` resolves those.
+pub fn cell_color(c: &ansi::Color, colors: &Colors) -> PaletteColor {
     match c {
         ansi::Color::Named(n) => {
             use ansi::NamedColor as N;
@@ -199,20 +258,20 @@ pub fn cell_color(c: &ansi::Color) -> PaletteColor {
                 | N::DimMagenta
                 | N::DimCyan
                 | N::DimWhite => PaletteColor::Spec {
-                    r: DEFAULT_FG.0,
-                    g: DEFAULT_FG.1,
-                    b: DEFAULT_FG.2,
+                    r: colors.fg.0,
+                    g: colors.fg.1,
+                    b: colors.fg.2,
                 },
                 N::Background => PaletteColor::Spec {
-                    r: DEFAULT_BG.0,
-                    g: DEFAULT_BG.1,
-                    b: DEFAULT_BG.2,
+                    r: colors.bg.0,
+                    g: colors.bg.1,
+                    b: colors.bg.2,
                 },
                 // Foreground and anything unknown → default foreground.
                 _ => PaletteColor::Spec {
-                    r: DEFAULT_FG.0,
-                    g: DEFAULT_FG.1,
-                    b: DEFAULT_FG.2,
+                    r: colors.fg.0,
+                    g: colors.fg.1,
+                    b: colors.fg.2,
                 },
             }
         }
@@ -226,8 +285,16 @@ pub fn cell_color(c: &ansi::Color) -> PaletteColor {
 }
 
 /// Render one cell's worth of background into the buffer (fill `w`×`h` px at origin (x0,y0)).
-fn paint_bg(buf: &mut Framebuffer, x0: usize, y0: usize, w: usize, h: usize, c: PaletteColor) {
-    let (r, g, b) = c.to_rgb();
+fn paint_bg(
+    buf: &mut Framebuffer,
+    x0: usize,
+    y0: usize,
+    w: usize,
+    h: usize,
+    c: PaletteColor,
+    colors: &Colors,
+) {
+    let (r, g, b) = c.to_rgb(colors);
     let p = argb(255, r, g, b);
     for dy in 0..h {
         for dx in 0..w {
@@ -326,6 +393,7 @@ pub fn draw_grid(
     cell_h: u32,
     font_px: u32,
     cache: &mut GlyphCache,
+    colors: &Colors,
     find: Option<Find>,
     matches: &[Find],
     sel: Option<&alacritty_terminal::selection::SelectionRange>,
@@ -337,14 +405,10 @@ pub fn draw_grid(
     // When scrolled into history the cursor should not draw (it lives off-screen).
     let scrolled = term.grid().display_offset() > 0;
     // Search-highlight colors: vivid yellow for ordinary matches, bright orange for the focused one
-    // (black text pops on both).
+    // (black text pops on both). Kept as fixed built-ins (not part of the theme).
     const HIT_FG: (u8, u8, u8) = (0x00, 0x00, 0x00);
     const HIT_BG: (u8, u8, u8) = (0xff, 0xd2, 0x00);
     const FOCUS_BG: (u8, u8, u8) = (0xff, 0x99, 0x00);
-    // Copy-mode cursor: a bright green block so the user can see exactly where selection starts.
-    const COPY_CURSOR: (u8, u8, u8) = (0x1e, 0xff, 0x8a);
-    // Text-selection highlight (soft blue background).
-    const SEL_BG: (u8, u8, u8) = (0x26, 0x4f, 0x8c);
 
     // Iterate the grid in *display* order (rows scrolled into the viewport), so a non-zero
     // `display_offset` (history scrollback) renders correctly rather than the raw storage lines.
@@ -377,21 +441,21 @@ pub fn draw_grid(
         // Resolve effective fg/bg, applying SGR inverse first (so cursor/match still take visual
         // precedence while keeping the right base colors to swap).
         let mut fg = if cell.flags.contains(Flags::INVERSE) {
-            cell_color(&cell.bg)
+            cell_color(&cell.bg, colors)
         } else {
-            cell_color(&cell.fg)
+            cell_color(&cell.fg, colors)
         };
         let mut bgc = if cell.flags.contains(Flags::INVERSE) {
-            cell_color(&cell.fg)
+            cell_color(&cell.fg, colors)
         } else {
-            cell_color(&cell.bg)
+            cell_color(&cell.bg, colors)
         };
-        // Text selection: soft blue background, keep the foreground for the glyph text.
+        // Text selection: themed highlight background, keep the foreground for the glyph text.
         if in_sel {
             bgc = PaletteColor::Spec {
-                r: SEL_BG.0,
-                g: SEL_BG.1,
-                b: SEL_BG.2,
+                r: colors.selection.0,
+                g: colors.selection.1,
+                b: colors.selection.2,
             };
         }
         // Search matches: force the yellow highlight regardless of inverse/selection. The focused
@@ -428,21 +492,21 @@ pub fn draw_grid(
         // a thinner bar and leave the cell background intact, colored by the cursor color.
         let is_bar = matches!(cursor_shape, CursorShape::Underline | CursorShape::Beam);
         if is_cursor && matches!(cursor_shape, CursorShape::Block | CursorShape::HollowBlock) {
-            // Block cursor: fill with the effective foreground, draw the glyph in the bg color.
+            // Block cursor: fill with the effective foreground, draw the glyph in the themed bg.
             bgc = fg;
             fg = PaletteColor::Spec {
-                r: DEFAULT_BG.0,
-                g: DEFAULT_BG.1,
-                b: DEFAULT_BG.2,
+                r: colors.bg.0,
+                g: colors.bg.1,
+                b: colors.bg.2,
             };
         }
-        // Copy-mode cursor: fill the cell with the bright green read cursor and draw the glyph in
+        // Copy-mode cursor: fill the cell with the themed read cursor color and draw the glyph in
         // black so it's always legible, regardless of scroll/selection state.
         if is_copy_cursor {
             bgc = PaletteColor::Spec {
-                r: COPY_CURSOR.0,
-                g: COPY_CURSOR.1,
-                b: COPY_CURSOR.2,
+                r: colors.copy_cursor.0,
+                g: colors.copy_cursor.1,
+                b: colors.copy_cursor.2,
             };
             fg = PaletteColor::Spec { r: 0, g: 0, b: 0 };
         }
@@ -454,12 +518,13 @@ pub fn draw_grid(
             cell_w as usize,
             cell_h as usize,
             bgc,
+            colors,
         );
         if cell.c == ' ' {
             continue;
         }
         // SGR dim: scale the foreground toward black (kept simple: halve toward black).
-        let (mut r, mut g, mut b) = fg.to_rgb();
+        let (mut r, mut g, mut b) = fg.to_rgb(colors);
         if cell.flags.contains(Flags::DIM) {
             r = (r as u16 / 2) as u8;
             g = (g as u16 / 2) as u8;
@@ -527,7 +592,7 @@ pub fn draw_grid(
         // Bar cursors (underline / beam): draw over the cell after its glyph+rules, in the cursor
         // fg color. Underline = a bar at the bottom; beam = a vertical bar on the left edge.
         if is_cursor && is_bar {
-            let (cr, cg, cb) = fg.to_rgb();
+            let (cr, cg, cb) = fg.to_rgb(colors);
             match cursor_shape {
                 CursorShape::Underline => {
                     let barw = x0 as usize + cell_w as usize;
@@ -685,14 +750,14 @@ pub fn font_path() -> String {
     "/System/Library/Fonts/SFNSMono.ttf".to_string()
 }
 
-/// 256-color palette lookup (standard xterm cube/greyscale).
-fn color256(i: u8) -> (u8, u8, u8) {
+/// 256-color palette lookup (standard xterm cube/greyscale). The first 16 use the themed palette.
+fn color256(i: u8, colors: &Colors) -> (u8, u8, u8) {
     if i < 16 {
         return PaletteColor::Named {
             bright: i > 7,
             index: i & 7,
         }
-        .to_rgb();
+        .to_rgb(colors);
     }
     if i < 232 {
         let n = i - 16;
@@ -722,6 +787,56 @@ mod tests {
         assert_eq!(argb(255, 10, 20, 30), 0xff0a141e);
     }
 
+    /// The default theme reproduces the exact pre-theming colors, so behavior is unchanged when no
+    /// `[theme]` block is configured.
+    #[test]
+    fn default_theme_matches_built_in_colors() {
+        let c = Colors::default();
+        assert_eq!(c.fg, (0xea, 0xea, 0xea));
+        assert_eq!(c.bg, (0, 0, 0));
+        assert_eq!(c.selection, (0x26, 0x4f, 0x8c));
+        assert_eq!(c.copy_cursor, (0x1e, 0xff, 0x8a));
+        assert_eq!(c.ansi[1], (205, 49, 49)); // red
+        assert_eq!(c.ansi[9], (241, 76, 76)); // bright red
+        assert_eq!(c.ansi[15], (255, 255, 255)); // bright white
+                                                 // Spec and index lookups yield the exact palette colors.
+        let named = PaletteColor::Named {
+            bright: false,
+            index: 2,
+        };
+        assert_eq!(named.to_rgb(&c), (13, 188, 121)); // green
+        let named_bright = PaletteColor::Named {
+            bright: true,
+            index: 2,
+        };
+        assert_eq!(named_bright.to_rgb(&c), (35, 209, 139)); // bright green
+    }
+
+    /// A configured theme overrides foreground/background and individual ANSI entries; unset ones
+    /// keep the built-in defaults, and the unknown/Dim specials fold to the themed fg.
+    #[test]
+    fn theme_overrides_resolve() {
+        use crate::config::Theme;
+        let t = Theme {
+            foreground: Some([240, 240, 240]),
+            background: Some([5, 5, 5]),
+            ansi: Some({
+                let mut a = [None; 16];
+                a[1] = Some([200, 0, 0]); // override red
+                Some(a).unwrap()
+            }),
+            ..Default::default()
+        };
+        let c = Colors::from(&t);
+        assert_eq!(c.fg, (240, 240, 240));
+        assert_eq!(c.bg, (5, 5, 5));
+        assert_eq!(c.ansi[1], (200, 0, 0)); // overridden
+        assert_eq!(c.ansi[2], (13, 188, 121)); // untouched built-in green
+                                               // Dim red folds to the themed foreground.
+        let dim = cell_color(&ansi::Color::Named(ansi::NamedColor::DimRed), &c);
+        assert_eq!(dim.to_rgb(&c), (240, 240, 240));
+    }
+
     #[test]
     fn framebuffer_bounds() {
         let mut b = Framebuffer::new(4, 3);
@@ -733,8 +848,8 @@ mod tests {
 
     #[test]
     fn color256_map() {
-        assert_eq!(color256(0), (0, 0, 0));
-        assert_eq!(color256(15), (255, 255, 255));
+        assert_eq!(color256(0, &Colors::default()), (0, 0, 0));
+        assert_eq!(color256(15, &Colors::default()), (255, 255, 255));
     }
 
     /// Full render path, headless: feed a real `Term` ANSI (colors + text), render it into a
@@ -766,7 +881,19 @@ mod tests {
         let mut cache = GlyphCache::load();
         {
             let g = term.lock();
-            draw_grid(&mut fb, &g, 9, 18, 12, &mut cache, None, &[], None, None);
+            draw_grid(
+                &mut fb,
+                &g,
+                9,
+                18,
+                12,
+                &mut cache,
+                &Colors::default(),
+                None,
+                &[],
+                None,
+                None,
+            );
         }
 
         // At least some pixel is non-background (glyphs drawn).
@@ -832,7 +959,19 @@ mod tests {
         let mut cache = GlyphCache::load();
         {
             let g = term.lock();
-            draw_grid(&mut fb, &g, 9, 18, 12, &mut cache, None, &[], None, None);
+            draw_grid(
+                &mut fb,
+                &g,
+                9,
+                18,
+                12,
+                &mut cache,
+                &Colors::default(),
+                None,
+                &[],
+                None,
+                None,
+            );
         }
         let non_blank = fb.pixels.iter().filter(|&&p| p != 0x0000_0000).count();
         assert!(
@@ -896,7 +1035,19 @@ mod tests {
         let mut cache = GlyphCache::load();
         {
             let g = term.lock();
-            draw_grid(&mut fb, &g, 9, 18, 12, &mut cache, None, &[], None, None);
+            draw_grid(
+                &mut fb,
+                &g,
+                9,
+                18,
+                12,
+                &mut cache,
+                &Colors::default(),
+                None,
+                &[],
+                None,
+                None,
+            );
         }
         // Cell (0,0) bg should be green-ish (the original fg became the bg).
         let cell0 = fb.pixels[0];
@@ -934,7 +1085,19 @@ mod tests {
         let mut fb = Framebuffer::new(5 * 9, 18);
         let mut cache = GlyphCache::load();
         let g = term.lock();
-        draw_grid(&mut fb, &g, 9, 18, 12, &mut cache, None, &[], None, None);
+        draw_grid(
+            &mut fb,
+            &g,
+            9,
+            18,
+            12,
+            &mut cache,
+            &Colors::default(),
+            None,
+            &[],
+            None,
+            None,
+        );
         drop(g);
 
         let cell_x = 0;
@@ -978,6 +1141,7 @@ mod tests {
             18,
             12,
             &mut cache,
+            &Colors::default(),
             None,
             &[],
             None,

@@ -20,3 +20,20 @@ default_engine = "claude"
 # Directory NEW local (PTY) tabs open in, overriding wherever the binary was
 # launched. Leave unset to use the app's cwd (or set a per-tab dir in prefix+n).
 # start_cwd = "/Users/you/dev/myrepo"
+
+# Optional color theme. Every entry is optional — unset values keep the built-in
+# palette, so a partial block works. Colors are [r, g, b], each 0-255.
+# [theme]
+# foreground = [234, 234, 234]
+# background = [0, 0, 0]
+# cursor = [234, 234, 234]          # underline/beam cursor
+# selection = [38, 79, 140]         # text-selection highlight background
+# copy_cursor = [30, 255, 138]      # copy-mode read cursor block
+#
+# Override individual ANSI 16-colors. Index order: 0 black, 1 red, 2 green,
+# 3 yellow, 4 blue, 5 magenta, 6 cyan, 7 white, then bright black..bright white
+# at 8-15. Only the entries you list change; the rest keep the defaults.
+# [theme.ansi]
+# 0 = [0, 0, 0]
+# 1 = [205, 49, 49]
+# 9 = [241, 76, 76]

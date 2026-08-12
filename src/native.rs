@@ -91,6 +91,8 @@ struct Application {
     cell_h: u32,
     app: App,
     cache: GlyphCache,
+    /// Resolved render palette (built-in colors unless a `[theme]` block is configured).
+    colors: crate::render::Colors,
     prefix_down: bool,
     mods: ModifiersState,
     /// The tab that was active before the current one, so prefix+l can flip back to it (tmux
@@ -192,7 +194,12 @@ struct Application {
 
 impl Application {
     fn new(app: App) -> Self {
-        let base_font = crate::config::Config::load().font_px as f32;
+        let cfg = crate::config::Config::load();
+        let base_font = cfg.font_px as f32;
+        let colors = match &cfg.theme {
+            Some(t) => crate::render::Colors::from(t),
+            None => crate::render::Colors::default(),
+        };
         let tab_count = app.tabs.len();
         let seen_history = vec![usize::MAX; tab_count];
         // Bring back any tabs the user muted last session (prefix+m) so they stay muted across a
@@ -219,6 +226,7 @@ impl Application {
             cell_h: 18,
             app,
             cache: GlyphCache::load(),
+            colors,
             prefix_down: false,
             mods: ModifiersState::default(),
             last_active: None,
@@ -589,6 +597,7 @@ impl Application {
                 self.cell_h,
                 self.font_px,
                 &mut self.cache,
+                &self.colors,
                 self.find_hit,
                 &self.find_all,
                 sel.as_ref(),

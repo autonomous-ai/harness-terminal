@@ -5,7 +5,7 @@
 //! support what's cheap to wire and genuinely useful pre-1.0 — the font size a fresh window opens
 //! at (overridden by later Ctrl+= / Ctrl+-), and the engine the new-session picker starts with.
 
-use serde::{Deserialize, Serialize};
+use serde::{Deserialize, Deserializer, Serialize};
 
 /// The whole config file. All fields optional with defaults: `Config::default()` is what you get
 /// when the file is absent or unparseable.
@@ -30,6 +30,91 @@ pub struct Config {
     /// binary was launched. Absent/empty = use the app's current working directory.
     #[serde(default)]
     pub start_cwd: Option<String>,
+    /// Optional color theme. Absent (or a broken `[theme]` block) keeps the built-in palette.
+    #[serde(default)]
+    pub theme: Option<Theme>,
+}
+
+/// A user-configurable color theme. Every field is optional; unset entries keep the built-in
+/// default palette, so a partial `[theme]` block works. Colors are `[r, g, b]`, each 0–255.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(default)]
+pub struct Theme {
+    /// Default foreground (normal text). Falls back to the light `0xEAEAEA`.
+    pub foreground: Option<[u8; 3]>,
+    /// Default background. Falls back to black.
+    pub background: Option<[u8; 3]>,
+    /// Cursor color used for underline/beam cursors. Falls back to the foreground.
+    pub cursor: Option<[u8; 3]>,
+    /// Text-selection highlight background. Falls back to soft blue.
+    pub selection: Option<[u8; 3]>,
+    /// Copy-mode read cursor block color. Falls back to bright green.
+    pub copy_cursor: Option<[u8; 3]>,
+    /// Overrides for the 16-color ANSI palette. Only `Some` slots override the built-in defaults;
+    /// the rest keep the classic palette. Index order: black, red, green, yellow, blue, magenta,
+    /// cyan, white, bright black, bright red, … bright white.
+    ///
+    /// Accepts either a sparse `[theme.ansi]` map (`0 = [r,g,b]`, …) or a full inline 16-entry
+    /// array. Unset slots default to `None` (keep the built-in color).
+    #[serde(default, deserialize_with = "deserialize_ansi")]
+    pub ansi: Option<[Option<[u8; 3]>; 16]>,
+}
+
+/// Deserialize `ansi` from either a sparse map (`0 = [r,g,b]`, `1 = …`, up to 15) or a full
+/// 16-element array. Only present slots are written; the rest stay `None` for the built-in palette.
+fn deserialize_ansi<'de, D>(d: D) -> Result<Option<[Option<[u8; 3]>; 16]>, D::Error>
+where
+    D: Deserializer<'de>,
+{
+    struct V;
+    impl<'de> serde::de::Visitor<'de> for V {
+        type Value = Option<[Option<[u8; 3]>; 16]>;
+        fn expecting(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
+            f.write_str("a map of index -> [r,g,b] or an array of 16 colors")
+        }
+        fn visit_map<A: serde::de::MapAccess<'de>>(
+            self,
+            mut map: A,
+        ) -> Result<Self::Value, A::Error> {
+            let mut arr = [None; 16];
+            while let Some((k, v)) = map.next_entry::<String, [u8; 3]>()? {
+                if let Ok(i) = k.parse::<usize>() {
+                    if i < 16 {
+                        arr[i] = Some(v);
+                    }
+                }
+            }
+            Ok(Some(arr))
+        }
+        fn visit_seq<A: serde::de::SeqAccess<'de>>(
+            self,
+            mut seq: A,
+        ) -> Result<Self::Value, A::Error> {
+            let mut arr = [None; 16];
+            let mut i = 0;
+            while let Some(v) = seq.next_element::<Option<[u8; 3]>>()? {
+                if i < 16 {
+                    arr[i] = v;
+                }
+                i += 1;
+            }
+            Ok(Some(arr))
+        }
+    }
+    Ok(d.deserialize_map(V)?)
+}
+
+impl Default for Theme {
+    fn default() -> Self {
+        Theme {
+            foreground: None,
+            background: None,
+            cursor: None,
+            selection: None,
+            copy_cursor: None,
+            ansi: None,
+        }
+    }
 }
 
 impl Default for Config {
@@ -40,6 +125,7 @@ impl Default for Config {
             font_path: None,
             scrollback_cap: None,
             start_cwd: None,
+            theme: None,
         }
     }
 }
@@ -115,5 +201,69 @@ mod tests {
     fn malformed_toml_falls_back() {
         let c: Config = toml::from_str("font_px = ]bad").unwrap_or_default();
         assert_eq!(c.font_px, 14);
+    }
+
+    /// Absent `theme` -> default (built-in palette).
+    #[test]
+    fn absent_theme_is_none() {
+        let c: Config = toml::from_str("font_px = 14").unwrap();
+        assert_eq!(c.theme, None);
+    }
+
+    /// Partial theme: only foreground set; the rest keep their None (built-in defaults).
+    #[test]
+    fn partial_theme_parses() {
+        let c: Config = toml::from_str(
+            r#"
+            [theme]
+            foreground = [255, 0, 128]
+        "#,
+        )
+        .unwrap();
+        let t = c.theme.expect("theme should parse");
+        assert_eq!(t.foreground, Some([255, 0, 128]));
+        assert_eq!(t.background, None);
+        assert_eq!(t.cursor, None);
+        assert_eq!(t.ansi, None);
+    }
+
+    /// Full theme with ANSI overrides round-trips.
+    #[test]
+    fn full_theme_roundtrips() {
+        let src = r#"
+            [theme]
+            foreground = [250, 250, 250]
+            background = [10, 10, 10]
+            cursor = [0, 255, 0]
+            selection = [30, 40, 50]
+            copy_cursor = [255, 0, 255]
+
+            [theme.ansi]
+            0 = [0, 0, 0]
+            1 = [200, 0, 0]
+            9 = [255, 80, 80]
+            15 = [255, 255, 255]
+        "#;
+        let c: Config = toml::from_str(src).unwrap();
+        let t = c.theme.expect("theme should parse");
+        assert_eq!(t.foreground, Some([250, 250, 250]));
+        assert_eq!(t.background, Some([10, 10, 10]));
+        assert_eq!(t.cursor, Some([0, 255, 0]));
+        assert_eq!(t.selection, Some([30, 40, 50]));
+        assert_eq!(t.copy_cursor, Some([255, 0, 255]));
+        let ansi = t.ansi.expect("ansi should parse");
+        assert_eq!(ansi[0], Some([0, 0, 0]));
+        assert_eq!(ansi[1], Some([200, 0, 0]));
+        assert_eq!(ansi[2], None); // unset slot keeps built-in default
+        assert_eq!(ansi[9], Some([255, 80, 80]));
+        assert_eq!(ansi[15], Some([255, 255, 255]));
+    }
+
+    /// Malformed theme block falls back to defaults (never panics, theme stays as-typed or None).
+    #[test]
+    fn malformed_theme_falls_back() {
+        let c: Config = toml::from_str("[theme]\nforeground = [9999]\n").unwrap_or_default();
+        // A bad value type means the whole theme block is rejected; config itself must still parse.
+        assert!(c.font_px == 14);
     }
 }

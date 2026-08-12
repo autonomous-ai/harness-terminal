@@ -87,6 +87,17 @@ default_engine = "claude"   # engine the new-session picker starts on
 font_path = ""              # optional TTF/OTF monospace font
 scrollback_cap = 262144     # cap on persisted per-tab scrollback (bytes)
 start_cwd = ""              # dir new local tabs open in
+
+[theme]                     # optional: entries overrides, the rest keep defaults
+foreground = [234, 234, 234]
+background = [0, 0, 0]
+cursor = [234, 234, 234]    # underline/beam cursor
+selection = [38, 79, 140]   # text-selection highlight background
+copy_cursor = [30, 255, 138] # copy-mode read cursor block
+
+[theme.ansi]                # 0 black..7 white, 8-15 bright; only listed change
+0 = [0, 0, 0]
+1 = [205, 49, 49]
 ```
 
 Set `HARNESS_CONFIG_DIR` to override the config/persistence directory (useful for portable or CI
