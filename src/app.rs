@@ -27,6 +27,8 @@ pub enum Overlay {
     Help,
     /// Rename the active tab: type a name, Enter commits, Esc cancels.
     Rename,
+    /// Broadcast: type one line, Enter sends it to EVERY open session (with a trailing newline).
+    Broadcast,
 }
 
 pub struct App {

@@ -70,6 +70,7 @@ fn draw_frame(frame: &mut Frame, app: &mut App) {
         Overlay::Fleet => {} // native-only overlay; the TUI fallback ignores it.
         Overlay::Help => {} // native-only overlay; the TUI fallback ignores it.
         Overlay::Rename => {} // native-only overlay; the TUI fallback ignores it.
+        Overlay::Broadcast => {} // native-only overlay; the TUI fallback ignores it.
         Overlay::None => {}
     }
 }

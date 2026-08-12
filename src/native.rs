@@ -60,6 +60,9 @@ struct Application {
     find_query: String,
     /// In-progress rename for the active tab ("" when the Rename overlay is closed).
     rename_query: String,
+    /// In-progress broadcast line ("" when the Broadcast overlay is closed). Enter sends it to every
+    /// session; backspace/escape edit/cancel it.
+    broadcast_query: String,
     /// The currently-focused search match (absolute line, col, width); recomputed on each query
     /// change / Enter and passed to draw_grid for highlighting.
     find_hit: Option<crate::render::Find>,
@@ -138,6 +141,7 @@ impl Application {
             last_active: None,
             find_query: String::new(),
             rename_query: String::new(),
+            broadcast_query: String::new(),
             find_hit: None,
             find_all: Vec::new(),
             find_index: 0,
@@ -489,7 +493,7 @@ impl Application {
             info += &format!("  ▾ {pct}% (Esc/b to bottom)");
         }
         draw_text(fb, &mut self.cache, &info, 6, status_base, self.font_px, CHROME_FG);
-        let hints = " prefix+/ palette  prefix+h search all  prefix+n new  prefix+r remote  prefix+s fleet  prefix+o busy  prefix+[ copy  prefix+p paste  prefix+l last  prefix+? help  prefix+q quit ";
+        let hints = " prefix+/ palette  prefix+a broadcast  prefix+h search all  prefix+n new  prefix+r remote  prefix+s fleet  prefix+o busy  prefix+[ copy  prefix+p paste  prefix+l last  prefix+? help  prefix+q quit ";
         let hw = draw_text(fb, &mut self.cache, hints, 6, status_base, self.font_px, CHROME_DIM);
         // Move the hint to the right edge by re-drawing after clearing a wide column is complex;
         // simplest right-align: draw hints over the info end offset. We draw at the right edge:
@@ -539,6 +543,7 @@ impl Application {
             Overlay::Fleet => self.render_fleet(fb),
             Overlay::Help => self.render_help(fb),
             Overlay::Rename => self.render_rename(fb),
+            Overlay::Broadcast => self.render_broadcast(fb),
             Overlay::None => {}
         }
     }
@@ -671,7 +676,7 @@ impl Application {
     fn render_help(&mut self, fb: &mut Framebuffer) {
         let (base_y, line_px) = self.overlay_base_y();
         draw_text(fb, &mut self.cache, "  harness-terminal keys  ", 32, base_y, self.font_px, WHITE);
-        let bindings: [(&str, &str); 22] = [
+        let bindings: [(&str, &str); 23] = [
             ("Ctrl+Space", "prefix (then a command)"),
             ("prefix /", "palette: jump to any session"),
             ("prefix n", "new session (engine picker)"),
@@ -682,6 +687,7 @@ impl Application {
             ("prefix h", "search all sessions (fleet)"),
             ("prefix [", "copy mode"),
             ("prefix ,", "rename the active tab"),
+            ("prefix a", "broadcast a line to all sessions"),
             ("prefix ?", "this help"),
             ("prefix p", "paste clipboard (bracketed)"),
             ("1-9 / Tab", "switch tab"),
@@ -959,6 +965,24 @@ impl Application {
         draw_text(fb, &mut self.cache, &prompt, 6, status_base, self.font_px, WHITE);
     }
 
+    /// Render the broadcast overlay: a live count of target sessions, the in-progress line, and a
+    /// dim list of everyone about to receive it (their engine/name @ host labels).
+    fn render_broadcast(&mut self, fb: &mut Framebuffer) {
+        let (base_y, line_px) = self.overlay_base_y();
+        let n = self.app.tabs.len();
+        let prompt = if self.broadcast_query.is_empty() {
+            format!("  send line to {} session{} (type …, Enter=broadcast, Esc=cancel)  ", n, if n == 1 { "" } else { "s" })
+        } else {
+            format!("  broadcast to {} session{}: {} ▏", n, if n == 1 { "" } else { "s" }, self.broadcast_query)
+        };
+        draw_text(fb, &mut self.cache, &prompt, 32, base_y, self.font_px, WHITE);
+        for (row, s) in self.app.tabs.iter().enumerate().take(20) {
+            let name = s.meta.name.clone().unwrap_or_else(|| s.meta.engine.clone());
+            let line = format!("  {} @ {}", name, s.meta.host);
+            draw_text(fb, &mut self.cache, &line, 32, base_y + (row + 2) * line_px, self.font_px, CHROME_DIM);
+        }
+    }
+
     /// Handle a key while in copy mode: vim-style motion keys move the read cursor; `v` starts
     /// (or re-anchors) a selection; Enter/Space copies and exits; Esc/Q exits; g/G go to top/bottom.
     fn handle_copy_key(&mut self, key: &Key, _mods: &ModifiersState) {
@@ -1142,6 +1166,12 @@ impl Application {
                 "o" => self.next_busy(),
                 "l" => self.last_window(),
                 "p" => self.paste_clipboard(),
+                "a" => {
+                    // Broadcast one line to every open session. Starts with an empty query so the
+                    // user types (or re-enters) the command line to fan out via Enter.
+                    self.broadcast_query.clear();
+                    self.app.overlay = Overlay::Broadcast;
+                }
                 "x" => { close_tab(&mut self.app); }
                 "d" => self.copy_whole_scrollback(),
                 "g" => { scroll_active(self, 20); if let Some(s) = self.app.active_session() { s.set_scrolled(true); } }
@@ -1339,6 +1369,32 @@ impl Application {
                 }
                 return;
             }
+            Overlay::Broadcast => {
+                match key {
+                    Key::Character(c) => { self.broadcast_query.push_str(c); }
+                    Key::Named(n) => match n {
+                        winit::keyboard::NamedKey::Enter => {
+                            // Fan the line out to EVERY session (active one included), then close.
+                            let bytes = broadcast_bytes(&self.broadcast_query);
+                            if !bytes.is_empty() {
+                                for s in &self.app.tabs {
+                                    s.write(&bytes);
+                                }
+                            }
+                            self.broadcast_query.clear();
+                            self.app.overlay = Overlay::None;
+                        }
+                        winit::keyboard::NamedKey::Backspace => { self.broadcast_query.pop(); }
+                        winit::keyboard::NamedKey::Escape => {
+                            self.broadcast_query.clear();
+                            self.app.overlay = Overlay::None;
+                        }
+                        _ => {}
+                    },
+                    _ => {}
+                }
+                return;
+            }
             Overlay::None => {}
         }
 
@@ -1452,6 +1508,17 @@ impl Application {
                 }
             }
         }
+    }
+}
+
+/// The bytes sent to every session when a broadcast line is committed: the query plus a trailing
+/// newline. A blank query sends nothing (never broadcast a bare newline). Shared free function so
+/// the fan-out formatting is unit-testable without building real `Session`s.
+fn broadcast_bytes(q: &str) -> Vec<u8> {
+    if q.is_empty() {
+        Vec::new()
+    } else {
+        format!("{}\n", q).into_bytes()
     }
 }
 
@@ -1891,7 +1958,7 @@ pub fn run(app: App) -> Result<(), Box<dyn std::error::Error>> {
 
 #[cfg(test)]
 mod tests {
-    use super::{argb_to_rgb, collect_fleet_matches, engine_accent, expand_click_word, host_color, FleetMatch};
+    use super::{argb_to_rgb, broadcast_bytes, collect_fleet_matches, engine_accent, expand_click_word, host_color, FleetMatch};
 
     use std::sync::Arc;
 
@@ -1980,5 +2047,14 @@ mod tests {
     #[test]
     fn click_word_single_token() {
         assert_eq!(expand_click_word("README.md", 3), "README.md");
+    }
+
+    /// Broadcast formatting: a non-blank line is fanned out with a trailing newline; a blank line
+    /// sends nothing (never broadcast a bare newline).
+    #[test]
+    fn broadcast_bytes_sends_line_but_not_blank() {
+        assert_eq!(broadcast_bytes("git pull"), b"git pull\n");
+        assert_eq!(broadcast_bytes("  "), b"  \n", "whitespace-only is still a real line");
+        assert!(broadcast_bytes("").is_empty(), "blank must not broadcast a bare newline");
     }
 }
