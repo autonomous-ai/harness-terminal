@@ -18,6 +18,9 @@ pub enum Overlay {
     RemoteAttach,
     /// Search scrollback: type is a query; Enter jumps to next match, Esc closes.
     Find,
+    /// Fleet-wide search: query matches against EVERY open session's scrollback at once; pick a
+    /// hit and Enter jumps to that session scrolled to the match. Esc closes.
+    FleetSearch,
     /// Read-only fleet status: all harness sessions on this machine (fetch on open).
     Fleet,
     /// Keybinding reference overlay (dismiss on any key).

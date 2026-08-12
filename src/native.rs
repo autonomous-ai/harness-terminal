@@ -7,6 +7,7 @@
 
 use std::num::NonZeroU32;
 use std::rc::Rc;
+use std::sync::Arc;
 
 use alacritty_terminal::grid::Dimensions;
 use alacritty_terminal::index::{Column, Line, Point, Side};
@@ -29,6 +30,15 @@ use crate::session::TermSize;
 const CHROME_FG: (u8, u8, u8) = (0xcc, 0xcc, 0xcc);
 const CHROME_DIM: (u8, u8, u8) = (0x66, 0x66, 0x66);
 const WHITE: (u8, u8, u8) = (0xff, 0xff, 0xff);
+
+/// One fleet-search hit: which tab (index into `app.tabs`), the grid line in that session's
+/// scrollback, and the column where the match text begins. Sorted by (tab, line).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+struct FleetMatch {
+    tab: usize,
+    line: i32,
+    col: usize,
+}
 
 /// The native application: window + framebuffer surface + app state + glyph cache.
 struct Application {
@@ -58,6 +68,13 @@ struct Application {
     find_all: Vec<crate::render::Find>,
     /// Index into `find_all` of the currently-focused match (the "N of M" cursor).
     find_index: usize,
+    /// Live fleet-search query (the FleetSearch overlay). Same anatomy as `find_query` but the
+    /// recompute sweeps every tab once instead of only the active one.
+    fleet_q: String,
+    /// Every matching (tab, line, col) across all open sessions, sorted by tab then line.
+    fleet_matches: Vec<FleetMatch>,
+    /// Index into `fleet_matches` of the currently-selected hit (the highlighted list row).
+    fleet_sel: usize,
     /// Whether we're in tmux-style copy mode (prefix+[). While active, keystrokes navigate a read
     /// cursor instead of reaching the shell, and `v` starts/extends a selection to copy.
     copy_mode: bool,
@@ -119,6 +136,9 @@ impl Application {
             find_hit: None,
             find_all: Vec::new(),
             find_index: 0,
+            fleet_q: String::new(),
+            fleet_matches: Vec::new(),
+            fleet_sel: 0,
             copy_mode: false,
             copy_pos: (0, 0),
             copy_anchor: None,
@@ -454,7 +474,7 @@ impl Application {
             info += &format!("  ▾ {pct}% (Esc/b to bottom)");
         }
         draw_text(fb, &mut self.cache, &info, 6, status_base, self.font_px, CHROME_FG);
-        let hints = " prefix+/ palette  prefix+n new  prefix+r remote  prefix+s fleet  prefix+o busy  prefix+[ copy  prefix+p paste  prefix+l last  prefix+? help  prefix+q quit ";
+        let hints = " prefix+/ palette  prefix+h search all  prefix+n new  prefix+r remote  prefix+s fleet  prefix+o busy  prefix+[ copy  prefix+p paste  prefix+l last  prefix+? help  prefix+q quit ";
         let hw = draw_text(fb, &mut self.cache, hints, 6, status_base, self.font_px, CHROME_DIM);
         // Move the hint to the right edge by re-drawing after clearing a wide column is complex;
         // simplest right-align: draw hints over the info end offset. We draw at the right edge:
@@ -500,6 +520,7 @@ impl Application {
             Overlay::NewSession => self.render_list(fb, "  new session  ", true),
             Overlay::RemoteAttach => self.render_remote(fb),
             Overlay::Find => self.render_find(fb),
+            Overlay::FleetSearch => self.render_fleet_search(fb),
             Overlay::Fleet => self.render_fleet(fb),
             Overlay::Help => self.render_help(fb),
             Overlay::Rename => self.render_rename(fb),
@@ -573,17 +594,76 @@ impl Application {
         }
     }
 
+    /// Render the fleet-search overlay: query prompt, total/selected match counts, the currently
+    /// selected match's session + matching line, and a list of the first ~8 hits each prefixed with
+    /// its tab label (engine / host). The selected row is highlighted.
+    fn render_fleet_search(&mut self, fb: &mut Framebuffer) {
+        let (base_y, line_px) = self.overlay_base_y();
+        let n = self.fleet_matches.len();
+        // Header row: query, live match count, and "no matches" when the query misses everywhere.
+        let (hdr, hdr_color) = if self.fleet_q.is_empty() {
+            ("  search all sessions: (type to match every tab)  ".to_string(), CHROME_DIM)
+        } else if n == 0 {
+            (format!("  search all sessions: {}  (no matches)", self.fleet_q), CHROME_DIM)
+        } else {
+            let here = (self.fleet_sel % n) + 1;
+            let totals = format!(
+                "  search all sessions: {}  · {} match{} across {} tab{} · showing {} of {}  ",
+                self.fleet_q,
+                n,
+                if n == 1 { "" } else { "es" },
+                self.app.tabs.len(),
+                if self.app.tabs.len() == 1 { "" } else { "s" },
+                here,
+                n,
+            );
+            (totals, WHITE)
+        };
+        draw_text(fb, &mut self.cache, &hdr, 32, base_y, self.font_px, hdr_color);
+
+        // The list of matches: up to 8 rows, each prefixed with its tab's engine/host label.
+        let list_rows = if self.fleet_q.is_empty() || n == 0 {
+            0
+        } else {
+            8.min(n)
+        };
+        for row in 0..list_rows {
+            let m = self.fleet_matches[row];
+            let selected = row == self.fleet_sel;
+            let color = if selected { WHITE } else { CHROME_DIM };
+            // Tab label: user name → engine id @ host.
+            let s = &self.app.tabs[m.tab];
+            let name = s.meta.name.clone().unwrap_or_else(|| s.meta.engine.clone());
+            let label = format!("{}@{}", name, s.meta.host);
+            // The matched line text, read live from that session's grid at render time.
+            let raw: String = {
+                let g = s.term.lock();
+                let cols = g.columns();
+                use alacritty_terminal::index::{Column, Line};
+                g.grid()[Line(m.line)][Column(0)..Column(cols)].iter().map(|c| c.c).collect()
+            };
+            let text = if raw.trim().is_empty() {
+                "(blank line)".to_string()
+            } else {
+                raw.trim_end().to_string()
+            };
+            let line = format!("  [{}] {}  {}", label, if selected { "◄" } else { " " }, text);
+            draw_text(fb, &mut self.cache, &line, 32, base_y + (row + 1) * line_px, self.font_px, color);
+        }
+    }
+
     /// Keybinding reference overlay. Static list; dismiss on any key.
     fn render_help(&mut self, fb: &mut Framebuffer) {
         let (base_y, line_px) = self.overlay_base_y();
         draw_text(fb, &mut self.cache, "  harness-terminal keys  ", 32, base_y, self.font_px, WHITE);
-        let bindings: [(&str, &str); 20] = [
+        let bindings: [(&str, &str); 21] = [
             ("Ctrl+Space", "prefix (then a command)"),
             ("prefix /", "palette: jump to any session"),
             ("prefix n", "new session (engine picker)"),
             ("prefix r", "attach to a remote pane@host"),
             ("prefix s", "fleet status"),
             ("prefix f", "search scrollback"),
+            ("prefix h", "search all sessions (fleet)"),
             ("prefix [", "copy mode"),
             ("prefix ,", "rename the active tab"),
             ("prefix ?", "this help"),
@@ -648,6 +728,59 @@ impl Application {
             self.find_scroll_to(&mut *g, l);
             active.set_scrolled(true);
         }
+    }
+
+    /// Recompute the fleet-matches list across EVERY open session's scrollback for the current
+    /// query. Collects each matching (tab, line, col) and sorts by tab then line, then keeps the
+    /// selection within range. Called on every query edit while the FleetSearch overlay is open; a
+    /// plain loop so each match carries its source tab index (unlike `all_matches`, which has none).
+    fn fleet_recompute(&mut self) {
+        self.fleet_matches.clear();
+        let q = self.fleet_q.to_lowercase();
+        if !q.is_empty() {
+            // Gather the term locks into a slice so the shared, testable helper can run over them.
+            let terms: Vec<_> = self.app.tabs.iter().map(|s| Arc::clone(&s.term)).collect();
+            self.fleet_matches = collect_fleet_matches(&terms, &q);
+        }
+        if self.fleet_sel >= self.fleet_matches.len() {
+            self.fleet_sel = self.fleet_matches.len().saturating_sub(1);
+        }
+    }
+
+    /// Jump the fleet selection by `delta` rows (wrapping around the ends).
+    fn fleet_jump(&mut self, delta: isize) -> bool {
+        let m = self.fleet_matches.len();
+        if m == 0 {
+            return false;
+        }
+        self.fleet_sel = (self.fleet_sel as isize + delta).rem_euclid(m as isize) as usize;
+        true
+    }
+
+    /// Fleet-search Enter: focus the matching session, scroll its scrollback so the hit line is
+    /// visible, and leave the read cursor on the match's start column so it's on-screen. Closes the
+    /// overlay. No-op if there's nothing selected.
+    fn fleet_jump_to(&mut self) {
+        let Some(m) = self.fleet_matches.get(self.fleet_sel) else {
+            self.app.overlay = Overlay::None;
+            return;
+        };
+        let tab = m.tab;
+        // Focus the session's tab first so the scroll/copy targets the same session the renderer draws.
+        self.app.active = tab.min(self.app.tabs.len().saturating_sub(1));
+        crate::restore::save_active(self.app.active);
+        if let Some(s) = self.app.tabs.get(self.app.active) {
+            let mut g = s.term.lock();
+            // Scroll so the match line is at the top of the viewport.
+            use alacritty_terminal::grid::Scroll;
+            let current = g.grid().display_offset() as i32;
+            let desired = (-m.line as i32).clamp(0, g.grid().history_size() as i32);
+            g.grid_mut().scroll_display(Scroll::Delta(desired - current));
+            s.set_scrolled(true);
+        }
+        // Place the read cursor at the match start so it's clearly visible where the hit landed.
+        self.copy_pos = (m.line, m.col);
+        self.app.overlay = Overlay::None;
     }
 
     /// Jump the focus by `delta` through the matches (wrapping around the ends), updating the
@@ -998,6 +1131,7 @@ impl Application {
                 "g" => { scroll_active(self, 20); if let Some(s) = self.app.active_session() { s.set_scrolled(true); } }
                 "b" => self.scroll_to_bottom(),
                 "f" => { self.app.overlay = Overlay::Find; self.find_query.clear(); self.find_hit = None; self.find_all = Vec::new(); },
+                "h" => { self.app.overlay = Overlay::FleetSearch; self.fleet_q.clear(); self.fleet_matches.clear(); self.fleet_sel = 0; },
                 "[" => self.start_copy_mode(),
                 "?" => { self.app.overlay = Overlay::Help; }
                 "," => {
@@ -1097,6 +1231,28 @@ impl Application {
                         winit::keyboard::NamedKey::ArrowDown => { self.find_jump(1); }
                         winit::keyboard::NamedKey::ArrowUp => { self.find_jump(-1); }
                         winit::keyboard::NamedKey::Backspace => { self.find_query.pop(); self.find_recompute(None); }
+                        winit::keyboard::NamedKey::Escape => { self.app.overlay = Overlay::None; }
+                        _ => {}
+                    },
+                    _ => {}
+                }
+                return;
+            }
+            Overlay::FleetSearch => {
+                match key {
+                    Key::Character(c) => {
+                        self.fleet_q.push_str(c);
+                        self.fleet_recompute();
+                    }
+                    Key::Named(n) => match n {
+                        // Enter closes and jumps to the selected match across tables.
+                        winit::keyboard::NamedKey::Enter => self.fleet_jump_to(),
+                        // Tab moves the selection down (Shift+Tab up), wrapping.
+                        winit::keyboard::NamedKey::Tab if mods.shift_key() => { self.fleet_jump(-1); }
+                        winit::keyboard::NamedKey::Tab => { self.fleet_jump(1); }
+                        winit::keyboard::NamedKey::ArrowDown => { self.fleet_jump(1); }
+                        winit::keyboard::NamedKey::ArrowUp => { self.fleet_jump(-1); }
+                        winit::keyboard::NamedKey::Backspace => { self.fleet_q.pop(); self.fleet_recompute(); }
                         winit::keyboard::NamedKey::Escape => { self.app.overlay = Overlay::None; }
                         _ => {}
                     },
@@ -1279,6 +1435,25 @@ impl Application {
             }
         }
     }
+}
+
+/// Collect every (tab, line, col) match of the lowercase query across ALL sessions' scrollbacks,
+/// sorted by tab then line. Used by fleet search. Shared free function so the cross-tab + sort
+/// behavior is unit-testable without building real `Session`s (tests pass raw lockable Terms).
+fn collect_fleet_matches(
+    terms: &[Arc<alacritty_terminal::sync::FairMutex<alacritty_terminal::term::Term<crate::session::Listener>>>],
+    query_lower: &str,
+) -> Vec<FleetMatch> {
+    let mut out = Vec::new();
+    for (tab, term) in terms.iter().enumerate() {
+        let g = term.lock();
+        // Reuse the public `all_matches` per-tab, tagging each hit with its tab index.
+        for (line, col, _) in crate::render::all_matches(&g, query_lower) {
+            out.push(FleetMatch { tab, line, col });
+        }
+    }
+    out.sort_by(|a, b| (a.tab, a.line, a.col).cmp(&(b.tab, b.line, b.col)));
+    out
 }
 
 fn close_tab(app: &mut App) {
@@ -1680,7 +1855,52 @@ pub fn run(app: App) -> Result<(), Box<dyn std::error::Error>> {
 
 #[cfg(test)]
 mod tests {
-    use super::{argb_to_rgb, engine_accent, expand_click_word, host_color};
+    use super::{argb_to_rgb, collect_fleet_matches, engine_accent, expand_click_word, host_color, FleetMatch};
+
+    use std::sync::Arc;
+
+    /// Fleet search spans multiple sessions and is sorted by tab then line. Build two real emulator
+    /// Terms (no PTY needed), seed each with distinct text, and assert the collected matches are
+    /// tagged by tab and ordered (tab 1's matches before tab 2's, lines in order within each tab).
+    #[test]
+    fn fleet_search_crosses_tabs_sorted_by_tab_then_line() {
+        use alacritty_terminal::sync::FairMutex;
+        use alacritty_terminal::term::{Config, Term};
+        use alacritty_terminal::vte::ansi::{Processor, StdSyncHandler};
+
+        use crate::session::{Listener, TermSize};
+
+        // Two tabs: tab 0 has "fix" on two lines, tab 1 on one line — out of sorted order at the
+        // line level so we can prove the primary sort is BY TAB.
+        let size = TermSize { lines: 4, cols: 40 };
+        let mut terms: Vec<Arc<FairMutex<Term<Listener>>>> = Vec::new();
+        let t0 = Arc::new(FairMutex::new(Term::new(Config::default(), &size, Listener::default())));
+        {
+            let mut p: Processor<StdSyncHandler> = Processor::default();
+            p.advance(&mut *t0.lock(), b"fix first\r\nno match\r\nfix third");
+        }
+        let t1 = Arc::new(FairMutex::new(Term::new(Config::default(), &size, Listener::default())));
+        {
+            let mut p: Processor<StdSyncHandler> = Processor::default();
+            p.advance(&mut *t1.lock(), b"only fix here");
+        }
+        terms.push(t0);
+        terms.push(t1);
+
+        let hits = collect_fleet_matches(&terms, "fix");
+        // 2 (tab 0) + 1 (tab 1) = 3 matches.
+        assert_eq!(hits.len(), 3);
+        // Sorted by tab first: both tab-0 hits (lines 0, 2 in line order) then the tab-1 hit.
+        assert_eq!(hits[0], FleetMatch { tab: 0, line: 0, col: 0 });
+        assert_eq!(hits[1], FleetMatch { tab: 0, line: 2, col: 0 });
+        assert_eq!(hits[2], FleetMatch { tab: 1, line: 0, col: 5 });
+        // Case-insensitive: uppercase query still matches lowercase text (recompute lowercases it).
+        assert_eq!(collect_fleet_matches(&terms, "FIX").len(), 3);
+        // A query in no tab matches nothing.
+        assert!(collect_fleet_matches(&terms, "zzz").is_empty());
+    }
+
+
 
     /// Every host gets a stable, in-table color; the same host never changes across calls, and two
     /// different hosts can share a color (fine) but the mapping is deterministic.

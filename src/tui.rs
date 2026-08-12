@@ -66,6 +66,7 @@ fn draw_frame(frame: &mut Frame, app: &mut App) {
         Overlay::NewSession => draw_picker(frame, chunks[1], app),
         Overlay::RemoteAttach => draw_remote_attach(frame, chunks[1], app),
         Overlay::Find => {} // native-only feature; the TUI fallback ignores it.
+        Overlay::FleetSearch => {} // native-only feature; the TUI fallback ignores it.
         Overlay::Fleet => {} // native-only overlay; the TUI fallback ignores it.
         Overlay::Help => {} // native-only overlay; the TUI fallback ignores it.
         Overlay::Rename => {} // native-only overlay; the TUI fallback ignores it.
