@@ -16,11 +16,15 @@ pub struct Config {
     pub font_px: usize,
     /// Engine the new-session picker starts selected on (case-insensitive; falls back to index 0).
     pub default_engine: String,
+    /// Optional path to a TTF/OTF monospace font to render the grid with. Absent/empty falls back
+    /// to the platform default (macOS SF Mono), which `HARNESS_FONT` can override in a pinch.
+    #[serde(default)]
+    pub font_path: Option<String>,
 }
 
 impl Default for Config {
     fn default() -> Self {
-        Config { font_px: 14, default_engine: "claude".to_string() }
+        Config { font_px: 14, default_engine: "claude".to_string(), font_path: None }
     }
 }
 
@@ -46,6 +50,16 @@ mod tests {
         "#).unwrap();
         assert_eq!(c.font_px, 18);
         assert_eq!(c.default_engine, "claude"); // absent key -> default
+        assert_eq!(c.font_path, None); // absent -> None (platform default)
+    }
+
+    /// A custom font path is honoured and round-trips.
+    #[test]
+    fn custom_font_path_roundtrips() {
+        let c: Config = toml::from_str(r#"
+            font_path = "/Users/d/.fonts/JetBrainsMono-Nerd-Font.ttf"
+        "#).unwrap();
+        assert_eq!(c.font_path.as_deref(), Some("/Users/d/.fonts/JetBrainsMono-Nerd-Font.ttf"));
     }
 
     /// Malformed TOML must fall back to defaults, never panic.

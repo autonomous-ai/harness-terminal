@@ -545,8 +545,12 @@ pub fn draw_text(
     cx - x0
 }
 
-/// Path to a usable mono font.
-fn font_path() -> String {
+/// Path to a usable mono font. Precedence: `font_path` from config.toml, then the `HARNESS_FONT`
+/// env override (handy for portable/CI setups), then the platform default.
+pub fn font_path() -> String {
+    if let Some(p) = crate::config::Config::load().font_path {
+        return p;
+    }
     if let Ok(p) = std::env::var("HARNESS_FONT") {
         if !p.is_empty() {
             return p;
