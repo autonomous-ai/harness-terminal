@@ -1231,7 +1231,7 @@ impl Application {
         }
         for (k, d) in [
             ("prefix { }", "move tab left / right"),
-            ("1-9 / Tab", "switch tab"),
+            ("1-9 / 0 / Tab", "switch tab (0 = last)"),
             ("x / c", "close tab / go to tab 0"),
             ("g / b", "scroll up a page / jump to bottom"),
             ("Ctrl+= / Ctrl+-", "font zoom (Ctrl+0 reset)"),
@@ -2106,13 +2106,16 @@ impl Application {
     fn command_key(&mut self, key: &Key) -> bool {
         match key {
             Key::Character(c) if c.len() == 1 && c.chars().next().unwrap().is_ascii_digit() => {
-                // Numeric tabs 1-9 (kept fixed outside the keybinding table).
+                // Numeric tabs: 1-9 jump to that tab, 0 jumps to the LAST tab (kept fixed outside
+                // the keybinding table so a remap can't break tab switching).
                 let idx = c.chars().next().unwrap() as u8;
                 if (b'1'..=b'9').contains(&idx) {
                     let i = (idx - b'1') as usize;
                     if i < self.app.tabs.len() {
                         self.set_active(i);
                     }
+                } else if idx == b'0' && !self.app.tabs.is_empty() {
+                    self.set_active(self.app.tabs.len() - 1);
                 }
             }
             Key::Character(c) => match self.key_action.get(c.as_str()).map(String::as_str) {
