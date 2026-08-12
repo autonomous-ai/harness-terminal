@@ -1050,9 +1050,18 @@ impl Application {
                 } else {
                     ""
                 };
+                // A down pane with queued type-ahead shows how much is staged to flush on reconnect,
+                // so input parked for a host coming back is visible in the fleet bar, not just the
+                // status line. (This is a 5-tier red "queued" marker, drawn dim on non-active tabs.)
+                let queued = s.pending_bytes();
+                let queued_mark = if queued > 0 {
+                    format!("⏳{queued}")
+                } else {
+                    String::new()
+                };
                 let label = format!(
-                    " {}{}{}{} {} {}{}{} ",
-                    bell, flag, pin, head, live, mute, where_s, dot
+                    " {}{}{}{} {} {}{}{}{} ",
+                    bell, flag, pin, head, live, mute, where_s, queued_mark, dot
                 );
                 // Active tab: tinted by a stable hash of its host (dive context). Inactive tabs fall back
                 // to the engine's own accent color so you can spot the "claude" tab from across the bar.
