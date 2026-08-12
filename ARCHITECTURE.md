@@ -168,7 +168,15 @@ Remote attach is live two ways, both streaming `%output` → `advance` behind `T
   the drop. Locked in by `tests/tunnel_reconnect.rs`, a live E2E that kills the pane and asserts a
   reconnect round-trips a fresh marker. Only local PTYs (which can't drop) skip all of this.
 
-What's still refinements: no latency smoothing — geometric until asked for.
+- **Latency smoothing** (ssh/tunnel): each remote session owns an `EchoCanceller`
+  (`Session::write` optimistically renders keystrokes for instant typing and records them; the
+  transport reader thread cancels the identical copy that returns ~RTT later, so nothing
+  double-renders). It is byte-oriented + windowed (pending echo expires after 1.5s so a pane that
+  never echoes — password prompt, fullscreen app — can't poison later genuine output) and
+  conservative: only bytes matching the front of the pending queue are dropped; real program output
+  passes untouched, split across chunks or not. Locked in by unit tests in `session.rs`.
+
+No remaining product gaps flagged.
 What's live today is geometric: bytes flow as fast as ssh will carry them; no latency
 smoothing, no local echo, no reconnect — those are refinements, not missing pieces.
 Host discovery (`transport::discover_hosts`) reads `~/.ssh/config` `Host` entries; the

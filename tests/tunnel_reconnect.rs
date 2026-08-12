@@ -28,7 +28,8 @@ fn tunnel_reconnects_after_pane_is_killed() {
     let size = TermSize { lines: 20, cols: 60 };
     let term: Arc<FairMutex<Term<Listener>>> =
         Arc::new(FairMutex::new(Term::new(Config::default(), &size, Listener)));
-    let mut tx = TunnelTransport::spawn("127.0.0.1", port, program, size, Arc::clone(&term))
+    let echo = autonomous_term::session::EchoCanceller::default();
+    let mut tx = TunnelTransport::spawn("127.0.0.1", port, program, size, Arc::clone(&term), Arc::new(echo))
         .expect("tunnel spawn against live daemon");
 
     // 1. First pane round-trips a marker (baseline — the pane echoes what we type).

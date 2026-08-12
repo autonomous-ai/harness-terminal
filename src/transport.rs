@@ -19,7 +19,7 @@ use alacritty_terminal::sync::FairMutex;
 use alacritty_terminal::term::Term;
 use alacritty_terminal::vte::ansi::{Processor, StdSyncHandler};
 
-use crate::session::{Listener, TermSize};
+use crate::session::{EchoCanceller, Listener, TermSize};
 
 /// A byte transport for one session. Sends keystrokes/resize outward; the concrete transport's own
 /// reader thread feeds incoming bytes back into the shared `Term` grid.
@@ -117,6 +117,7 @@ pub struct TmuxTransport {
 
 impl TmuxTransport {
     /// Spawn a control-mode tmux pane running `program` in a fresh, uniquely-named LOCAL session.
+    /// Spawn a local pane. No echo cancellation — a local link has no round-trip latency to smooth.
     pub fn spawn(program: &str, size: TermSize, term: Arc<FairMutex<Term<Listener>>>) -> io::Result<TmuxTransport> {
         let name = format!("auton-{}", program.replace('/', "-"));
         let _ = Command::new("tmux").args(["kill-session", "-t", &name]).status();
@@ -127,6 +128,7 @@ impl TmuxTransport {
             program,
             size,
             term,
+            None,
         )?;
         Ok(TmuxTransport { pipe })
     }
@@ -146,6 +148,8 @@ struct ControlPipe {
     /// The shared grid the reader thread replays `%output` into; kept so a reconnect can hand a
     /// fresh pipe a live view of the same `Term`.
     term: Arc<FairMutex<Term<Listener>>>,
+    /// Echo cancellation for the reader thread (ssh/tunnel). Reconnect re-arms it on the fresh pipe.
+    echo: Option<Arc<EchoCanceller>>,
     child: Child,
     /// Set false by the reader thread as soon as the control client's stdout closes — the pane
     /// (and thus the tab) is gone, so the watchdog knows to reconnect.
@@ -164,8 +168,9 @@ impl ControlPipe {
         program: &str,
         size: TermSize,
         term: Arc<FairMutex<Term<Listener>>>,
+        echo: Option<Arc<EchoCanceller>>,
     ) -> io::Result<ControlPipe> {
-        let (child, tx, alive) = ControlPipe::build(&argv0, &argv, session, program, size, &term)?;
+        let (child, tx, alive) = ControlPipe::build(&argv0, &argv, session, program, size, &term, echo.as_ref())?;
         Ok(ControlPipe {
             argv0,
             argv,
@@ -173,6 +178,7 @@ impl ControlPipe {
             program: program.to_string(),
             size,
             term,
+            echo,
             child,
             alive,
             tx,
@@ -188,6 +194,7 @@ impl ControlPipe {
         program: &str,
         size: TermSize,
         term: &Arc<FairMutex<Term<Listener>>>,
+        echo: Option<&Arc<EchoCanceller>>,
     ) -> io::Result<(Child, mpsc::Sender<Vec<u8>>, Arc<std::sync::atomic::AtomicBool>)> {
         let mut cmd = Command::new(argv0);
         cmd.args(argv)
@@ -210,8 +217,11 @@ impl ControlPipe {
         ).into_bytes()).ok();
 
         // Reader: parse control-mode notification lines; %output carries the pane's byte payload.
+        // When the transport is remote, filter the returned bytes through echo cancellation before
+        // advancing into the grid so typed text we optimistically echoed isn't double-rendered.
         let a = Arc::clone(&alive);
         let t = Arc::clone(term);
+        let e = echo.cloned();
         thread::Builder::new()
             .name("tmux-read".into())
             .spawn(move || {
@@ -227,6 +237,10 @@ impl ControlPipe {
                         }
                         Ok(_) => {
                             if let Some(payload) = parse_output(&line) {
+                                let payload = match &e {
+                                    Some(c) => c.filter_echo(&payload),
+                                    None => payload,
+                                };
                                 let mut term = t.lock();
                                 parser.advance(&mut *term, &payload);
                             }
@@ -268,6 +282,7 @@ impl ControlPipe {
             &self.program,
             self.size,
             &self.term,
+            self.echo.as_ref(),
         )?;
         self.child = child;
         self.tx = tx;
@@ -352,6 +367,7 @@ impl RemoteTransport {
         program: &str,
         size: TermSize,
         term: Arc<FairMutex<Term<Listener>>>,
+        echo: Arc<EchoCanceller>,
     ) -> io::Result<RemoteTransport> {
         let name = format!("auton-{}", program.replace('/', "-"));
         // The control-mode client runs ON the remote host via ssh; its stdin/stdout carry the
@@ -369,6 +385,7 @@ impl RemoteTransport {
             program,
             size,
             term,
+            Some(echo),
         )?;
         Ok(RemoteTransport { pipe })
     }
@@ -413,6 +430,8 @@ pub struct TunnelTransport {
     size: TermSize,
     /// The shared grid; a reconnect hands the fresh connection the same `Term`.
     term: Arc<FairMutex<Term<Listener>>>,
+    /// Echo cancellation for the connection thread; reconnect re-arms it on the fresh connection.
+    echo: Arc<EchoCanceller>,
     /// Set false by the connection thread the moment the WebSocket closes or errors.
     alive: Arc<std::sync::atomic::AtomicBool>,
     tx: mpsc::Sender<Vec<u8>>,
@@ -426,14 +445,16 @@ impl TunnelTransport {
         program: &str,
         size: TermSize,
         term: Arc<FairMutex<Term<Listener>>>,
+        echo: Arc<EchoCanceller>,
     ) -> io::Result<TunnelTransport> {
-        let (tx, alive) = TunnelTransport::build_connection(host, port, program, size, &term)?;
+        let (tx, alive) = TunnelTransport::build_connection(host, port, program, size, &term, &echo)?;
         Ok(TunnelTransport {
             host: host.to_string(),
             port,
             program: program.to_string(),
             size,
             term,
+            echo,
             alive,
             tx,
         })
@@ -447,6 +468,7 @@ impl TunnelTransport {
         program: &str,
         size: TermSize,
         term: &Arc<FairMutex<Term<Listener>>>,
+        echo: &Arc<EchoCanceller>,
     ) -> io::Result<(mpsc::Sender<Vec<u8>>, Arc<std::sync::atomic::AtomicBool>)> {
         let name = format!("auton-{}", program.replace('/', "-"));
         let (tx, rx) = mpsc::channel::<Vec<u8>>();
@@ -476,9 +498,11 @@ impl TunnelTransport {
         )))
         .map_err(|e| io::Error::new(io::ErrorKind::Other, e.to_string()))?;
 
-        // One thread owns the single connection: read `%output` → grid, drain tx → send-keys.
+        // One thread owns the single connection: read `%output` → grid, drain tx → send-keys. The
+        // returned bytes are echo-cancelled (see EchoCanceller) so the optimistic echo isn't doubled.
         let a = Arc::clone(&alive);
         let t = Arc::clone(term);
+        let e = Arc::clone(echo);
         thread::Builder::new().name("tunnel".into()).spawn(move || {
             let mut parser: Processor<StdSyncHandler> = Processor::default();
             loop {
@@ -487,7 +511,7 @@ impl TunnelTransport {
                         for line in s.lines() {
                             if let Some(payload) = parse_output(line) {
                                 let mut term = t.lock();
-                                parser.advance(&mut *term, &payload);
+                                parser.advance(&mut *term, &e.filter_echo(&payload));
                             }
                         }
                     }
@@ -495,7 +519,7 @@ impl TunnelTransport {
                         for line in String::from_utf8_lossy(&b).lines() {
                             if let Some(payload) = parse_output(line) {
                                 let mut term = t.lock();
-                                parser.advance(&mut *term, &payload);
+                                parser.advance(&mut *term, &e.filter_echo(&payload));
                             }
                         }
                     }
@@ -529,6 +553,7 @@ impl TunnelTransport {
             &self.program,
             self.size,
             &self.term,
+            &self.echo,
         )?;
         self.tx = tx;
         self.alive = alive;
