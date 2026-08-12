@@ -166,6 +166,9 @@ struct Application {
     fleet_filtered: Vec<usize>,
     /// Peek-overlay selection: which session row the highlight is on (index into `app.tabs`).
     peek_sel: usize,
+    /// Peek list scroll offset — how many (capped) rows to skip at the top so ALL tabs are
+    /// reachable, not just the first ~10. Bumped when the selection moves below the visible window.
+    peek_scroll: usize,
     /// Command-palette filter text (the prefix+; palette). Typing narrows `palette_filtered`.
     palette_q: String,
     /// The full, static list of (label, action) rows the palette filters over.
@@ -318,6 +321,7 @@ impl Application {
             notified: vec![false; tab_count],
             flash: None,
             peek_sel: 0,
+            peek_scroll: 0,
             palette_q: String::new(),
             palette_rows: PaletteAction::all_rows(),
             palette_filtered: Vec::new(),
@@ -2002,10 +2006,14 @@ impl Application {
             self.font_px,
             WHITE,
         );
-        // Cap the list so the overlay stays on screen (~10 rows + preview lines below the selection).
+        // Cap the visible window (10 rows + preview lines), but scroll through ALL tabs: `peek_scroll`
+        // offsets the start so sessions beyond the first window are reachable, matching peek_sel.
         let rows = self.app.tabs.len().min(10);
         for row in 0..rows {
-            let i = row;
+            let i = self.peek_scroll + row;
+            if i >= self.app.tabs.len() {
+                break;
+            }
             let s = &self.app.tabs[i];
             let sel = i == self.peek_sel;
             let color = if sel { WHITE } else { CHROME_DIM };
@@ -2160,6 +2168,7 @@ impl Application {
             Peek => {
                 self.app.overlay = Overlay::Peek;
                 self.peek_sel = 0;
+                self.peek_scroll = 0;
             }
             UndoClose => self.app.reopen_last_closed(),
             Duplicate => {
@@ -2498,6 +2507,7 @@ impl Application {
                 Some("peek") => {
                     self.app.overlay = Overlay::Peek;
                     self.peek_sel = 0;
+                    self.peek_scroll = 0;
                 }
                 Some("undo_close") => self.app.reopen_last_closed(),
                 Some("duplicate") => {
@@ -2891,12 +2901,23 @@ impl Application {
                         {
                             self.peek_sel =
                                 (self.peek_sel + 1).min(self.app.tabs.len().saturating_sub(1));
+                            // Keep the selection in the visible window as it walks past the bottom.
+                            if self.peek_sel >= self.peek_scroll + 10 {
+                                self.peek_scroll = self.peek_sel + 1 - 10;
+                            }
                         }
                         winit::keyboard::NamedKey::Tab => {
                             self.peek_sel = self.peek_sel.saturating_sub(1);
+                            // Pull the window up when the selection walks above the top.
+                            if self.peek_sel < self.peek_scroll {
+                                self.peek_scroll = self.peek_sel;
+                            }
                         }
                         winit::keyboard::NamedKey::ArrowUp => {
                             self.peek_sel = self.peek_sel.saturating_sub(1);
+                            if self.peek_sel < self.peek_scroll {
+                                self.peek_scroll = self.peek_sel;
+                            }
                         }
                         winit::keyboard::NamedKey::Enter => {
                             if !self.app.tabs.is_empty() {
