@@ -211,6 +211,20 @@ impl Application {
         }
     }
 
+    /// `Ctrl+D`: copy the active session's entire scrollback (history + screen) to the system
+    /// clipboard as plain text. Handy for dumping an agent's whole log for pasting into an issue or
+    /// a summary. Builds the text with the same capture path used for restart persistence.
+    fn copy_whole_scrollback(&mut self) {
+        let Some(s) = self.app.active_session() else { return };
+        let text = s.capture_scrollback();
+        if text.trim().is_empty() {
+            return;
+        }
+        if let Ok(mut cb) = arboard::Clipboard::new() {
+            let _ = cb.set_text(text);
+        }
+    }
+
     /// Fleet-overlay Enter: jump to an already-open tab running the selected session's engine if one
     /// exists (closest thing to 'diving into' that pane), else open a fresh local tmux pane for it.
     /// Refresh `fleet_filtered` (indices into `app.fleet.fleet` matching `fleet_query`) and clamp the
@@ -563,7 +577,7 @@ impl Application {
     fn render_help(&mut self, fb: &mut Framebuffer) {
         let (base_y, line_px) = self.overlay_base_y();
         draw_text(fb, &mut self.cache, "  harness-terminal keys  ", 32, base_y, self.font_px, WHITE);
-        let bindings: [(&str, &str); 19] = [
+        let bindings: [(&str, &str); 20] = [
             ("Ctrl+Space", "prefix (then a command)"),
             ("prefix /", "palette: jump to any session"),
             ("prefix n", "new session (engine picker)"),
@@ -579,6 +593,7 @@ impl Application {
             ("prefix l", "flip to the previous tab"),
             ("x / c", "close tab / go to tab 0"),
             ("g / b", "scroll up a page / jump to bottom"),
+            ("prefix d", "copy whole scrollback to clipboard"),
             ("Ctrl+= / Ctrl+-", "font zoom (Ctrl+0 reset)"),
             ("PgUp/PgDn", "scrollback"),
             ("Cmd/Ctrl+click", "open URL / file path"),
@@ -979,6 +994,7 @@ impl Application {
                 "l" => self.last_window(),
                 "p" => self.paste_clipboard(),
                 "x" => { close_tab(&mut self.app); }
+                "d" => self.copy_whole_scrollback(),
                 "g" => { scroll_active(self, 20); if let Some(s) = self.app.active_session() { s.set_scrolled(true); } }
                 "b" => self.scroll_to_bottom(),
                 "f" => { self.app.overlay = Overlay::Find; self.find_query.clear(); self.find_hit = None; self.find_all = Vec::new(); },
