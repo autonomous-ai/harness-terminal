@@ -168,6 +168,9 @@ struct Application {
     mouse_anchor: Option<Point>,
     /// Latest cursor position in framebuffer px (winit's MouseInput has no position; we read this).
     cursor: (f64, f64),
+    /// True while the pointer sits over a clickable URL so we show a hand instead of the arrow.
+    /// Updated on CursorMoved so the affordance tracks the pointer without a full redraw.
+    over_link: bool,
     /// Last (press-time, press-position, accumulated-click-count) to detect double/triple clicks.
     /// winit 0.30 doesn't hand us a click count, so we time consecutive presses ourselves.
     last_press: Option<(std::time::Instant, (f64, f64), u32)>,
@@ -253,6 +256,7 @@ impl Application {
             fleet_filtered: Vec::new(),
             mouse_anchor: None,
             cursor: (0.0, 0.0),
+            over_link: false,
             last_press: None,
             window_title: String::new(),
             zoom: crate::restore::load_zoom(),
@@ -2751,6 +2755,42 @@ impl Application {
         ))
     }
 
+    /// Does a URL begin/overlap the cell at framebuffer (x, y)? Used to show the hand cursor over
+    /// links, mirroring exactly what `mouse_open` would open so the affordance never lies. Cheap: no
+    /// grid write, no selection — just a read of the row under the pointer.
+    fn cell_has_link(&self, x: f64, y: f64) -> bool {
+        let Some(pt) = self.mouse_to_cell(x, y) else {
+            return false;
+        };
+        if self
+            .app
+            .active_session()
+            .map(|s| s.scrolled())
+            .unwrap_or(false)
+            || pt.line.0 < 0
+        {
+            return false;
+        }
+        let Some(active) = self.app.active_session() else {
+            return false;
+        };
+        let g = active.term.lock();
+        let row = pt.line.0 as usize;
+        let cols = g.columns();
+        if row >= g.screen_lines() || cols == 0 {
+            return false;
+        }
+        let col = (pt.column.0 as usize).min(cols - 1);
+        let line_text: String = g.grid()[Line(row as i32)][Column(0)..Column(cols)]
+            .iter()
+            .map(|c| c.c)
+            .collect();
+        drop(g);
+        crate::links::url_span(&line_text, col)
+            .map(|s| !s.as_str(&line_text).is_empty())
+            .unwrap_or(false)
+    }
+
     /// Detect how many clicks this press represents. A press within ~250ms and ~4px of the previous
     /// one increments the count (up to 3); anything else resets to 1.
     fn click_count(&mut self, x: f64, y: f64) -> u32 {
@@ -3097,6 +3137,20 @@ impl ApplicationHandler for Application {
             }
             WindowEvent::CursorMoved { position, .. } => {
                 self.cursor = (position.x, position.y);
+                // Hand cursor over clickable links: switch the icon only when the state actually
+                // changes so we don't spam the OS every mouse move.
+                let link = self.cell_has_link(position.x, position.y);
+                if link != self.over_link {
+                    self.over_link = link;
+                    if let Some(w) = &self.window {
+                        use winit::window::CursorIcon;
+                        w.set_cursor(if link {
+                            CursorIcon::Pointer
+                        } else {
+                            CursorIcon::Default
+                        });
+                    }
+                }
                 if self.mouse_anchor.is_some() && self.app.overlay == Overlay::None {
                     self.mouse_drag(position.x, position.y);
                     if let Some(w) = &self.window {
