@@ -357,7 +357,9 @@ impl Application {
             // Show the user's rename if set; otherwise the plain engine id.
             let head = s.meta.name.clone().unwrap_or_else(|| s.meta.engine.clone());
             let label = format!(" {}{} {} {} ", flag, head, live, dot);
-            let color = if active { host_color(&s.meta.host) } else { CHROME_DIM };
+            // Active tab: tinted by a stable hash of its host (dive context). Inactive tabs fall back
+            // to the engine's own accent color so you can spot the "claude" tab from across the bar.
+            let color = if active { host_color(&s.meta.host) } else { engine_accent(&s.meta.engine) };
             x += draw_text(fb, &mut self.cache, &label, x, tab_base, self.font_px, color) + 12;
             if x > fb.width.saturating_sub(20) {
                 break;
@@ -1391,6 +1393,19 @@ impl Application {
 /// A stable accent color for a host string, so every tab pointing at the same machine (and the
 /// details pane) shares a hue and a fleet diver can tell at a glance which host a tab is on.
 /// Deterministic — same host always yields the same color, across sessions and restarts.
+/// The engine's own accent color as an RGB tuple, for the inactive-tab label. This is the deliberate
+/// "which engine is this" signal (a brand color from the engine table), complementing `host_color`
+/// which tells you *which machine*. Unknown engines fall back to the neutral chrome dim.
+fn engine_accent(engine: &str) -> (u8, u8, u8) {
+    static CACHE: std::sync::OnceLock<std::collections::HashMap<&'static str, (u8, u8, u8)>> = std::sync::OnceLock::new();
+    let map = CACHE.get_or_init(|| ENGINES.iter().map(|e| (e.id, argb_to_rgb(e.color))).collect());
+    map.get(engine).copied().unwrap_or(CHROME_DIM)
+}
+
+fn argb_to_rgb(argb: u32) -> (u8, u8, u8) {
+    (((argb >> 16) & 0xff) as u8, ((argb >> 8) & 0xff) as u8, (argb & 0xff) as u8)
+}
+
 fn host_color(host: &str) -> (u8, u8, u8) {
     // FNV-1a over the host; pick a hue from the warm-to-cool range and keep it readable on black.
     let h = host.bytes().fold(0x811c_9dc5u32, |acc, b| (acc ^ b as u32).wrapping_mul(0x0100_0193));
@@ -1588,7 +1603,7 @@ pub fn run(app: App) -> Result<(), Box<dyn std::error::Error>> {
 
 #[cfg(test)]
 mod tests {
-    use super::{expand_click_word, host_color};
+    use super::{argb_to_rgb, engine_accent, expand_click_word, host_color};
 
     /// Every host gets a stable, in-table color; the same host never changes across calls, and two
     /// different hosts can share a color (fine) but the mapping is deterministic.
@@ -1599,6 +1614,18 @@ mod tests {
         let b = host_color("10.0.0.4");
         assert_eq!(b, host_color("10.0.0.4"));
         assert_ne!(a, (0, 0, 0), "colors must be visible on black");
+    }
+
+    /// ARGB unpacking extracts RGB in the right order, and known engines resolve to their brand
+    /// accent while unknown engines fall back to the neutral dim (never black).
+    #[test]
+    fn engine_accent_unpacks_argb_and_falls_back() {
+        assert_eq!(argb_to_rgb(0xff_9a4dff), (0x9a, 0x4d, 0xff));
+        // Claude's accent is purple-ish; it must differ from a randomly-picked unknown's fallback.
+        let cl = engine_accent("claude");
+        assert_eq!(cl, (0x9a, 0x4d, 0xff));
+        let unknown = engine_accent("no-such-engine");
+        assert_ne!(unknown, (0, 0, 0), "unknown-engine fallback must still be visible");
     }
 
     /// Cmd+click word expansion picks the whole token, not the shell quoting around it.
