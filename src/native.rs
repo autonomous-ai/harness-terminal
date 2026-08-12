@@ -52,6 +52,9 @@ struct Application {
     /// The currently-focused search match (absolute line, col, width); recomputed on each query
     /// change / Enter and passed to draw_grid for highlighting.
     find_hit: Option<crate::render::Find>,
+    /// Every match of the active query (line, col, width), so draw_grid can highlight all of them
+    /// in yellow while the focused one shows orange.
+    find_all: Vec<crate::render::Find>,
     /// Mouse state: the cell anchor where a drag-selection started (Some while left button held).
     /// With winit 0.30 we track presses/releases ourselves; dragging updates the selection end.
     mouse_anchor: Option<Point>,
@@ -79,6 +82,7 @@ impl Application {
             scrolled: false,
             find_query: String::new(),
             find_hit: None,
+            find_all: Vec::new(),
             mouse_anchor: None,
             cursor: (0.0, 0.0),
             last_press: None,
@@ -150,7 +154,7 @@ impl Application {
             }
             // Compute the current text-selection range (if any) so draw_grid can highlight it.
             let sel = g.selection.as_ref().and_then(|s| s.to_range(&g));
-            draw_grid(fb, &g, self.cell_w, self.cell_h, self.font_px, &mut self.cache, self.find_hit, sel.as_ref());
+            draw_grid(fb, &g, self.cell_w, self.cell_h, self.font_px, &mut self.cache, self.find_hit, &self.find_all, sel.as_ref());
         }
 
         // Tab bar (top row).
@@ -253,8 +257,10 @@ impl Application {
     /// Recompute the focused search match (from the top if none, else continue from it) and scroll
     /// the viewport so the match is visible at the top of the grid area.
     fn find_recompute(&mut self, _start: Option<i32>) {
-        let Some(active) = self.app.active_session() else { self.find_hit = None; return };
+        let Some(active) = self.app.active_session() else { self.find_hit = None; self.find_all = Vec::new(); return };
         let mut g = active.term.lock();
+        // Refresh the full set of occurrences so every match can be highlighted.
+        self.find_all = crate::render::all_matches(&g, &self.find_query);
         let from = self
             .find_hit
             .map(|(l, _, _)| l + 1)
@@ -279,7 +285,7 @@ impl Application {
         let line = if self.find_query.is_empty() {
             "  find: (type to search)  ".to_string()
         } else {
-            let n = self.app.active_session().map(|s| crate::render::count_matches(&s.term.lock(), &self.find_query)).unwrap_or(0);
+            let n = self.find_all.len();
             if n > 0 {
                 format!("  find: {}  ({} matches · Enter next)", self.find_query, n)
             } else {
@@ -339,7 +345,7 @@ impl Application {
                 "x" => { close_tab(&mut self.app); }
                 "g" => { scroll_active(self, 20); self.scrolled = true; }
                 "b" => self.scroll_to_bottom(),
-                "f" => { self.app.overlay = Overlay::Find; self.find_query.clear(); self.find_hit = None; },
+                "f" => { self.app.overlay = Overlay::Find; self.find_query.clear(); self.find_hit = None; self.find_all = Vec::new(); },
                 // Numeric tabs 1-9.
                 _ if c.len() == 1 && c.chars().next().unwrap().is_ascii_digit() => {
                     let idx = c.chars().next().unwrap() as u8;

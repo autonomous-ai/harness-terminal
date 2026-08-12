@@ -227,14 +227,20 @@ impl GlyphCache {
     }
 }
 
-/// A search highlight: the currently-focused match, given as (absolute line, column, width).
+/// A search highlight: a match given as (absolute line, column, width).
 pub type Find = (i32, usize, usize);
+
+/// Range of -chars width (in cells) for a query, so every occurrence can be highlighted.
+fn match_width(query: &str) -> usize {
+    query.chars().count()
+}
 
 /// Draw the grid rows/cols into the framebuffer. `row_px`, `col_px` are per-cell pixel sizes.
 /// The glyph `h` px is the line box; the glyph bitmap is drawn at bottom baseline.
 ///
-/// `find` is an optional search highlight: when Some, the match's cells are drawn with a hot
-/// background (yellow) so the user can see where the query landed.
+/// `find` is the focused search match and `matches` is every occurrence of the active query. When
+/// either is present, matching cells are drawn with a yellow background so the user can see where
+/// the query landed; the focused match uses a brighter orange so it stands apart from the rest.
 pub fn draw_grid(
     buf: &mut Framebuffer,
     term: &Term<Listener>,
@@ -243,6 +249,7 @@ pub fn draw_grid(
     font_px: u32,
     cache: &mut GlyphCache,
     find: Option<Find>,
+    matches: &[Find],
     sel: Option<&alacritty_terminal::selection::SelectionRange>,
 ) {
     let cols = term.columns();
@@ -250,9 +257,11 @@ pub fn draw_grid(
     let cursor = &term.grid().cursor.point;
     // When scrolled into history the cursor should not draw (it lives off-screen).
     let scrolled = term.grid().display_offset() > 0;
-    // Search-highlight color (vivid yellow background, black text pops).
+    // Search-highlight colors: vivid yellow for ordinary matches, bright orange for the focused one
+    // (black text pops on both).
     const HIT_FG: (u8, u8, u8) = (0x00, 0x00, 0x00);
     const HIT_BG: (u8, u8, u8) = (0xff, 0xd2, 0x00);
+    const FOCUS_BG: (u8, u8, u8) = (0xff, 0x99, 0x00);
     // Text-selection highlight (soft blue background).
     const SEL_BG: (u8, u8, u8) = (0x26, 0x4f, 0x8c);
 
@@ -270,10 +279,13 @@ pub fn draw_grid(
         let x0 = col as u32 * cell_w;
         let y0 = row as u32 * cell_h;
         let is_cursor = !scrolled && row == cursor.line.0 && col == cursor.column.0 as usize;
-        // Is this cell part of the active search match?
-        let in_match = find
+        // Is this cell part of the focused search match?
+        let in_focus = find
             .map(|(l, c, w)| row == l && col >= c && col < c + w)
             .unwrap_or(false);
+        // Is this cell part of any (other) search match? Every occurrence gets highlighted while
+        // the overlay is open so the user sees all landing spots at once.
+        let in_match = !in_focus && matches.iter().any(|&(l, c, w)| row == l && col >= c && col < c + w);
         let in_sel = sel.map(|s| s.contains(idx.point)).unwrap_or(false);
 
         // Resolve effective fg/bg, applying SGR inverse first (so cursor/match still take visual
@@ -292,8 +304,12 @@ pub fn draw_grid(
         if in_sel {
             bgc = PaletteColor::Spec { r: SEL_BG.0, g: SEL_BG.1, b: SEL_BG.2 };
         }
-        // Search match: force the yellow highlight regardless of inverse/selection.
-        if in_match {
+        // Search matches: force the yellow highlight regardless of inverse/selection. The focused
+        // match is drawn orange so it reads as "you are here" among the others.
+        if in_focus {
+            fg = PaletteColor::Spec { r: HIT_FG.0, g: HIT_FG.1, b: HIT_FG.2 };
+            bgc = PaletteColor::Spec { r: FOCUS_BG.0, g: FOCUS_BG.1, b: FOCUS_BG.2 };
+        } else if in_match {
             fg = PaletteColor::Spec { r: HIT_FG.0, g: HIT_FG.1, b: HIT_FG.2 };
             bgc = PaletteColor::Spec { r: HIT_BG.0, g: HIT_BG.1, b: HIT_BG.2 };
         }
@@ -440,28 +456,36 @@ pub fn find(term: &Term<Listener>, query: &str, start: i32) -> Option<Find> {
     None
 }
 
-/// Count every non-overlapping match of `query` across the whole grid (history + screen). Used for
-/// the "N matches" indicator in the Find overlay.
-pub fn count_matches(term: &Term<Listener>, query: &str) -> usize {
+/// Every non-overlapping match of `query` across the whole grid (history + screen), as
+/// (line, column, width) positions — used to highlight ALL matches while the overlay is open.
+pub fn all_matches(term: &Term<Listener>, query: &str) -> Vec<Find> {
     if query.is_empty() {
-        return 0;
+        return Vec::new();
     }
     let q = query.to_lowercase();
     let grid = term.grid();
     let bottom = grid.bottommost_line().0;
     let mut line = grid.topmost_line().0;
-    let mut total = 0usize;
+    let mut out = Vec::new();
     while line <= bottom {
         let text = line_text(term, line).to_lowercase();
         let mut rest = text.as_str();
+        let mut col = 0usize;
         while let Some(ci) = rest.find(&q) {
-            total += 1;
+            out.push((line, col + ci, match_width(query)));
             let advance = ci + q.len();
+            col += advance;
             rest = if advance < rest.len() { &rest[advance..] } else { "" };
         }
         line += 1;
     }
-    total
+    out
+}
+
+/// Count every non-overlapping match of `query` across the whole grid (history + screen). Used for
+/// the "N matches" indicator in the Find overlay.
+pub fn count_matches(term: &Term<Listener>, query: &str) -> usize {
+    all_matches(term, query).len()
 }
 
 /// Draw a line of text at pixel origin (x0,y0 baseline) with the given color/size. Used for the
@@ -589,7 +613,7 @@ mod tests {
         let mut cache = GlyphCache::load();
         {
             let g = term.lock();
-            draw_grid(&mut fb, &g, 9, 18, 12, &mut cache, None, None);
+            draw_grid(&mut fb, &g, 9, 18, 12, &mut cache, None, &[], None);
         }
 
         // At least some pixel is non-background (glyphs drawn).
@@ -646,7 +670,7 @@ mod tests {
         let mut cache = GlyphCache::load();
         {
             let g = term.lock();
-            draw_grid(&mut fb, &g, 9, 18, 12, &mut cache, None, None);
+            draw_grid(&mut fb, &g, 9, 18, 12, &mut cache, None, &[], None);
         }
         let non_blank = fb.pixels.iter().filter(|&&p| p != 0x0000_0000).count();
         assert!(non_blank > 20, "expected scrollback glyphs when scrolled, got {non_blank}");
@@ -703,7 +727,7 @@ mod tests {
         let mut cache = GlyphCache::load();
         {
             let g = term.lock();
-            draw_grid(&mut fb, &g, 9, 18, 12, &mut cache, None, None);
+            draw_grid(&mut fb, &g, 9, 18, 12, &mut cache, None, &[], None);
         }
         // Cell (0,0) bg should be green-ish (the original fg became the bg).
         let cell0 = fb.pixels[0];
@@ -738,7 +762,7 @@ mod tests {
         let mut fb = Framebuffer::new(5 * 9, 18);
         let mut cache = GlyphCache::load();
         let g = term.lock();
-        draw_grid(&mut fb, &g, 9, 18, 12, &mut cache, None, None);
+        draw_grid(&mut fb, &g, 9, 18, 12, &mut cache, None, &[], None);
         drop(g);
 
         let cell_x = 0;
@@ -773,5 +797,32 @@ mod tests {
         assert_eq!(count_matches(&g, "fix"), 3, "expected 3 total non-overlapping matches");
         assert_eq!(count_matches(&g, "zzz"), 0);
         assert_eq!(count_matches(&g, ""), 0);
+    }
+
+    /// all_matches returns every occurrence with correct (line, col, width) so draw_grid can
+    /// highlight them all; line/col are grid-relative display coordinates.
+    #[test]
+    fn all_matches_lists_every_occurrence() {
+        use alacritty_terminal::sync::FairMutex;
+        use alacritty_terminal::term::{Config, Term};
+        use alacritty_terminal::vte::ansi::{Processor, StdSyncHandler};
+
+        use crate::session::Listener;
+
+        let size = crate::session::TermSize { lines: 4, cols: 40 };
+        let term = FairMutex::new(Term::new(Config::default(), &size, Listener::default()));
+        let bytes = b"fix foo fix\r\nno match here\r\nfix again";
+        {
+            let mut p: Processor<StdSyncHandler> = Processor::default();
+            p.advance(&mut *term.lock(), bytes);
+        }
+        let g = term.lock();
+        // First line (row 0): two matches at cols 0 and 8. Third line (row 2): one at col 0.
+        let hits = all_matches(&g, "fix");
+        assert_eq!(hits.len(), 3);
+        assert_eq!(hits[0], (0, 0, 3));
+        assert_eq!(hits[1], (0, 8, 3));
+        assert_eq!(hits[2], (2, 0, 3));
+        assert!(all_matches(&g, "zzz").is_empty());
     }
 }
