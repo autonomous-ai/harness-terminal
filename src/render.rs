@@ -272,29 +272,40 @@ pub fn draw_grid(
             .map(|(l, c, w)| row == l && col >= c && col < c + w)
             .unwrap_or(false);
 
-        // Background.
-        let mut bg = cell_color(&cell.bg);
+        // Resolve effective fg/bg, applying SGR inverse first (so cursor/match still take visual
+        // precedence while keeping the right base colors to swap).
+        let mut fg = if cell.flags.contains(Flags::INVERSE) {
+            cell_color(&cell.bg)
+        } else {
+            cell_color(&cell.fg)
+        };
+        let mut bgc = if cell.flags.contains(Flags::INVERSE) {
+            cell_color(&cell.fg)
+        } else {
+            cell_color(&cell.bg)
+        };
+        // Search match: force the yellow highlight regardless of inverse.
         if in_match {
-            bg = PaletteColor::Spec { r: HIT_BG.0, g: HIT_BG.1, b: HIT_BG.2 };
-        } else if is_cursor {
-            // Classic block cursor: use the cell's foreground as the block fill.
-            bg = cell_color(&cell.fg);
+            fg = PaletteColor::Spec { r: HIT_FG.0, g: HIT_FG.1, b: HIT_FG.2 };
+            bgc = PaletteColor::Spec { r: HIT_BG.0, g: HIT_BG.1, b: HIT_BG.2 };
         }
-        paint_bg(buf, x0 as usize, y0 as usize, cell_w as usize, cell_h as usize, bg);
+        if is_cursor {
+            // Block cursor: fill with the effective foreground, draw the glyph in the bg color.
+            bgc = fg;
+            fg = PaletteColor::Spec { r: DEFAULT_BG.0, g: DEFAULT_BG.1, b: DEFAULT_BG.2 };
+        }
+        // Paint the background (uses the resolved bgc).
+        paint_bg(buf, x0 as usize, y0 as usize, cell_w as usize, cell_h as usize, bgc);
         if cell.c == ' ' {
             continue;
         }
-
-        // Foreground: normal cell fg, or (cursor/match) inverted theme.
-        let mut fg = cell_color(&cell.fg);
-        if in_match {
-            fg = PaletteColor::Spec { r: HIT_FG.0, g: HIT_FG.1, b: HIT_FG.2 };
-        } else if is_cursor {
-            // Invert: draw the glyph in the cell's original background color.
-            let mut bgsave = cell_color(&cell.bg);
-            std::mem::swap(&mut fg, &mut bgsave);
+        // SGR dim: scale the foreground toward black (kept simple: halve toward black).
+        let (mut r, mut g, mut b) = fg.to_rgb();
+        if cell.flags.contains(Flags::DIM) {
+            r = (r as u16 / 2) as u8;
+            g = (g as u16 / 2) as u8;
+            b = (b as u16 / 2) as u8;
         }
-        let (r, g, b) = fg.to_rgb();
         let bold = cell.flags.contains(Flags::BOLD);
         let (gw, gh, alpha) = cache.glyph(cell.c, font_px, bold);
         // Draw glyph alpha over bg at baseline; clamp to the cell box.
@@ -319,6 +330,37 @@ pub fn draw_grid(
                     let nb = (b as u32 * a32 + db * (255 - a32)) / 255;
                     buf.pixels[py * buf.width + px] = argb(255, nr as u8, ng as u8, nb as u8);
                 }
+            }
+        }
+
+        // SGR underline / strikeout: draw a horizontal rule across the cell in the fg color.
+        // Underline sits near the baseline; strikeout near the vertical middle.
+        let line_px = (cell_h as usize / 10).max(1);
+        let underline_y = y0 as usize + cell_h as usize - line_px - (cell_h as usize / 12);
+        let strike_y = y0 as usize + (cell_h as usize * 5) / 12;
+        let rule_color = if cell.flags.contains(Flags::UNDERLINE) || cell.flags.contains(Flags::STRIKEOUT) {
+            Some((r, g, b))
+        } else {
+            None
+        };
+        if let Some((rr, gg, bb)) = rule_color {
+            let x0u = x0 as usize;
+            let mut draw_rule = |yb: usize| {
+                for px in 0..cell_w as usize {
+                    for dy in 0..line_px {
+                        let rpx = x0u + px;
+                        let rpy = yb + dy;
+                        if rpx < buf.width && rpy < buf.height {
+                            buf.pixels[rpy * buf.width + rpx] = argb(255, rr, gg, bb);
+                        }
+                    }
+                }
+            };
+            if cell.flags.contains(Flags::UNDERLINE) {
+                draw_rule(underline_y);
+            }
+            if cell.flags.contains(Flags::STRIKEOUT) {
+                draw_rule(strike_y);
             }
         }
     }
@@ -569,5 +611,39 @@ mod tests {
         let hit = find(&g, "NEEDLE", g.grid().topmost_line().0).expect("should find a match");
         assert!(hit.0 < 0, "first hit should be in history (negative line), got {}", hit.0);
         assert!(hit.1 >= 0 && hit.2 > 0, "match should have a column and width");
+    }
+
+    /// SGR inverse: feed text with the inverse attribute; the cell bg should become the colored fg
+    /// (green from the SGR before it), proving inverse swaps bg to the original fg color.
+    #[test]
+    fn sgr_inverse_swaps_fg_bg() {
+        use alacritty_terminal::sync::FairMutex;
+        use alacritty_terminal::term::{Config, Term};
+        use alacritty_terminal::vte::ansi::{Processor, StdSyncHandler};
+
+        use crate::session::Listener;
+
+        let size = crate::session::TermSize { lines: 2, cols: 40 };
+        let term = FairMutex::new(Term::new(Config::default(), &size, Listener));
+        // Green foreground, then inverse on top of it ("A" becomes green-on-fg with inverse).
+        let bytes = b"\x1b[32m\x1b[7mX";
+        {
+            let mut p: Processor<StdSyncHandler> = Processor::default();
+            p.advance(&mut *term.lock(), bytes);
+        }
+
+        // Render: the inverse cell paints its background with the original fg (green).
+        let mut fb = Framebuffer::new(40 * 9, 2 * 18);
+        let mut cache = GlyphCache::load();
+        {
+            let g = term.lock();
+            draw_grid(&mut fb, &g, 9, 18, 12, &mut cache, None);
+        }
+        // Cell (0,0) bg should be green-ish (the original fg became the bg).
+        let cell0 = fb.pixels[0];
+        let r = (cell0 >> 16) & 0xff;
+        let g = (cell0 >> 8) & 0xff;
+        let b = cell0 & 0xff;
+        assert!(g > 100 && r < 100 && b < 160, "inverse cell bg should be green, got rgb({r},{g},{b})");
     }
 }
