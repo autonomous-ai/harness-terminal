@@ -425,6 +425,28 @@ pub fn load_last_broadcast() -> String {
     }
 }
 
+fn broadcast_history_path() -> std::path::PathBuf {
+    config_dir().join("broadcast-history.json")
+}
+
+/// Persist the MRU of broadcast lines actually sent (most-recent first, already capped by the
+/// caller), so Shift+Up/Down recall survives a restart. Best-effort like the others.
+pub fn save_broadcast_history(hist: &[String]) {
+    let _ = std::fs::create_dir_all(config_dir());
+    let _ = std::fs::write(
+        broadcast_history_path(),
+        serde_json::to_string_pretty(hist).unwrap_or_default(),
+    );
+}
+
+/// Load the broadcast history (empty on missing file / bad JSON).
+pub fn load_broadcast_history() -> Vec<String> {
+    let Ok(raw) = std::fs::read_to_string(broadcast_history_path()) else {
+        return Vec::new();
+    };
+    serde_json::from_str(&raw).unwrap_or_default()
+}
+
 // ── pin persistence ─────────────────────────────────────────────────────────
 
 fn pinned_path() -> std::path::PathBuf {

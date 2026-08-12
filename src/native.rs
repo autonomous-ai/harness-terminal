@@ -129,6 +129,13 @@ struct Application {
     /// command (e.g. `git pull` on every host) survives without retyping. Kept across restarts via
     /// `restore::save_last_broadcast`.
     last_broadcast: String,
+    /// MRU of broadcast lines actually sent, most-recent first (cap 16). Shift+Up/Down in the
+    /// broadcast overlay recalls old commands to repeat, e.g. alternating `git pull` / `make build`
+    /// across machines. Persisted via `restore::save_broadcast_history`.
+    broadcast_hist: Vec<String>,
+    /// Index into `broadcast_hist` that a Shift+Up/Down recall currently points at; None = editing
+    /// a fresh line.
+    hist_sel: Option<usize>,
     /// Per-tab broadcast target selection. Grows/shrinks to match `tabs`; open targets are is_static, closed toggled off. Defaults all-on.
     broadcast_targets: Vec<bool>,
     /// Index of the row the broadcast overlay's focus is on (all-on by default).
@@ -312,6 +319,8 @@ impl Application {
             rename_query: String::new(),
             broadcast_query: String::new(),
             last_broadcast: crate::restore::load_last_broadcast(),
+            broadcast_hist: crate::restore::load_broadcast_history(),
+            hist_sel: None,
             broadcast_targets: vec![true; tab_count],
             broadcast_sel: 0,
             new_cwd: String::new(),
@@ -2257,7 +2266,7 @@ impl Application {
         let (base_y, line_px) = self.overlay_base_y();
         let n = self.broadcast_targets.iter().filter(|&&t| t).count();
         let prompt = if self.broadcast_query.is_empty() {
-            format!("  send line to {n} of {} session{} (↑/↓ focus, Space=toggle, Enter=broadcast, Esc=cancel)  ",
+            format!("  send line to {n} of {} session{} (↑/↓ focus · Space=toggle · ⇧↑/⇧↓ history · Enter=broadcast · Esc=cancel)  ",
                 self.app.tabs.len(), if n == 1 { "" } else { "s" })
         } else {
             format!(
@@ -3169,6 +3178,8 @@ impl Application {
                         } else {
                             self.broadcast_query.push_str(c);
                         }
+                        // Editing a fresh line leaves history recall.
+                        self.hist_sel = None;
                     }
                     Key::Named(n) => match n {
                         winit::keyboard::NamedKey::Enter => {
@@ -3185,19 +3196,36 @@ impl Application {
                                 // command to every host doesn't need retyping).
                                 self.last_broadcast = self.broadcast_query.clone();
                                 crate::restore::save_last_broadcast(&self.last_broadcast);
+                                // Push it onto the MRU history (dedup + front + cap 16).
+                                self.broadcast_hist.retain(|h| h != &self.broadcast_query);
+                                self.broadcast_hist.insert(0, self.broadcast_query.clone());
+                                self.broadcast_hist.truncate(16);
+                                crate::restore::save_broadcast_history(&self.broadcast_hist);
                             }
                             self.broadcast_query.clear();
+                            self.hist_sel = None;
                             self.app.overlay = Overlay::None;
                         }
                         winit::keyboard::NamedKey::ArrowDown => {
-                            self.broadcast_sel =
-                                (self.broadcast_sel + 1).min(self.app.tabs.len().saturating_sub(1));
+                            if mods.shift_key() {
+                                // Shift+Down recalls newer history.
+                                self.hist_down();
+                            } else {
+                                self.broadcast_sel = (self.broadcast_sel + 1)
+                                    .min(self.app.tabs.len().saturating_sub(1));
+                            }
                         }
                         winit::keyboard::NamedKey::ArrowUp => {
-                            self.broadcast_sel = self.broadcast_sel.saturating_sub(1);
+                            if mods.shift_key() {
+                                // Shift+Up recalls older history.
+                                self.hist_up();
+                            } else {
+                                self.broadcast_sel = self.broadcast_sel.saturating_sub(1);
+                            }
                         }
                         winit::keyboard::NamedKey::Backspace => {
                             self.broadcast_query.pop();
+                            self.hist_sel = None;
                         }
                         winit::keyboard::NamedKey::Escape => {
                             self.broadcast_query.clear();
@@ -3474,6 +3502,21 @@ fn broadcast_bytes(q: &str) -> Vec<u8> {
     }
 }
 
+/// Next broadcast-history slot when walking `delta` (negative = older). Starting cold (`None`),
+/// Shift+Up grabs the newest entry; Shift+Down wraps to the oldest. Wraps around the history list.
+fn recall_index(n: usize, delta: isize, cur: Option<usize>) -> usize {
+    match cur {
+        Some(i) => (i as isize + delta).rem_euclid(n as isize) as usize,
+        None => {
+            if delta < 0 {
+                n - 1
+            } else {
+                0
+            }
+        }
+    }
+}
+
 /// Collect every (tab, line, col) match of the lowercase query across ALL sessions' scrollbacks,
 /// sorted by tab then line. Used by fleet search. Shared free function so the cross-tab + sort
 /// behavior is unit-testable without building real `Session`s (tests pass raw lockable Terms).
@@ -3537,6 +3580,28 @@ fn scroll_active(app: &Application, delta: i32) {
 }
 
 impl Application {
+    /// Move the broadcast overlay's recall cursor by `delta` slots (`-1` older, `+1` newer) and set
+    /// the query to the recalled line. Wraps around the history; a fresh (unsaved) line sits above the
+    /// newest entry and is yielded back to when stepping past the top. No-op with an empty history.
+    /// Walk broadcast history with Shift+Up (older).
+    fn hist_up(&mut self) {
+        self.recall_broadcast(-1)
+    }
+
+    /// Walk broadcast history with Shift+Down (newer).
+    fn hist_down(&mut self) {
+        self.recall_broadcast(1)
+    }
+
+    fn recall_broadcast(&mut self, delta: isize) {
+        let n = self.broadcast_hist.len();
+        if n == 0 {
+            return;
+        }
+        self.hist_sel = Some(recall_index(n, delta, self.hist_sel));
+        self.broadcast_query = self.broadcast_hist[self.hist_sel.unwrap()].clone();
+    }
+
     /// Return to the latest (live) view: clear the display offset and end scroll mode.
     fn scroll_to_bottom(&mut self) {
         use alacritty_terminal::grid::Scroll;
@@ -4229,7 +4294,7 @@ pub fn run(app: App) -> Result<(), Box<dyn std::error::Error>> {
 mod tests {
     use super::{
         argb_to_rgb, broadcast_bytes, collect_fleet_matches, engine_accent, expand_click_word,
-        group_notifications, host_color, join_labels, FleetMatch,
+        group_notifications, host_color, join_labels, recall_index, FleetMatch,
     };
 
     use std::sync::Arc;
@@ -4438,5 +4503,21 @@ mod tests {
             broadcast_bytes("").is_empty(),
             "blank must not broadcast a bare newline"
         );
+    }
+
+    /// Broadcast-history recall walks older/newer and wraps around both ends; a cold start lands on
+    /// the newest line for Shift+Up and the oldest for Shift+Down.
+    #[test]
+    fn recall_broadcast_wraps_and_cold_starts() {
+        let n = 3;
+        // Cold + Up -> newest (index 2), cold + Down -> oldest (index 0).
+        assert_eq!(recall_index(n, -1, None), 2);
+        assert_eq!(recall_index(n, 1, None), 0);
+        // Stepping older from the newest wraps to the oldest.
+        assert_eq!(recall_index(n, -1, Some(2)), 1);
+        assert_eq!(recall_index(n, -1, Some(0)), 2);
+        // Stepping newer from the oldest wraps to the newest.
+        assert_eq!(recall_index(n, 1, Some(0)), 1);
+        assert_eq!(recall_index(n, 1, Some(2)), 0);
     }
 }
