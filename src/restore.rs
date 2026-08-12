@@ -147,6 +147,27 @@ pub fn load_geometry() -> Option<(u32, u32)> {
     Some((w, h))
 }
 
+fn position_path() -> std::path::PathBuf {
+    config_dir().join("position.json")
+}
+
+/// Persist the window's outer position (top-left, physical px) so a relaunch returns to the same
+/// spot on screen, not just the same size. Best-effort like the others. Saved on move and on close.
+pub fn save_position(x: i32, y: i32) {
+    let payload = format!("{{\"x\":{},\"y\":{}}}", x, y);
+    let _ = std::fs::create_dir_all(config_dir());
+    let _ = std::fs::write(position_path(), payload);
+}
+
+/// Load the persisted window position. None on error/missing so the OS places a fresh window.
+pub fn load_position() -> Option<(i32, i32)> {
+    let raw = std::fs::read_to_string(position_path()).ok()?;
+    let v: serde_json::Value = serde_json::from_str(&raw).ok()?;
+    let x = v.get("x")?.as_i64()? as i32;
+    let y = v.get("y")?.as_i64()? as i32;
+    Some((x, y))
+}
+
 // ── scrollback persistence ──────────────────────────────────────────────────
 
 fn scrollback_path() -> std::path::PathBuf {
@@ -357,6 +378,19 @@ mod tests {
             let loaded = load_scrollback("tunnel", "10.0.0.7", "claude");
             assert!(loaded.len() <= MAX_SCROLLBACK_BYTES);
             assert!(loaded.ends_with("TAIL"), "cap must keep the tail, not the head");
+        });
+    }
+
+    /// Window position round-trips through its file; a missing file loads None (let the OS place it).
+    #[test]
+    fn position_roundtrips_missing_is_none() {
+        with_isolated_dir(|_| {
+            assert!(load_position().is_none());
+            save_position(320, 180);
+            assert_eq!(load_position(), Some((320, 180)));
+            // Negative coords (multi-monitor to the upper-left) survive too.
+            save_position(-800, 40);
+            assert_eq!(load_position(), Some((-800, 40)));
         });
     }
 

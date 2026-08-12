@@ -2257,7 +2257,11 @@ impl ApplicationHandler for Application {
             .unwrap_or(Size::Logical(LogicalSize::new(110.0, 34.0)));
         let attribs = winit::window::Window::default_attributes()
             .with_title("harness-terminal")
-            .with_inner_size(size);
+            .with_inner_size(size)
+            .with_position({
+                let (x, y) = crate::restore::load_position().unwrap_or((200, 120));
+                winit::dpi::Position::Physical(winit::dpi::PhysicalPosition::new(x, y))
+            });
         match event_loop.create_window(attribs) {
             Ok(w) => {
                 let w = Rc::new(w);
@@ -2295,6 +2299,11 @@ impl ApplicationHandler for Application {
                         w.request_redraw();
                     }
                 }
+            }
+            WindowEvent::Moved(pos) => {
+                // Persist the window's top-left so a relaunch returns to the same spot on screen
+                // (complements the size persistence; both are best-effort).
+                crate::restore::save_position(pos.x, pos.y);
             }
             WindowEvent::ScaleFactorChanged { .. } => {
                 self.metrics_from_scale();
