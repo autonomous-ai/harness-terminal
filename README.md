@@ -43,7 +43,7 @@ The prefix is `Ctrl+Space` (tmux-style), then a command:
 | `Ctrl+Space` `/` | palette: fuzzy-jump to any session |
 | `Ctrl+Space` `;` | command palette: run any action by name |
 | `Ctrl+Space` `n` | new session (engine picker; type a working dir) |
-| `Ctrl+Space` `r` | attach to a remote `pane@host` |
+| `Ctrl+Space` `r` | attach to remote `pane@host` (add `:port` for a non-default harness daemon) |
 | `Ctrl+Space` `s` | fleet status (Up/Down + Enter to dive into a session) |
 | `Ctrl+Space` `f` | search scrollback |
 | `Ctrl+Space` `h` | search all sessions (fleet-wide) |

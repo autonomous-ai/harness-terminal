@@ -125,6 +125,10 @@ struct Application {
     /// In-progress broadcast line ("" when the Broadcast overlay is closed). Enter sends it to every
     /// session; backspace/escape edit/cancel it.
     broadcast_query: String,
+    /// The last broadcast line that was actually sent, pre-filled on the next open so a repeat
+    /// command (e.g. `git pull` on every host) survives without retyping. Kept across restarts via
+    /// `restore::save_last_broadcast`.
+    last_broadcast: String,
     /// Per-tab broadcast target selection. Grows/shrinks to match `tabs`; open targets are is_static, closed toggled off. Defaults all-on.
     broadcast_targets: Vec<bool>,
     /// Index of the row the broadcast overlay's focus is on (all-on by default).
@@ -307,6 +311,7 @@ impl Application {
             find_query: String::new(),
             rename_query: String::new(),
             broadcast_query: String::new(),
+            last_broadcast: crate::restore::load_last_broadcast(),
             broadcast_targets: vec![true; tab_count],
             broadcast_sel: 0,
             new_cwd: String::new(),
@@ -1908,7 +1913,7 @@ impl Application {
         draw_text(
             fb,
             &mut self.cache,
-            &format!("  host: {}", self.app.remote_host),
+            &format!("  host[:port] {}", self.app.remote_host),
             32,
             base_y + line_px,
             self.font_px,
@@ -2457,7 +2462,11 @@ impl Application {
             ExportLog => self.export_scrollback(),
             CopyIdentity => self.copy_identity(),
             Broadcast => {
-                self.broadcast_query.clear();
+                // Pre-fill the last-sent line so a repeat command to every host survives; Backspace
+                // clears it if a fresh one is wanted. Targets still reset all-on (safety).
+                self.broadcast_query = self.last_broadcast.clone();
+                self.broadcast_targets.iter_mut().for_each(|t| *t = true);
+                self.broadcast_sel = 0;
                 self.app.overlay = Overlay::Broadcast;
             }
             Peek => {
@@ -2784,11 +2793,11 @@ impl Application {
                 Some("last_window") => self.last_window(),
                 Some("paste") => self.paste_clipboard(),
                 Some("broadcast") => {
-                    // Broadcast one line to every open session. Starts with an empty query so the
-                    // user types (or re-enters) the command line to fan out via Enter. Targets reset
-                    // all-on on each open: a prior run's deselections must NOT silently carry over,
-                    // or a user who meant to exclude one host could re-fan to it on the next send.
-                    self.broadcast_query.clear();
+                    // Broadcast one line to every open session. Pre-fills the last-sent line (see
+                    // the palette arm); targets reset all-on on each open — a prior run's
+                    // deselections must NOT silently carry over, or a user who meant to exclude one
+                    // host could re-fan to it on the next send.
+                    self.broadcast_query = self.last_broadcast.clone();
                     self.broadcast_targets.iter_mut().for_each(|t| *t = true);
                     self.broadcast_sel = 0;
                     self.app.overlay = Overlay::Broadcast;
@@ -2953,16 +2962,21 @@ impl Application {
                     Key::Named(n) => match n {
                         winit::keyboard::NamedKey::Enter => {
                             if let Some(e) = self.app.selected_engine() {
-                                let host = if self.app.remote_host.trim().is_empty() {
-                                    "127.0.0.1".to_string()
+                                let raw = self.app.remote_host.trim();
+                                let (host, port) = if raw.is_empty() {
+                                    (
+                                        "127.0.0.1".to_string(),
+                                        crate::harness::HARNESS_PORT_DEFAULT,
+                                    )
+                                } else if let Some((h, p)) = raw.split_once(':') {
+                                    (
+                                        h.to_string(),
+                                        p.parse().unwrap_or(crate::harness::HARNESS_PORT_DEFAULT),
+                                    )
                                 } else {
-                                    self.app.remote_host.trim().to_string()
+                                    (raw.to_string(), crate::harness::HARNESS_PORT_DEFAULT)
                                 };
-                                self.app.spawn_tunnel(
-                                    &host,
-                                    crate::harness::HARNESS_PORT_DEFAULT,
-                                    e,
-                                );
+                                self.app.spawn_tunnel(&host, port, e);
                                 self.app.overlay = Overlay::None;
                             }
                         }
@@ -3160,6 +3174,10 @@ impl Application {
                                         s.write(&bytes);
                                     }
                                 }
+                                // Remember what we sent so the next broadcast pre-fills it (a repeat
+                                // command to every host doesn't need retyping).
+                                self.last_broadcast = self.broadcast_query.clone();
+                                crate::restore::save_last_broadcast(&self.last_broadcast);
                             }
                             self.broadcast_query.clear();
                             self.app.overlay = Overlay::None;
