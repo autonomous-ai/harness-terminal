@@ -80,8 +80,9 @@ fn url_at(line: &str, start: usize) -> UrlSpan {
 
 /// Return the URL span covering byte column `col` in `line`, or `None`.
 ///
-/// Recognises `scheme://…` (http, https, file, ftp) and a bare host like `foo.com/path`. The span
-/// excludes trailing closing punctuation (`.`, `,`, `)`, …), so `…/foo.` reads as `…/foo`.
+/// Recognises `scheme://…` (http, https, file, ftp), single-colon `mailto:` / `tel:` links, and a
+/// bare host like `foo.com/path`. The span excludes trailing closing punctuation (`.`, `,`, `)`,
+/// …), so `…/foo.` reads as `…/foo`.
 pub fn url_span(line: &str, col: usize) -> Option<UrlSpan> {
     let bytes = line.as_bytes();
     if bytes.is_empty() {
@@ -113,6 +114,27 @@ pub fn url_span(line: &str, col: usize) -> Option<UrlSpan> {
             search = after;
         } else {
             search = colon + 3;
+        }
+    }
+
+    // 1b) Single-colon schemes (`mailto:` and `tel:`) have no `//`, so the loop above misses them.
+    // Scan for each marker and require a real value after the colon and a word boundary before the
+    // scheme (`amailto:x` must not mis-detect). Runs before the bare-host branch so `user@host` in
+    // `mailto:user@host` resolves as a mail link, not a web host.
+    for marker in ["mailto:", "tel:"] {
+        let mut search = 0usize;
+        while let Some(p) = line[search..].find(marker) {
+            let start = search + p;
+            // Scheme must be word-boundary: line start or whitespace immediately before it.
+            let preceded_ok = start == 0 || bytes[start - 1].is_ascii_whitespace();
+            if preceded_ok {
+                let sp = url_at(line, start);
+                // Require at least one character of value ("mailto:" alone is not a link).
+                if sp.end > start + marker.len() && sp.start <= col && col < sp.end {
+                    return Some(sp);
+                }
+            }
+            search = start + marker.len();
         }
     }
 
@@ -220,6 +242,40 @@ mod tests {
         assert_eq!(span("try example.com/ !", 8), Some((4, 15)));
         // Inside parens.
         assert_eq!(span("see (foo.com/bar) ok", 8), Some((5, 16)));
+    }
+
+    #[test]
+    fn mailto_and_tel_links() {
+        // mailto: spans the full address; a col inside it clicks it. "email me at " is 12 chars.
+        let line = "email me at mailto:alice@example.com thanks";
+        assert_eq!(span(line, 15), Some((12, 36)));
+        assert_eq!(span(line, 34), Some((12, 36)));
+        let s = url_span(line, 20).unwrap();
+        assert_eq!(s.as_str(line), "mailto:alice@example.com");
+        // tel: link — "call tel:" is 5 chars, "tel:+1-555-0100" is 15 chars.
+        let line3 = "call tel:+1-555-0100 now";
+        assert_eq!(span(line3, 7), Some((5, 20)));
+        assert_eq!(
+            url_span(line3, 12).unwrap().as_str(line3),
+            "tel:+1-555-0100"
+        );
+        // A bare email in prose still resolves as a host link (no mailto: needed).
+        assert_eq!(span("write to alice@example.com", 10), Some((9, 26)));
+    }
+
+    #[test]
+    fn mailto_requires_word_boundary_and_value() {
+        // Colon alone, or nothing after it, is not a link.
+        assert_eq!(span("a mailto: b", 4), None);
+        // No space before the scheme: `amailto:x` is a word, not a scheme — so it reads as a host
+        // only if there's a dotted TLD, and as nothing at all without one.
+        assert_eq!(span("amailto:xyz", 5), None);
+        // Dotted TLD after a glued scheme still resolves as a host link, not a mailto.
+        let s = url_span("amailto:alice@example.com", 15).unwrap();
+        assert_eq!(
+            s.as_str("amailto:alice@example.com"),
+            "amailto:alice@example.com"
+        );
     }
 
     #[test]
