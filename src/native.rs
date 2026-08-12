@@ -46,10 +46,6 @@ struct Application {
     /// The tab that was active before the current one, so prefix+l can flip back to it (tmux
     /// last-window muscle memory). Cleared to None when tabs get rearranged out from under it.
     last_active: Option<usize>,
-    /// True while the view is scrolled into history (live follow suspended). Set when the user
-    /// scrolls up; cleared when they return to the bottom (scroll command / Esc) or new output
-    /// resets the display offset in `render`.
-    scrolled: bool,
     /// Active search query ("" when the Find overlay is closed).
     find_query: String,
     /// In-progress rename for the active tab ("" when the Rename overlay is closed).
@@ -118,7 +114,6 @@ impl Application {
             prefix_down: false,
             mods: ModifiersState::default(),
             last_active: None,
-            scrolled: false,
             find_query: String::new(),
             rename_query: String::new(),
             find_hit: None,
@@ -344,7 +339,8 @@ impl Application {
             // Auto-return to the live view when new content pushes us to the bottom again: if we're
             // not mid-gesture (self.scrolled is false) force the view back to the latest line.
             let at_bottom = g.grid().display_offset() == 0;
-            if !self.scrolled && !at_bottom {
+            // Only force back to live if THIS session isn't pinned into history by the user.
+            if !active.scrolled() && !at_bottom {
                 use alacritty_terminal::grid::Scroll;
                 g.grid_mut().scroll_display(Scroll::Bottom);
             }
@@ -422,7 +418,8 @@ impl Application {
         // When the viewport is scrolled back from the live bottom, say so — a dead giveaway that
         // keys won't take you to fresh output until you press Escape (or the b key). Also show how
         // far back we are as a percentage so a long agent log stays navigable.
-        if self.scrolled {
+        let scrolled_now = self.app.active_session().map(|s| s.scrolled()).unwrap_or(false);
+        if scrolled_now {
             let pct = self
                 .app
                 .active_session()
@@ -634,7 +631,7 @@ impl Application {
         self.find_hit = self.find_all.get(idx).copied();
         if let Some((l, _, _)) = self.find_hit {
             self.find_scroll_to(&mut *g, l);
-            self.scrolled = true;
+            active.set_scrolled(true);
         }
     }
 
@@ -652,7 +649,7 @@ impl Application {
         if let Some((l, _, _)) = self.find_hit {
             let mut g = active.term.lock();
             self.find_scroll_to(&mut *g, l);
-            self.scrolled = true;
+            active.set_scrolled(true);
         }
         true
     }
@@ -672,7 +669,7 @@ impl Application {
         self.copy_query.clear();
         self.copy_searching = false;
         self.copy_mode = true;
-        self.scrolled = true;
+        active.set_scrolled(true);
     }
 
     /// Copy the current copy-mode selection (anchor→pos inclusive) to the clipboard via
@@ -982,7 +979,7 @@ impl Application {
                 "l" => self.last_window(),
                 "p" => self.paste_clipboard(),
                 "x" => { close_tab(&mut self.app); }
-                "g" => { scroll_active(self, 20); self.scrolled = true; }
+                "g" => { scroll_active(self, 20); if let Some(s) = self.app.active_session() { s.set_scrolled(true); } }
                 "b" => self.scroll_to_bottom(),
                 "f" => { self.app.overlay = Overlay::Find; self.find_query.clear(); self.find_hit = None; self.find_all = Vec::new(); },
                 "[" => self.start_copy_mode(),
@@ -1177,12 +1174,13 @@ impl Application {
             // Scrollback navigation takes precedence over forwarding to the shell. While scrolled,
             // page/arrow keys move the viewport; Esc returns to the live (bottom) view. PageUp from
             // the live view also enters scroll mode.
-            if self.scrolled || matches!(key, Key::Named(winit::keyboard::NamedKey::PageUp)) {
+            let scrolled_now = self.app.active_session().map(|s| s.scrolled()).unwrap_or(false);
+            if scrolled_now || matches!(key, Key::Named(winit::keyboard::NamedKey::PageUp)) {
                 match key {
                     Key::Named(n) => match n {
-                        winit::keyboard::NamedKey::PageUp => { scroll_active(self, 20); self.scrolled = true; }
+                        winit::keyboard::NamedKey::PageUp => { scroll_active(self, 20); if let Some(s) = self.app.active_session() { s.set_scrolled(true); } }
                         winit::keyboard::NamedKey::PageDown => scroll_active(self, -20),
-                        winit::keyboard::NamedKey::ArrowUp => { scroll_active(self, 1); self.scrolled = true; }
+                        winit::keyboard::NamedKey::ArrowUp => { scroll_active(self, 1); if let Some(s) = self.app.active_session() { s.set_scrolled(true); } }
                         winit::keyboard::NamedKey::ArrowDown => scroll_active(self, -1),
                         winit::keyboard::NamedKey::Escape => self.scroll_to_bottom(),
                         _ => {}
@@ -1190,11 +1188,11 @@ impl Application {
                     _ => {}
                 }
                 // Snap scrolled state to reality once we hit bottom (offset no longer moves).
-                if self.scrolled {
-                    if let Some(active) = self.app.active_session() {
+                if let Some(active) = self.app.active_session() {
+                    if active.scrolled() {
                         let g = active.term.lock();
                         if g.grid().display_offset() == 0 {
-                            self.scrolled = false;
+                            active.set_scrolled(false);
                         }
                     }
                 }
@@ -1294,8 +1292,8 @@ impl Application {
         if let Some(active) = self.app.active_session() {
             let mut g = active.term.lock();
             g.grid_mut().scroll_display(Scroll::Bottom);
+            active.set_scrolled(false);
         }
-        self.scrolled = false;
     }
 
     /// Map a framebuffer pixel position to the terminal-cell it lands on (viewing row 0 = the
@@ -1347,7 +1345,7 @@ impl Application {
     fn mouse_alt_click(&mut self, x: f64, y: f64) {
         let Some(pt) = self.mouse_to_cell(x, y) else { return };
         // Only meaningful against live (unscrolled) screen coordinates; report 1-based.
-        if self.scrolled || pt.line.0 < 0 {
+        if self.app.active_session().map(|s| s.scrolled()).unwrap_or(false) || pt.line.0 < 0 {
             return;
         }
         let seq = format!("\x1b[{};{}R", pt.line.0 + 1, pt.column.0 + 1);
@@ -1362,7 +1360,7 @@ impl Application {
     /// Best-effort — a click on non-text just does nothing.
     fn mouse_open(&mut self, x: f64, y: f64) {
         let Some(pt) = self.mouse_to_cell(x, y) else { return };
-        if self.scrolled || pt.line.0 < 0 {
+        if self.app.active_session().map(|s| s.scrolled()).unwrap_or(false) || pt.line.0 < 0 {
             return;
         }
         let Some(active) = self.app.active_session() else { return };
@@ -1606,7 +1604,7 @@ impl ApplicationHandler for Application {
                 let lines = (mag * 3.0) as i32;
                 scroll_active(self, lines);
                 if lines > 0 {
-                    self.scrolled = true;
+                    if let Some(s) = self.app.active_session() { s.set_scrolled(true); }
                 }
                 if let Some(w) = &self.window {
                     w.request_redraw();

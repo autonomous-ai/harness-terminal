@@ -168,6 +168,10 @@ pub struct Session {
     /// attempts have failed and when the next attempt may fire (exponential backoff so a dead daemon
     /// isn't hammered and the status line can show *how long* it's been down).
     retry: Mutex<RetryState>,
+    /// Whether THIS session's view is scrolled into history (live-follow suspended). Per-session so
+    /// switching tabs doesn't lose where you left each pane — flag A's scroll survives a switch to
+    /// B and back, unlike a single app-wide "scrolled".
+    scrolled: Arc<std::sync::atomic::AtomicBool>,
 }
 
 /// Per-session auto-reconnect policy: exponential backoff with a visible attempt count.
@@ -213,7 +217,7 @@ impl Session {
         let title = Arc::new(Mutex::new(None));
         let term = Arc::new(FairMutex::new(Term::new(Config::default(), &size, Listener::with_title(Arc::clone(&title)))));
         let transport = LocalPtyTransport::spawn(program, args, size, Arc::clone(&term))?;
-        Ok(Session { meta, term, transport: Box::new(transport), echo: None, title, retry: Mutex::new(RetryState::new()) })
+        Ok(Session { meta, term, transport: Box::new(transport), echo: None, title, retry: Mutex::new(RetryState::new()), scrolled: Arc::new(std::sync::atomic::AtomicBool::new(false)) })
     }
 
     /// Create a session backed by a real tmux pane (control mode).
@@ -225,7 +229,7 @@ impl Session {
         let title = Arc::new(Mutex::new(None));
         let term = Arc::new(FairMutex::new(Term::new(Config::default(), &size, Listener::with_title(Arc::clone(&title)))));
         let transport = crate::transport::TmuxTransport::spawn(program, size, Arc::clone(&term))?;
-        Ok(Session { meta, term, transport: Box::new(transport), echo: None, title, retry: Mutex::new(RetryState::new()) })
+        Ok(Session { meta, term, transport: Box::new(transport), echo: None, title, retry: Mutex::new(RetryState::new()), scrolled: Arc::new(std::sync::atomic::AtomicBool::new(false)) })
     }
 
     /// Create a session whose pane is reached through the harness pane-relay tunnel at `host:port`.
@@ -245,7 +249,7 @@ impl Session {
         let transport = crate::transport::TunnelTransport::spawn(
             host, port, program, size, Arc::clone(&term), Arc::clone(&echo),
         )?;
-        Ok(Session { meta, term, transport: Box::new(transport), echo: Some(echo), title, retry: Mutex::new(RetryState::new()) })
+        Ok(Session { meta, term, transport: Box::new(transport), echo: Some(echo), title, retry: Mutex::new(RetryState::new()), scrolled: Arc::new(std::sync::atomic::AtomicBool::new(false)) })
     }
 
     /// Create a session whose pane lives on REMOTE host `host` (via ssh + tmux control mode).
@@ -262,7 +266,7 @@ impl Session {
         let transport = crate::transport::RemoteTransport::spawn(
             &meta.host, program, size, Arc::clone(&term), Arc::clone(&echo),
         )?;
-        Ok(Session { meta, term, transport: Box::new(transport), echo: Some(echo), title, retry: Mutex::new(RetryState::new()) })
+        Ok(Session { meta, term, transport: Box::new(transport), echo: Some(echo), title, retry: Mutex::new(RetryState::new()), scrolled: Arc::new(std::sync::atomic::AtomicBool::new(false)) })
     }
 
     /// Transport kind: "pty" / "tmux" / "ssh" / "tunnel" (shown in the status line).
@@ -352,6 +356,16 @@ impl Session {
     /// wrapping, color, and cursor state exactly as the original byte stream would have, and text is
     /// cheap to serialize/version. (alacritty's `Grid` serde is internal-only; the `Term` wrapper
     /// isn't serializable, so a faithful cell-level snapshot isn't reachable through the public API.)
+    /// Whether this session ceases live-follow (view pinned into history).
+    pub fn scrolled(&self) -> bool {
+        self.scrolled.load(std::sync::atomic::Ordering::Relaxed)
+    }
+
+    /// Pin / release this session view into / from history scroll.
+    pub fn set_scrolled(&self, v: bool) {
+        self.scrolled.store(v, std::sync::atomic::Ordering::Relaxed);
+    }
+
     pub fn capture_scrollback(&self) -> String {
         let term = self.term.lock();
         capture_grid_to_string(term.grid())
