@@ -6,6 +6,11 @@ entries record user-visible and architectural changes since the last tagged mile
 ## Unreleased / 0.1.0 (in progress)
 
 ### Added
+- **Close-quiet-tabs (`prefix+C`)** — close every live, backgrounded, unprotected tab that's been
+  sitting silent past the quiet threshold (the ones the triage marks `⌛` and `prefix+z` jumps to)
+  in one go, skipping the active tab and pinned ones. A fleet-cleanup gesture for when a batch of
+  agent runs has finished and parked: instead of stepping each one and hitting close, sweep them
+  all. Mirrors how each tab is restored on resume; flashes how many were closed.
 - **Interrupt (prefix+!)** — send Ctrl-C to the active session so a diver can stop a runaway agent run
   without dropping into its raw terminal. Works over every transport; bytes ride the same
   `Session::write` path (buffered type-ahead if the pane is momentarily down). Also in the command

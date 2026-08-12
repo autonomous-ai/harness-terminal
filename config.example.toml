@@ -58,7 +58,7 @@ default_engine = "claude"
 # Action names (with their defaults):
 #   palette "/"  new_session "n"  remote_attach "r"  fleet_grid "e"  local_shell "t"
 #   quit "q"  fleet "s"  goto_tab0 "c"  next_busy "o"  next_quiet "z"  next_host "H"  dnd "M"  mute "m"
-#   last_window "l"  paste "p"  broadcast "a"  close_tab "x"
+#   last_window "l"  paste "p"  broadcast "a"  close_tab "x"  close_quiet "C"
 #   copy_scrollback "d"  export_scrollback "w"  copy_identity "j"  copy_fleet "E"  peek "y"  undo_close "u"
 #   duplicate "k"  pin "A"  next_pinned "P"  next_down "Q"  reconnect "R"  reconnect_all "T"  destroy "D"  interrupt "!"
 #   page_up "g"  scroll_bottom "b"  search "f"  search_all "h"

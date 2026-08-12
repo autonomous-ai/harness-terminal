@@ -76,7 +76,8 @@ The prefix is `Ctrl+Space` (tmux-style), then a command:
 | `Ctrl+Space` `v` | focus mode: hide the tab bar + status line (distraction-free) |
 | `1-9` / `0` / `Tab` / `Shift+Tab` | switch tab (`0` = last, Shift+Tab = backward) |
 | `Ctrl+Space` `{` / `}` | move the active tab left / right |
-| `x` / `c` | close tab / jump to tab 0 |
+| `x` / `C` | close tab / close all quiet (done) tabs at once |
+| `c` | jump to tab 0 |
 | `g` / `b` | scroll up a page / jump to bottom |
 | `Ctrl+Enter` | toggle fullscreen |
 | `Ctrl+=` / `Ctrl+-` | font zoom (`Ctrl+0` resets) |
@@ -153,7 +154,7 @@ mute = "v"          # prefix+v toggles mute
 ```
 
 Action names: `palette`, `new_session`, `remote_attach`, `local_shell`, `quit`, `fleet`,
-`goto_tab0`, `next_busy`, `next_quiet`, `next_down`, `next_host`, `dnd`, `mute`, `last_window`, `paste`, `broadcast`, `close_tab`,
+`goto_tab0`, `next_busy`, `next_quiet`, `next_down`, `next_host`, `dnd`, `mute`, `last_window`, `paste`, `broadcast`, `close_tab`, `close_quiet`,
 `copy_scrollback`, `export_scrollback`, `copy_identity`, `copy_fleet`, `peek`, `fleet_grid`, `undo_close`, `duplicate`, `page_up`, `scroll_bottom`,
 `search`, `search_all`, `move_left`, `move_right`, `copy_mode`, `help`, `command_palette`,
 `rename`, `session_info`, `toggle_focus`, `pin`, `next_pinned`, `reconnect`, `reconnect_all`, `destroy`, `interrupt`. The digit keys `1-9` / `0` (tab switching) and `Tab`

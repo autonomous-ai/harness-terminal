@@ -72,6 +72,7 @@ enum PaletteAction {
     ReconnectAll,
     Destroy,
     Interrupt,
+    CloseQuiet,
     Help,
     Quit,
 }
@@ -106,6 +107,7 @@ impl PaletteAction {
             ("force reconnect ALL down panes", ReconnectAll),
             ("kill active tab's pane (destroy remote session)", Destroy),
             ("send Ctrl-C to active tab (stop the run)", Interrupt),
+            ("close all quiet (done) tabs", CloseQuiet),
             ("show this help", Help),
             ("quit", Quit),
         ]
@@ -1020,6 +1022,63 @@ impl Application {
                 .unwrap_or_default();
             self.flash = Some((format!("{head} {state}"), std::time::Instant::now()));
         }
+    }
+
+    /// `prefix+C`: close every tab whose live session is "quiet" — done or parked waiting on you
+    /// (the exact `quiet_for` predicate behind prefix+z and the `⌛N` triage). A fleet-cleanup
+    /// gesture: after a long night of agent runs, one key sweeps the finished ones off the bar.
+    /// Pinned tabs and the active tab are never closed (unprotect via `A`, or hop away first);
+    /// mutes do NOT shield, since a muted-but-done agent is exactly the cruft you'd sweep.
+    /// Reopenable via prefix+u for the last one removed.
+    fn close_quiet_tabs(&mut self) {
+        // Collect indices (high→low) of quiet, unpinned, non-active tabs.
+        let mut doomed: Vec<usize> = Vec::new();
+        for i in 0..self.app.tabs.len() {
+            if i == self.app.active {
+                continue;
+            }
+            if self.pinned.get(i).copied().unwrap_or(false) {
+                continue; // protected — never batch-closed
+            }
+            if self.quiet_for(i) {
+                doomed.push(i);
+            }
+        }
+        if doomed.is_empty() {
+            self.flash = Some((
+                "no quiet tabs to close".to_string(),
+                std::time::Instant::now(),
+            ));
+            return;
+        }
+        // Remove high→low so indices stay valid; remember the first (lowest) for undo.
+        doomed.sort_unstable();
+        let first = doomed[0];
+        if let Some(s) = self.app.tabs.get(first) {
+            self.app.last_closed = Some(crate::restore::TabSpec {
+                kind: s.kind().to_string(),
+                host: s.meta.host.clone(),
+                engine: s.meta.engine.clone(),
+                port: None,
+                name: s.meta.name.clone(),
+            });
+        }
+        for &i in doomed.iter().rev() {
+            self.app.tabs.remove(i);
+        }
+        if self.app.active >= self.app.tabs.len() {
+            self.app.active = self.app.tabs.len().saturating_sub(1);
+        }
+        crate::restore::save(&self.app.tab_specs());
+        self.save_pin_state();
+        self.flash = Some((
+            format!(
+                "closed {} quiet tab{}",
+                doomed.len(),
+                if doomed.len() == 1 { "" } else { "s" }
+            ),
+            std::time::Instant::now(),
+        ));
     }
 
     /// `prefix+M`: toggle global Do-Not-Disturb. When on, no OS notifications fire fleet-wide — the
@@ -2176,6 +2235,7 @@ impl Application {
             ("reconnect_all", "force reconnect ALL down panes at once"),
             ("destroy", "kill active tab's remote pane"),
             ("interrupt", "send Ctrl-C to active tab (stop the run)"),
+            ("close_quiet", "close all quiet (done) tabs at once"),
             ("mute", "mute/unmute the active tab"),
             ("pin", "pin/unpin the active tab (protect from close)"),
             ("last_window", "flip to the previous tab"),
@@ -3067,6 +3127,7 @@ impl Application {
             ReconnectAll => self.reconnect_all_down(),
             Destroy => self.destroy_active(),
             Interrupt => self.interrupt_active(),
+            CloseQuiet => self.close_quiet_tabs(),
             Help => {
                 self.app.overlay = Overlay::Help;
             }
@@ -3390,6 +3451,7 @@ impl Application {
                     self.broadcast_sel = 0;
                     self.app.overlay = Overlay::Broadcast;
                 }
+                Some("close_quiet") => self.close_quiet_tabs(),
                 Some("close_tab") => {
                     let pin = self.pinned.get(self.app.active).copied().unwrap_or(false);
                     if !close_tab(&mut self.app, pin) && pin {
