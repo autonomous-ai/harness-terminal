@@ -1165,6 +1165,19 @@ impl Application {
     }
 
     /// Keybinding reference overlay. Static list; dismiss on any key.
+    /// The live key label for a prefix action, honoring any `[keybindings]` remap: `"prefix X"`.
+    /// `key_action` is `key → action` (already resolved through config + defaults), so reverse it to
+    /// find the active key for this action.
+    fn prefix_label(&self, action: &str) -> String {
+        let key = self
+            .key_action
+            .iter()
+            .find(|(_, a)| a.as_str() == action)
+            .map(|(k, _)| k.as_str())
+            .unwrap_or(action);
+        format!("prefix {key}")
+    }
+
     fn render_help(&mut self, fb: &mut Framebuffer) {
         let (base_y, line_px) = self.overlay_base_y();
         draw_text(
@@ -1176,42 +1189,60 @@ impl Application {
             self.font_px,
             WHITE,
         );
-        let bindings: [(&str, &str); 29] = [
-            ("Ctrl+Space", "prefix (then a command)"),
-            ("prefix /", "palette: jump to any session"),
-            ("prefix ;", "command palette (all actions)"),
-            ("prefix n", "new session (engine + working dir)"),
-            ("prefix r", "attach to a remote pane@host"),
-            ("prefix s", "fleet status"),
+        // Build the rows in display order. Remappable actions resolve their key label live (so a
+        // `[keybindings]` remap shows the REAL key, not a stale default); fixed/multi-key rows are
+        // literals. Each row is a `&str` key + `&str` description.
+        let mut all: Vec<(String, String)> = Vec::new();
+        for (action, desc) in [
+            ("", "harness-terminal keys"),
+            ("palette", "jump to any session"),
+            ("command_palette", "command palette (all actions)"),
+            ("new_session", "new session (engine + working dir)"),
+            ("remote_attach", "attach to a remote pane@host"),
+            ("fleet", "fleet status"),
+            ("search", "search scrollback"),
+            ("search_all", "search all sessions (fleet)"),
+            ("copy_mode", "copy mode"),
+            ("rename", "rename the active tab"),
+            ("broadcast", "broadcast a line to all sessions"),
+            ("paste", "paste clipboard (bracketed)"),
+            ("next_busy", "jump to next busy tab"),
+            ("mute", "mute/unmute the active tab"),
+            ("last_window", "flip to the previous tab"),
+            ("undo_close", "undo close (reopen last closed tab)"),
+            ("copy_scrollback", "copy whole scrollback to clipboard"),
+            ("export_scrollback", "write scrollback to a .log file"),
+            ("peek", "peek tails of all sessions"),
+            ("help", "this help"),
+            ("quit", "quit"),
+        ] {
+            if action.is_empty() {
+                all.push((
+                    "Ctrl+Space".to_string(),
+                    "prefix (then a command)".to_string(),
+                ));
+            } else {
+                all.push((self.prefix_label(action), desc.to_string()));
+            }
+        }
+        for (k, d) in [
             ("prefix { }", "move tab left / right"),
-            ("prefix f", "search scrollback"),
-            ("prefix h", "search all sessions (fleet)"),
-            ("prefix [", "copy mode"),
-            ("prefix ,", "rename the active tab"),
-            ("prefix a", "broadcast a line to all sessions"),
-            ("prefix ?", "this help"),
-            ("prefix p", "paste clipboard (bracketed)"),
             ("1-9 / Tab", "switch tab"),
-            ("prefix o", "jump to next busy tab"),
-            ("prefix m", "mute/unmute the active tab"),
-            ("prefix l", "flip to the previous tab"),
-            ("prefix u", "undo close (reopen last closed tab)"),
             ("x / c", "close tab / go to tab 0"),
             ("g / b", "scroll up a page / jump to bottom"),
-            ("prefix d", "copy whole scrollback to clipboard"),
-            ("prefix w", "write scrollback to a .log file"),
-            ("prefix y", "peek tails of all sessions"),
             ("Ctrl+= / Ctrl+-", "font zoom (Ctrl+0 reset)"),
             ("Ctrl+Enter", "toggle fullscreen"),
             ("PgUp/PgDn", "scrollback"),
             ("Cmd/Ctrl+click", "open URL / file path"),
-            ("prefix q", "quit"),
-        ];
-        for (row, (k, d)) in bindings.iter().enumerate() {
+        ] {
+            all.push((k.to_string(), d.to_string()));
+        }
+
+        for (row, (k, d)) in all.iter().enumerate() {
             draw_text(
                 fb,
                 &mut self.cache,
-                &format!("  {:<14} {}", k, d),
+                &format!("  {:<16} {}", k, d),
                 32,
                 base_y + (row + 1) * line_px,
                 self.font_px,
