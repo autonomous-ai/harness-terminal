@@ -1,0 +1,22 @@
+# harness-terminal configuration — copy to ~/.config/harness-terminal/config.toml.
+# Every option is optional; a missing key keeps its safe default. A broken file
+# (bad TOML) just falls back to defaults and the terminal still opens.
+
+# Base font size in px a fresh window opens at (before display-scale / zoom).
+# Ctrl+= / Ctrl+- zoom at runtime on top of this.
+font_px = 14
+
+# Engine the new-session picker (prefix+n) starts selected on, case-insensitive.
+default_engine = "claude"
+
+# Optional TTF/OTF monospace font for the grid. Absent/empty uses the platform
+# default (macOS SF Mono). HARNESS_FONT env can override in a pinch.
+# font_path = "/Users/you/.fonts/JetBrainsMono-Nerd-Font.ttf"
+
+# Cap on persisted per-tab scrollback, in bytes. Only the tail beyond the cap is
+# kept on save, so resume keeps recent context without ballooning disk.
+# scrollback_cap = 262144
+
+# Directory NEW local (PTY) tabs open in, overriding wherever the binary was
+# launched. Leave unset to use the app's cwd (or set a per-tab dir in prefix+n).
+# start_cwd = "/Users/you/dev/myrepo"

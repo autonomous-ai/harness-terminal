@@ -65,11 +65,18 @@ Backgrounded tabs that keep producing output are flagged with a `!` in the tab b
 
 ## Config
 
-`~/.config/harness-terminal/config.toml` (same dir as session persistence):
+`~/.config/harness-terminal/config.toml` (same dir as session persistence).
+
+Every option is optional; a missing key keeps its safe default, and a broken file just falls back to
+defaults. See `config.example.toml` in the repo for the full option surface. The quickly-relevant
+ones:
 
 ```toml
 font_px = 14                # base font size the window opens at
 default_engine = "claude"   # engine the new-session picker starts on
+font_path = ""              # optional TTF/OTF monospace font
+scrollback_cap = 262144     # cap on persisted per-tab scrollback (bytes)
+start_cwd = ""              # dir new local tabs open in
 ```
 
 Set `HARNESS_CONFIG_DIR` to override the config/persistence directory (useful for portable or CI
