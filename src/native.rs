@@ -59,6 +59,7 @@ enum PaletteAction {
     SessionInfo,
     ToggleFocus,
     Pin,
+    NextPinned,
     Help,
     Quit,
 }
@@ -82,6 +83,7 @@ impl PaletteAction {
             ("show session info (kind/host/task)", SessionInfo),
             ("toggle focus mode (hide tab bar + status)", ToggleFocus),
             ("pin/unpin active tab (protect from close)", Pin),
+            ("jump to next pinned tab", NextPinned),
             ("show this help", Help),
             ("quit", Quit),
         ]
@@ -581,6 +583,23 @@ impl Application {
         for step in 1..=n {
             let i = (self.app.active + step) % n;
             if flags[i] {
+                self.set_active(i);
+                return;
+            }
+        }
+    }
+
+    /// `prefix+P`: jump to the next pinned tab (wrapping). Pinned tabs are the long-running agents
+    /// a diver deliberately protects, so this is a fast way to cycle just the protected ones
+    /// without scrolling the whole bar. No-op when there are no other pinned tabs.
+    fn next_pinned(&mut self) {
+        let n = self.app.tabs.len();
+        if n == 0 {
+            return;
+        }
+        for step in 1..=n {
+            let i = (self.app.active + step) % n;
+            if self.pinned.get(i).copied().unwrap_or(false) {
                 self.set_active(i);
                 return;
             }
@@ -1454,6 +1473,7 @@ impl Application {
             ("broadcast", "broadcast a line to all sessions"),
             ("paste", "paste clipboard (bracketed)"),
             ("next_busy", "jump to next busy tab"),
+            ("next_pinned", "jump to next pinned tab"),
             ("mute", "mute/unmute the active tab"),
             ("pin", "pin/unpin the active tab (protect from close)"),
             ("last_window", "flip to the previous tab"),
@@ -2137,6 +2157,7 @@ impl Application {
             }
             ToggleFocus => self.toggle_focus(),
             Pin => self.toggle_pin_active(),
+            NextPinned => self.next_pinned(),
             Help => {
                 self.app.overlay = Overlay::Help;
             }
@@ -2435,6 +2456,7 @@ impl Application {
                 Some("next_busy") => self.next_busy(),
                 Some("mute") => self.toggle_mute_active(),
                 Some("pin") => self.toggle_pin_active(),
+                Some("next_pinned") => self.next_pinned(),
                 Some("last_window") => self.last_window(),
                 Some("paste") => self.paste_clipboard(),
                 Some("broadcast") => {
@@ -2465,7 +2487,16 @@ impl Application {
                 }
                 Some("undo_close") => self.app.reopen_last_closed(),
                 Some("duplicate") => {
+                    // Forking a pinned session should yield a pinned clone — the new tab protects
+                    // the same agent run the original was protecting.
+                    let was_pinned = self.pinned.get(self.app.active).copied().unwrap_or(false);
+                    let before = self.app.tabs.len();
                     self.app.duplicate_active();
+                    if was_pinned && self.app.tabs.len() > before {
+                        self.pinned.resize(self.app.tabs.len(), false);
+                        self.pinned[self.app.tabs.len() - 1] = true;
+                        self.save_pin_state();
+                    }
                     self.flash = Some(("duplicated".to_string(), std::time::Instant::now()));
                 }
                 Some("page_up") => {
