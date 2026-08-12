@@ -6,6 +6,14 @@
 # Ctrl+= / Ctrl+- zoom at runtime on top of this.
 font_px = 14
 
+# Prefix chord: the key pressed with Ctrl to enter tmux-style command mode.
+# Default "h" = Ctrl+H ("Ctrl Harness"; tmux uses Ctrl+B). Any letter/digit/
+# punctuation works (case-insensitive), or the special literals "space" and "\".
+# Ctrl+Space and Ctrl+\ are ALWAYS accepted as fallback chords too, so macOS
+# claiming Ctrl+Space (its input-source switcher, when a 2nd layout is enabled)
+# can never break the prefix — this only picks the advertised primary.
+# prefix_key = "h"
+
 # Engine the new-session picker (prefix+n) starts selected on, case-insensitive.
 default_engine = "claude"
 

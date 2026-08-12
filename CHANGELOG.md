@@ -6,6 +6,14 @@ entries record user-visible and architectural changes since the last tagged mile
 ## Unreleased / 0.1.0 (in progress)
 
 ### Added
+- **Configurable prefix — now `Ctrl+H` ("Ctrl Harness", tmux's `Ctrl+B` analog).** The prefix's
+  leading chord was hardcoded to `Ctrl+Space`, which macOS silently owns for its input-source
+  switcher (English + Vietnamese Telex = the canonical case), so the prefix just wouldn't answer.
+  The primary is now `Ctrl+H` by default, with `Ctrl+Space` and `Ctrl+\` kept as always-on
+  fallback chords, and `prefix_key` in `config.toml` rebinds it (`"h"`, `"b"`, `"space"`, `"\"`,
+  …) without recompiling — so a diver who wants tmux muscle memory is one config line away. Case-
+  insensitive matching, `keys::prefix_label` drives the in-app hints, and the macOS-claim notice
+  now names the actual prefix.
 - **Space actually types again.** macOS's winit reports the spacebar as `Named(Space)` while the
   rest of the app matches `Character(" ")`, so a plain space was silently swallowed *everywhere* —
   the shell (commands like `ls -la`, `git commit -m "…"` had untypeable spaces), every text field

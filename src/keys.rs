@@ -1,7 +1,8 @@
 //! Prefix keybinding resolution.
 //!
-//! After the prefix chord (`Ctrl+Space`, or `Ctrl+\` when macOS owns `Ctrl+Space` — see
-//! `crate::macos`), a single key triggers an action (tmux-style). These binds are configurable
+//! After the prefix chord (`Ctrl+H` by default; configurable via `prefix_key`, with `Ctrl+Space`
+//! and `Ctrl+\` kept as always-on fallback chords), a single key triggers an action (tmux-style,
+//! like tmux's Ctrl+B). These binds are configurable
 //! via the `[keybindings]` block so a user can remap them without recompiling. An absent or empty
 //! `[keybindings]` block keeps today's exact defaults — see `DEFAULT_KEYS`.
 
@@ -75,13 +76,38 @@ pub fn normalize_space(key: &Key) -> Key {
 /// fallback because on macOS the system's input-source switcher owns Ctrl+Space when a second
 /// layout is enabled (see `crate::macos`), so that keystroke never reaches the app. A plain
 /// space always types normally — only the control chord enters command mode.
-pub fn is_prefix_press(key: &Key, mods: &ModifiersState) -> bool {
+pub fn is_prefix_press(key: &Key, mods: &ModifiersState, primary: &str) -> bool {
+    // The configured primary chord (default "h" → Ctrl+H). Letters match case-insensitively so
+    // `prefix_key = "H"` and the user's actual keypress agree.
+    let is_primary = matches!(key, Key::Character(c) if prefix_char_matches(c, primary));
+    // Fixed safety nets that keep the prefix unbreakable: Ctrl+Space (the spacebar also arrives
+    // as Named(Space) on macOS) and Ctrl+\ — macOS can claim Ctrl+Space for its input-source
+    // switcher when a second layout is enabled, and `|` is Shift+Ctrl+Backslash on US layouts
+    // (winit lets SHIFT through), so accept it too.
     let is_space = matches!(key, Key::Character(c) if c == " ")
         || matches!(key, Key::Named(NamedKey::Space));
-    // `|` is Shift+Ctrl+Backslash on US layouts (winit lets SHIFT through to the logical key),
-    // so accept it too — the user reaching for the fallback chord with shift held still works.
     let is_backslash = matches!(key, Key::Character(c) if c == "\\" || c == "|");
-    mods.control_key() && (is_space || is_backslash)
+    mods.control_key() && (is_primary || is_space || is_backslash)
+}
+
+/// Whether a typed character equals the configured prefix key. `space` and `\` are the special
+/// literals; anything else is a single character matched case-insensitively.
+fn prefix_char_matches(c: &str, primary: &str) -> bool {
+    match primary {
+        "space" => c == " ",
+        "\\" | "|" => c == "\\" || c == "|",
+        p => c.eq_ignore_ascii_case(p),
+    }
+}
+
+/// The human label for the configured prefix chord, e.g. `Ctrl+H` (default), `Ctrl+Space`,
+/// `Ctrl+\`. Used in hints, the keymap, and the macOS-claim notice.
+pub fn prefix_label(primary: &str) -> String {
+    match primary {
+        "space" => "Ctrl+Space".to_string(),
+        "\\" | "|" => "Ctrl+\\".to_string(),
+        p => format!("Ctrl+{}", p.to_uppercase()),
+    }
 }
 
 /// The built-in full keybinding table. `(action, key)` in ACTIONS order.
@@ -191,26 +217,49 @@ mod tests {
     fn ctrl_space_is_a_prefix_press_but_plain_space_is_not() {
         let mut ctrl = ModifiersState::default();
         ctrl.insert(ModifiersState::CONTROL);
-        assert!(is_prefix_press(&Key::Character(" ".into()), &ctrl));
-        assert!(is_prefix_press(&Key::Named(NamedKey::Space), &ctrl));
-        assert!(!is_prefix_press(&Key::Character(" ".into()), &ModifiersState::default()));
-        assert!(!is_prefix_press(&Key::Named(NamedKey::Space), &ModifiersState::default()));
-        // Control alone, without a space, is never a prefix press.
-        assert!(!is_prefix_press(&Key::Character("n".into()), &ctrl));
+        assert!(is_prefix_press(&Key::Character(" ".into()), &ctrl, "h"));
+        assert!(is_prefix_press(&Key::Named(NamedKey::Space), &ctrl, "h"));
+        assert!(!is_prefix_press(&Key::Character(" ".into()), &ModifiersState::default(), "h"));
+        assert!(!is_prefix_press(&Key::Named(NamedKey::Space), &ModifiersState::default(), "h"));
+        // Control alone, on a non-prefix key, is never a prefix press.
+        assert!(!is_prefix_press(&Key::Character("n".into()), &ctrl, "h"));
     }
 
     #[test]
     fn ctrl_backslash_is_the_fallback_chord() {
         let mut ctrl = ModifiersState::default();
         ctrl.insert(ModifiersState::CONTROL);
-        assert!(is_prefix_press(&Key::Character("\\".into()), &ctrl));
+        assert!(is_prefix_press(&Key::Character("\\".into()), &ctrl, "h"));
         // Without control it's just a backslash, not a prefix.
-        assert!(!is_prefix_press(&Key::Character("\\".into()), &ModifiersState::default()));
+        assert!(!is_prefix_press(&Key::Character("\\".into()), &ModifiersState::default(), "h"));
         // Shift+Ctrl+Backslash is the pipe on most layouts, and as a coincidental fallback should
         // still be a valid prefix press (the physical key is what the user is reaching for).
         let mut ctrl_shift = ctrl;
         ctrl_shift.insert(ModifiersState::SHIFT);
-        assert!(is_prefix_press(&Key::Character("|".into()), &ctrl_shift));
+        assert!(is_prefix_press(&Key::Character("|".into()), &ctrl_shift, "h"));
+    }
+
+    #[test]
+    fn ctrl_h_is_the_default_primary_prefix_chord() {
+        let mut ctrl = ModifiersState::default();
+        ctrl.insert(ModifiersState::CONTROL);
+        // Ctrl+H (default prefix, "Ctrl Harness") enters command mode.
+        assert!(is_prefix_press(&Key::Character("h".into()), &ctrl, "h"));
+        // Case-insensitive: a configured "H" still matches the press of "h".
+        assert!(is_prefix_press(&Key::Character("h".into()), &ctrl, "H"));
+        assert_eq!(prefix_label("h"), "Ctrl+H");
+        // Without control, h is just a letter.
+        assert!(!is_prefix_press(&Key::Character("h".into()), &ModifiersState::default(), "h"));
+    }
+
+    #[test]
+    fn prefix_config_accepts_space_and_backslash_literals() {
+        let mut ctrl = ModifiersState::default();
+        ctrl.insert(ModifiersState::CONTROL);
+        assert!(is_prefix_press(&Key::Character(" ".into()), &ctrl, "space"));
+        assert!(is_prefix_press(&Key::Character("\\".into()), &ctrl, "\\"));
+        assert_eq!(prefix_label("space"), "Ctrl+Space");
+        assert_eq!(prefix_label("\\"), "Ctrl+\\");
     }
 
     #[test]

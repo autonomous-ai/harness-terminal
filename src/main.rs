@@ -4,8 +4,9 @@
 //! Codex, OpenCode, PI, …) running in one pane on one host in your fleet — local, via tmux, over
 //! ssh, or over the harness e2ee tunnel.
 //!
-//! `TAB = SESSION = PANE@HOST`. Keyboard-first, tmux-style prefix (`Ctrl+Space` then a command,
-//! with `Ctrl+\` as the fallback when macOS's input-source switcher owns `Ctrl+Space`),
+//! `TAB = SESSION = PANE@HOST`. Keyboard-first, tmux-style prefix — `Ctrl+H` (Ctrl Harness) then
+//! a command, with `Ctrl+Space` and `Ctrl+\` kept as always-on fallback chords. Rebinds in
+//! `config.toml` (`prefix_key`).
 //! with the active session rendered by the alacritty emulator directly into our own window.
 //!
 //! Run `harness-terminal --tui` to use the legacy ratatui backend instead (e.g. when SSH'd into a

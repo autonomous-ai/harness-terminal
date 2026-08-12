@@ -139,6 +139,10 @@ struct Application {
     /// prefix answers Ctrl+\ instead and hints advertise that; without this the "prefix is
     /// dead" failure mode is a silent mystery. See `crate::macos`.
     prefix_claimed: bool,
+    /// The prefix's leading key (`prefix_key` config, default "h" → Ctrl+H / "Ctrl Harness", the
+    /// tmux-Ctrl+B equivalent). Ctrl+Space and Ctrl+\ stay accepted as fixed fallback chords, so
+    /// this only picks the advertised primary, not the safety nets.
+    prefix_key: String,
     /// One-shot: once the Ctrl+Space-claimed explanation has flashed (on the first Ctrl+\
     /// prefix press), don't repeat it every single time the fallback chord is used.
     prefix_alt_notice: bool,
@@ -325,9 +329,12 @@ impl Application {
             Some(t) => crate::render::Colors::from(t),
             None => crate::render::Colors::default(),
         };
-        // macOS borrows Ctrl+Space when a second input source is enabled; detect once at
-        // launch so the prefix can fall back to Ctrl+\ and the UI can tell the user why.
+        // macOS borrows Ctrl+Space when a second input source is enabled; detect once at launch
+        // so a fallback-chord notice can explain it. The prefix primary is configurable and
+        // defaults to Ctrl+H ("Ctrl Harness", the tmux-Ctrl+B analog) so macOS's claim on
+        // Ctrl+Space can never break the prefix.
         let prefix_claimed = crate::macos::ctrl_space_claimed();
+        let prefix_key = cfg.prefix_key.clone().unwrap_or_else(|| "h".to_string());
         let tab_count = app.tabs.len();
         let seen_history = vec![usize::MAX; tab_count];
         // Quiet threshold from config: how long a live, backgrounded, unprotected tab can sit silent
@@ -377,6 +384,7 @@ impl Application {
             prefix_down: false,
             mods: ModifiersState::default(),
             prefix_claimed,
+            prefix_key,
             prefix_alt_notice: false,
             last_active: None,
             find_query: String::new(),
@@ -415,12 +423,7 @@ impl Application {
             seen_history,
             last_output,
             notified: vec![false; tab_count],
-            flash: if prefix_claimed {
-                // Tell a diver at launch, not silently: on this machine macOS eats Ctrl+Space.
-                Some((crate::macos::ctrl_space_notice(), std::time::Instant::now()))
-            } else {
-                None
-            },
+            flash: None,
             peek_sel: 0,
             peek_scroll: 0,
             palette_q: String::new(),
@@ -2324,12 +2327,8 @@ impl Application {
     /// The prefix chord to advertise in UI copy: `Ctrl+Space`, or `Ctrl+\` when macOS owns
     /// Ctrl+Space (a second input source makes the OS swallow it). The hint always matches what
     /// actually answers on this machine.
-    fn prefix_chord(&self) -> &'static str {
-        if self.prefix_claimed {
-            "Ctrl+\\"
-        } else {
-            "Ctrl+Space"
-        }
+    fn prefix_chord(&self) -> String {
+        crate::keys::prefix_label(&self.prefix_key)
     }
 
     fn render_help(&mut self, fb: &mut Framebuffer) {
@@ -2396,7 +2395,7 @@ impl Application {
         ] {
             if action.is_empty() {
                 all.push((
-                    self.prefix_chord().to_string(),
+                    self.prefix_chord(),
                     "prefix (then a command)".to_string(),
                 ));
             } else {
@@ -3463,18 +3462,21 @@ impl Application {
         // handling below.
         let key = crate::keys::normalize_space(key);
 
-        // Enter command mode: Ctrl+Space is primary; Ctrl+\ is the fallback. On a mac with a
-        // second input source enabled, macOS itself owns Ctrl+Space (input-source switcher) and the
-        // keystroke never arrives — so the first time the fallback chord works, explain once that
-        // the canonical prefix is being eaten by the OS rather than the app being broken.
-        if crate::keys::is_prefix_press(&key, mods) && self.app.overlay == Overlay::None {
+        // Enter command mode: Ctrl+H is primary; Ctrl+Space / Ctrl+\ are always-on fallbacks.
+        // On a mac with a second input source enabled, macOS itself owns Ctrl+Space (input-source
+        // switcher) and the keystroke never arrives — so the first time the backslash fallback
+        // chord works, explain once that macOS owns the Space chord rather than the app being
+        // broken.
+        if crate::keys::is_prefix_press(&key, mods, &self.prefix_key)
+            && self.app.overlay == Overlay::None
+        {
             if matches!(key, Key::Character(c) if c == "\\")
                 && self.prefix_claimed
                 && !self.prefix_alt_notice
             {
                 self.prefix_alt_notice = true;
                 self.flash =
-                    Some((crate::macos::ctrl_space_notice(), std::time::Instant::now()));
+                    Some((crate::macos::ctrl_space_notice(&self.prefix_key), std::time::Instant::now()));
             }
             self.prefix_down = true;
             return;

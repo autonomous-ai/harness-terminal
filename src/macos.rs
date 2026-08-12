@@ -99,9 +99,22 @@ fn selectable_sources(sources_json: &str) -> usize {
         .count()
 }
 
-/// The one-line explanation flashed when the prefix has to answer `Ctrl+\` instead of `Ctrl+Space`.
-pub fn ctrl_space_notice() -> String {
-    "macOS owns Ctrl+Space (input-source switcher) — prefix works on Ctrl+\\  ·  to reclaim Ctrl+Space: System Settings ▸ Keyboard ▸ Keyboard Shortcuts ▸ Input Sources".to_string()
+/// The one-line explanation flashed when the backslash fallback chord is used on a mac that
+/// claims `Ctrl+Space` (its input-source switcher, active when a second layout is enabled). The
+/// wording adapts to the configured prefix: if the user actually chose `space` as the prefix it
+/// tells them the OS is eating their prefix; otherwise it notes the Space chord is kept but
+/// claimed, so the configured primary is the one to use.
+pub fn ctrl_space_notice(primary: &str) -> String {
+    let label = crate::keys::prefix_label(primary);
+    if primary == "space" {
+        format!(
+            "macOS owns Ctrl+Space (input-source switcher) — disable it in System Settings ▸ Keyboard ▸ Keyboard Shortcuts ▸ Input Sources so the prefix ({label}) can hear the key"
+        )
+    } else {
+        format!(
+            "{label} is the prefix · Ctrl+Space stays claimed by macOS's input-source switcher — disable that in System Settings ▸ Keyboard ▸ Keyboard Shortcuts ▸ Input Sources to also use Ctrl+Space"
+        )
+    }
 }
 
 #[cfg(test)]

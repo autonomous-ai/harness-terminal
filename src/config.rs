@@ -38,12 +38,20 @@ pub struct Config {
     /// a stuck run faster.
     #[serde(default)]
     pub quiet_after_secs: Option<u64>,
+    /// Prefix chord: the key pressed with Ctrl to enter tmux-style command mode. Default `h`
+    /// (Ctrl+H — "Ctrl Harness"; tmux uses Ctrl+B). The special literals `space` and `\` name
+    /// those chords, otherwise any single character works (case-insensitive). Ctrl+Space and
+    /// Ctrl+\ are ALWAYS accepted as fallback chords too, so macOS's claim on Ctrl+Space (its
+    /// input-source switcher, when a second layout is enabled) can never fully break the prefix —
+    /// this option only renames the advertised primary, not the safety nets. Absent = "h".
+    #[serde(default)]
+    pub prefix_key: Option<String>,
     /// Optional color theme. Absent (or a broken `[theme]` block) keeps the built-in palette.
     #[serde(default)]
     pub theme: Option<Theme>,
     /// Optional prefix-key remapping: an action name -> the key that triggers it after the
-    /// prefix chord (`Ctrl+Space`, or `Ctrl+\` when macOS claims `Ctrl+Space` for input-source
-    /// switching).
+    /// prefix chord (`Ctrl+H` by default — see `prefix_key`; `Ctrl+Space`/`Ctrl+\` are the fixed
+    /// fallback chords).
     /// Only actions named here that exist are remapped; everything else keeps its default. Absent
     /// (or an empty block) = today's exact keybindings. See `crate::keys`.
     #[serde(default)]
@@ -148,6 +156,7 @@ impl Default for Config {
             quiet_after_secs: None,
             theme: None,
             keybindings: None,
+            prefix_key: None,
         }
     }
 }
