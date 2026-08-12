@@ -78,6 +78,23 @@ pub fn load() -> Vec<TabSpec> {
     serde_json::from_str(&raw).unwrap_or_default()
 }
 
+fn active_path() -> std::path::PathBuf {
+    config_dir().join("active.json")
+}
+
+/// Persist which tab was focused last, so a relaunch opens on it rather than always tab 0.
+/// Best-effort like the others.
+pub fn save_active(idx: usize) {
+    let _ = std::fs::create_dir_all(config_dir());
+    let _ = std::fs::write(active_path(), format!("{}", idx));
+}
+
+/// Load the last-focused tab index (0 on error/missing). Caller clamps to the tab count.
+pub fn load_active() -> usize {
+    let Ok(raw) = std::fs::read_to_string(active_path()) else { return 0 };
+    raw.trim().parse::<usize>().unwrap_or(0)
+}
+
 fn zoom_path() -> std::path::PathBuf {
     config_dir().join("zoom.json")
 }
@@ -195,6 +212,16 @@ mod tests {
             // A zero/inverted size must not be persisted as valid.
             save_geometry(0, 0);
             assert_eq!(load_geometry(), Some((1600, 900)));
+        });
+    }
+
+    /// The last-focused tab index round-trips; a missing file loads as 0.
+    #[test]
+    fn active_roundtrips_missing_is_zero() {
+        with_isolated_dir(|_| {
+            assert_eq!(load_active(), 0);
+            save_active(3);
+            assert_eq!(load_active(), 3);
         });
     }
 }

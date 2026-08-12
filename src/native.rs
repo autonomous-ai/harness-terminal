@@ -163,6 +163,12 @@ impl Application {
         flags
     }
 
+    /// Focus tab `i` and remember it (so a relaunch opens on the same tab).
+    fn set_active(&mut self, i: usize) {
+        self.app.active = i.min(self.app.tabs.len().saturating_sub(1));
+        crate::restore::save_active(self.app.active);
+    }
+
     /// `prefix+o`: jump to the next backgrounded tab that produced output since we last looked,
     /// wrapping around. Makes the activity badge actionable — a key to reach 'the one that just
     /// did something'. If none is flagged, does nothing.
@@ -175,7 +181,7 @@ impl Application {
         for step in 1..=n {
             let i = (self.app.active + step) % n;
             if flags[i] {
-                self.app.active = i;
+                self.set_active(i);
                 return;
             }
         }
@@ -704,7 +710,7 @@ impl Application {
                     }
                     self.app.overlay = Overlay::Fleet;
                 }
-                "c" => { if !self.app.tabs.is_empty() { self.app.active = 0; } }
+                "c" => { if !self.app.tabs.is_empty() { self.set_active(0); } }
                 "o" => self.next_busy(),
                 "x" => { close_tab(&mut self.app); }
                 "g" => { scroll_active(self, 20); self.scrolled = true; }
@@ -717,7 +723,7 @@ impl Application {
                     let idx = c.chars().next().unwrap() as u8;
                     if (b'1'..=b'9').contains(&idx) {
                         let i = (idx - b'1') as usize;
-                        if i < self.app.tabs.len() { self.app.active = i; }
+                        if i < self.app.tabs.len() { self.set_active(i); }
                     }
                 }
                 _ => {}
@@ -725,7 +731,7 @@ impl Application {
             Key::Named(n) => match n {
                 winit::keyboard::NamedKey::Tab => {
                     if !self.app.tabs.is_empty() {
-                        self.app.active = (self.app.active + 1) % self.app.tabs.len();
+                        self.set_active((self.app.active + 1) % self.app.tabs.len());
                     }
                 }
                 _ => {}

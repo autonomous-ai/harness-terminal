@@ -711,7 +711,7 @@ mod tests {
         // topmost history line (a negative absolute line, since history sits above line 0).
         let hit = find(&g, "NEEDLE", g.grid().topmost_line().0).expect("should find a match");
         assert!(hit.0 < 0, "first hit should be in history (negative line), got {}", hit.0);
-        assert!(hit.1 >= 0 && hit.2 > 0, "match should have a column and width");
+        assert!(hit.2 > 0, "match should have a column and width");
     }
 
     /// SGR inverse: feed text with the inverse attribute; the cell bg should become the colored fg

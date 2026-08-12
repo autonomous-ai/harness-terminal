@@ -30,6 +30,10 @@ fn run_native() -> Result<(), Box<dyn std::error::Error>> {
     for spec in harness_terminal::restore::load() {
         app.restore_tab(&spec);
     }
+    // Open on the tab that was focused last time (clamped to however many restored).
+    if !app.tabs.is_empty() {
+        app.active = harness_terminal::restore::load_active().min(app.tabs.len() - 1);
+    }
     harness_terminal::native::run(app)
 }
 
