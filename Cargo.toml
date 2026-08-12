@@ -6,7 +6,10 @@ edition = "2021"
 [dependencies]
 # Terminal engine (borrowed layer): MIT/Apache, clean pure emulator. We drive PTY I/O.
 alacritty_terminal = "0.26"
+crossterm = "0.29.0"
+fuzzy-matcher = "0.3.7"
 parking_lot = "0.12.5"
+ratatui = "0.30.2"
 
 [profile.release]
 lto = true

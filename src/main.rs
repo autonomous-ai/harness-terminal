@@ -1,98 +1,167 @@
-//! autonomous-term — terminal-first dive into a fleet of agent sessions.
+//! autonomous-term — a terminal-first dive into a fleet of AI agent sessions.
 //!
-//! Foundation: a `Session` drives one terminal pane (the raw emulator) through
-//! alacritty_terminal. Right now this runs a LOCAL process (bash). Later a remote
-//! pane becomes the same `Session` with its PTY transport swapped for tmux control
-//! mode over the harness e2ee tunnel — the emulator surface is identical.
+//! Keyboard-first TUI: `prefix + /` opens the session palette, `prefix + n` opens the engine
+//! picker, `prefix + q` quits. The active tab is a live alacritty Term; the tab bar / palette /
+//! status are ratatui chrome. `TAB = SESSION = PANE@HOST`.
 
-use std::io::{self, Read};
+use std::io;
+use std::time::Duration;
 
-use alacritty_terminal::event::{Event, EventListener, WindowSize};
-use alacritty_terminal::event_loop::{EventLoop, Msg};
-use alacritty_terminal::grid::Dimensions;
-use alacritty_terminal::sync::FairMutex;
-use alacritty_terminal::term::{Config, Term};
-use alacritty_terminal::tty;
+use crossterm::event::{self, Event as CTEvent, KeyCode, KeyEvent, KeyModifiers};
+use crossterm::execute;
+use ratatui::backend::CrosstermBackend;
+use ratatui::Terminal;
 
-/// Terminal geometry — the project's reusable pane size type.
-#[derive(Clone, Copy, Debug)]
-struct TermSize {
-    lines: usize,
-    cols: usize,
-}
+use autonomous_term::app::{App, Overlay};
+use autonomous_term::session::TermSize;
+use autonomous_term::tui;
 
-impl Dimensions for TermSize {
-    fn total_lines(&self) -> usize {
-        self.lines
-    }
-    fn screen_lines(&self) -> usize {
-        self.lines
-    }
-    fn columns(&self) -> usize {
-        self.cols
-    }
-}
-
-/// Terminal event sink. Headless for now; the real client will drive a native
-/// surface from `send_event(Event::Wakeup)` onwards.
-#[derive(Clone, Default)]
-struct Listener;
-
-impl EventListener for Listener {
-    fn send_event(&self, _event: Event) {}
-}
+/// The prefix key (like tmux's C-b). Hold it to enter "command mode".
+const PREFIX: KeyCode = KeyCode::Char(' ');
 
 fn main() -> io::Result<()> {
-    let size = TermSize { lines: 24, cols: 80 };
+    // Raw-mode terminal for crossterm event capture.
+    crossterm::terminal::enable_raw_mode()?;
+    let mut stdout = io::stdout();
+    execute!(stdout, crossterm::terminal::EnterAlternateScreen)?;
+    let backend = CrosstermBackend::new(stdout);
+    let mut term = Terminal::new(backend)?;
 
-    // Raw emulator surface — the borrowed layer. A pane's bytes get parsed into
-    // this screen, identical whether the pane is local or remote.
-    let terminal = std::sync::Arc::new(FairMutex::new(Term::new(
-        Config::default(),
-        &size,
-        Listener,
-    )));
+    // Start with a local session so the UI is immediately alive.
+    let mut app = App::new(TermSize { lines: 24, cols: 80 });
+    app.spawn_local("this-host", "shell");
 
-    // Local PTY running bash. Later: a remote pane's transport replaces this.
-    let pty = tty::new(
-        &tty::Options {
-            shell: Some(tty::Shell::new("bash".into(), Vec::new())),
-            working_directory: None,
-            drain_on_exit: true,
-            env: Default::default(),
-        },
-        WindowSize {
-            num_lines: size.lines as u16,
-            num_cols: size.cols as u16,
-            cell_width: 0,
-            cell_height: 0,
-        },
-        0,
-    )?;
+    // Key state: whether we're currently "inside" after pressing prefix.
+    let mut in_command = false;
 
-    // Wire the PTY reader → escape parser → Term surface.
-    let event_loop = EventLoop::new(
-        std::sync::Arc::clone(&terminal),
-        Listener,
-        pty,
-        true,
-        false,
-    )?;
-    let writer = event_loop.channel();
-    let _handle = event_loop.spawn();
-
-    println!("autonomous-term: local session started (bash, {}x{}).", size.lines, size.cols);
-    println!("Type `exit` to quit.");
-
-    // Pump stdin → PTY. Textecho to a real surface comes with the client shell.
-    let mut stdin = io::stdin();
-    let mut buf = [0u8; 256];
     loop {
-        match stdin.read(&mut buf) {
-            Ok(0) => break, // EOF
-            Ok(n) => writer.send(Msg::Input(buf[..n].to_vec().into())).expect("send input"),
-            Err(_) => break,
+        tui::draw(&mut term, &mut app);
+        if event::poll(Duration::from_millis(16))? {
+            if let CTEvent::Key(key) = event::read()? {
+                if handle_key(&mut app, key, &mut in_command) {
+                    break;
+                }
+            }
         }
     }
+
+    // Teardown.
+    crossterm::terminal::disable_raw_mode()?;
+    execute!(term.backend_mut(), crossterm::terminal::LeaveAlternateScreen)?;
     Ok(())
+}
+
+/// Handle one key event. Returns true when the app should quit.
+fn handle_key(app: &mut App, key: KeyEvent, in_command: &mut bool) -> bool {
+    // Prefix logic: if not in command mode and this is the prefix, enter command mode.
+    if !*in_command && key.code == PREFIX && app.overlay == Overlay::None {
+        *in_command = true;
+        return false;
+    }
+
+    // If we're inside a palette/picker overlay, handle its keys.
+    match app.overlay {
+        Overlay::Palette => {
+            match key.code {
+                KeyCode::Esc => app.overlay = Overlay::None,
+                KeyCode::Enter => app.jump_to_selection(),
+                KeyCode::Down => app.selected = app.selected.saturating_add(1).min(app.filtered.len().saturating_sub(1)),
+                KeyCode::Up => app.selected = app.selected.saturating_sub(1),
+                KeyCode::Char(c) => {
+                    app.query.push(c);
+                    app.refresh_filter();
+                }
+                KeyCode::Backspace => {
+                    app.query.pop();
+                    app.refresh_filter();
+                }
+                _ => {}
+            }
+            return false;
+        }
+        Overlay::NewSession => {
+            match key.code {
+                KeyCode::Esc => app.overlay = Overlay::None,
+                KeyCode::Enter => {
+                    if let Some(eng) = app.selected_engine() {
+                        app.spawn_local("this-host", eng);
+                        app.overlay = Overlay::None;
+                    }
+                }
+                KeyCode::Down => app.selected = (app.selected + 1).min(engines_len() - 1),
+                KeyCode::Up => app.selected = app.selected.saturating_sub(1),
+                _ => {}
+            }
+            return false;
+        }
+        Overlay::None => {}
+    }
+
+    // Command-mode keys (after prefix).
+    if *in_command {
+        *in_command = false;
+        match key.code {
+            KeyCode::Char('/') => {
+                app.overlay = Overlay::Palette;
+                app.query.clear();
+                app.selected = 0;
+                app.refresh_filter();
+            }
+            KeyCode::Char('n') => {
+                app.overlay = Overlay::NewSession;
+                app.selected = 0;
+            }
+            KeyCode::Char('q') => return true,
+            KeyCode::Char('c') => {
+                // clear / focus first tab
+                if !app.tabs.is_empty() {
+                    app.active = 0;
+                }
+            }
+            KeyCode::Tab => {
+                if !app.tabs.is_empty() {
+                    app.active = (app.active + 1) % app.tabs.len();
+                }
+            }
+            KeyCode::Char(c @ '1'..='9') => {
+                let idx = (c as usize) - ('1' as usize);
+                if idx < app.tabs.len() {
+                    app.active = idx;
+                }
+            }
+            KeyCode::Char('x') => close_tab(app),
+            _ => {}
+        }
+        return false;
+    }
+
+    // Normal mode: keystrokes go to the active session.
+    if let Some(_s) = app.active_session_mut() {
+        // Write the key's bytes to the session. (Simple UTF-8 of typed char for now.)
+        if let KeyCode::Char(c) = key.code {
+            let mut buf = [0u8; 4];
+            let s = c.encode_utf8(&mut buf);
+            app.active_session_mut().unwrap().write(s.as_bytes());
+        }
+        // Handle Ctrl and Enter minimally via ESC sequences — refine later.
+        if key.modifiers.contains(KeyModifiers::CONTROL) {
+            if let KeyCode::Char('c') = key.code {
+                app.active_session_mut().unwrap().write(b"\x03");
+            }
+        }
+    }
+    false
+}
+
+fn close_tab(app: &mut App) {
+    if !app.tabs.is_empty() {
+        app.tabs.remove(app.active);
+        if app.active >= app.tabs.len() {
+            app.active = app.tabs.len().saturating_sub(1);
+        }
+    }
+}
+
+fn engines_len() -> usize {
+    autonomous_term::engines::ENGINES.len()
 }

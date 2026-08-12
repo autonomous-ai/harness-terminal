@@ -66,9 +66,48 @@ addition (optimistic render + echo suppression on returned bytes).
 
 Rust toolchain: **1.97 stable** (was pinned 1.57 — upgraded; modern terminal crates require it).
 
-## 5. Open questions
+## 5. Product scope (DECIDED) — 12 agent frameworks
 
-- Native UI layer: how to render tab bar + palette around the terminal surface (TUI framework —
-  e.g. ratatui-ish shell — vs desktop). TODO.
-- Control plane: how `harness join`'s discovery/presence feeds the palette.
-- Concurrency model for many simultaneous attached panes.
+A tab = one agent session = one tmux pane@host. The client spawns any of 12 engines on any host,
+or attaches to panes already discovered by `autonomous-harness`. Engines and their CLI commands
+(from `autonomous-harness/cli/src/lib/engineBin.ts`):
+
+| engine | cli | | engine | cli |
+|---|---|---|---|---|
+| claude | `claude` | | commandcode | `cmd` |
+| codex | `codex` | | devin | `devin` |
+| cursor | `agent` | | muse | `muse` |
+| opencode | `opencode` | | amp | `amp` |
+| pi | `pi` | | kilo | `kilo` |
+| hermes | `hermes` | | grok | `grok` |
+
+## 6. UX (DECIDED) — keyboard-first TUI
+
+- **Tab bar** across the top: one per session (pane@host), engine + host + status badge.
+- **Tab = session = pane@host**, flat 1:1. No window/panel tree client-side.
+- **Session palette** (`prefix + /`): fuzzy-find any session across the fleet; jump in a keystroke.
+- **Engine picker** (`prefix + n`): choose engine + host to spawn a new session tab.
+- **Status chrome** per tab: `host · engine · pane-title · status`.
+- **Local echo** for remote tabs so typing feels local.
+- Open question (later): pull the commander bus (busy/idle/summary) into status badges.
+
+## 7. Native UI layer (DECIDED) — ratatui TUI
+
+We use **ratatui** (Rust, MIT) for the shell: tab bar, palette, engine picker drawn in a TUI around
+the `alacritty_terminal` grid. The active tab's `Term` grid is rendered as the main surface; the
+chrome (tabs/palette/status) is ratatui widgets. Keyboard-first, tmux-style prefix keys.
+
+## 8. Concurrency (DECIDED — initial)
+
+One thread per attached session runs its event loop (as alacritty does). The app thread owns the
+`Vec<Tab>` + active index and renders synchronously. Background tabs keep ingesting via their own
+transport threads.
+
+## 9. The multilayer build (bottom → top)
+
+1. `engines` — 12 engine definitions (name, CLI command, colors).
+2. `session` — one `Term` + transport + its input/output channel.
+3. `transport` — local tmux control-mode now; remote tunnel later. (Same `Term` surface.)
+4. `app` — `Vec<Tab>`, active index, palette index, key dispatch.
+5. `tui` — ratatui shell drawing tabs/palette/status + the active `Term` grid.
+6. remote — the tunnel-backed transport (harness e2ee, `machineId`, tmux pane@host).
