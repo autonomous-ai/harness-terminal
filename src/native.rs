@@ -109,7 +109,7 @@ impl Application {
             cursor: (0.0, 0.0),
             last_press: None,
             window_title: String::new(),
-            zoom: 1.0,
+            zoom: crate::restore::load_zoom(),
             base_font,
         }
     }
@@ -127,6 +127,7 @@ impl Application {
     /// Clamps so the grid never becomes unusable, then re-derives cell metrics.
     fn zoom_font(&mut self, delta: f32) {
         self.zoom = (self.zoom * delta).clamp(0.5, 3.0);
+        crate::restore::save_zoom(self.zoom);
         self.metrics_from_scale();
         if let Some(active) = self.app.active_session() {
             let lines = (self.size.height - self.cell_h * 2) as usize / self.cell_h as usize;
@@ -776,7 +777,7 @@ impl Application {
                     match c.as_str() {
                         "=" | "+" => { self.zoom_font(1.1); return; }
                         "-" => { self.zoom_font(1.0 / 1.1); return; }
-                        "0" => { self.zoom = 1.0; self.metrics_from_scale(); return; }
+                        "0" => { self.zoom = 1.0; crate::restore::save_zoom(1.0); self.metrics_from_scale(); return; }
                         _ => {}
                     }
                 }
