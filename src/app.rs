@@ -56,6 +56,11 @@ pub struct App {
     next_reconnect: std::time::Instant,
     /// The most recently closed tab's spec, so `prefix+u` can undo a mistaken close.
     pub last_closed: Option<crate::restore::TabSpec>,
+    /// Monotonic counter bumped on every spawn; per-engine value records when each framework was
+    /// last used so the new-session picker can float recently-used engines to the top.
+    spawn_counter: u64,
+    /// engine id -> last spawn tick, for picker recency ordering.
+    pub engine_last_used: std::collections::HashMap<String, u64>,
 }
 
 impl App {
@@ -81,6 +86,8 @@ impl App {
             fleet: crate::harness::FleetStatus::default(),
             next_reconnect: std::time::Instant::now(),
             last_closed: None,
+            spawn_counter: 0,
+            engine_last_used: std::collections::HashMap::new(),
         }
     }
 
@@ -172,9 +179,28 @@ impl App {
         }
     }
 
+    /// Record that `engine_id` was just used, so the new-session picker can float it to the top.
+    pub fn note_engine_used(&mut self, engine_id: &str) {
+        self.spawn_counter += 1;
+        self.engine_last_used
+            .insert(engine_id.to_string(), self.spawn_counter);
+    }
+
+    /// Picker order for the 12 engines: most-recently-used first, ties broken alphabetically by id.
+    pub fn engine_order(&self) -> Vec<&'static crate::engines::Engine> {
+        let mut v: Vec<&'static crate::engines::Engine> = crate::engines::ENGINES.iter().collect();
+        v.sort_by(|a, b| {
+            let ra = self.engine_last_used.get(a.id).copied().unwrap_or(0);
+            let rb = self.engine_last_used.get(b.id).copied().unwrap_or(0);
+            rb.cmp(&ra).then(a.id.cmp(b.id))
+        });
+        v
+    }
+
     fn push_ok(&mut self, res: std::io::Result<Session>, engine_id: &str, host: &str) {
         match res {
             Ok(session) => {
+                self.note_engine_used(engine_id);
                 self.tabs.push(session);
                 self.active = self.tabs.len() - 1;
             }
@@ -357,15 +383,29 @@ impl App {
             .map(|e| e.id)
     }
 
-    /// Set the picker selection to the configured default engine (case-insensitive), falling back
-    /// to index 0. Called when the new-session overlay opens so Enter spawns the user's usual
-    /// engine without extra keystrokes.
+    /// Set the picker selection when the overlay opens: the most recently used engine if any
+    /// (position in the recency-ordered picker), else the configured default engine (case-
+    /// insensitive), else index 0. Recent-then-default means a diver's usual engine is pre-selected
+    /// without extra keystrokes, and it adapts when they switch their main framework.
     pub fn select_default_engine(&mut self) {
-        let want = crate::config::Config::load().default_engine.to_lowercase();
-        self.selected = ENGINES
+        let ordered = self.engine_order();
+        let recent = self
+            .engine_last_used
             .iter()
-            .position(|e| e.id.eq_ignore_ascii_case(&want))
-            .unwrap_or(0);
+            .max_by_key(|(_, &t)| t)
+            .map(|(id, _)| id.to_lowercase());
+        self.selected = if let Some(id) = recent {
+            ordered
+                .iter()
+                .position(|e| e.id.to_lowercase() == id)
+                .unwrap_or(0)
+        } else {
+            let want = crate::config::Config::load().default_engine.to_lowercase();
+            ordered
+                .iter()
+                .position(|e| e.id.eq_ignore_ascii_case(&want))
+                .unwrap_or(0)
+        };
     }
 }
 
@@ -401,6 +441,8 @@ mod tests {
             fleet: crate::harness::FleetStatus::default(),
             next_reconnect: std::time::Instant::now(),
             last_closed: None,
+            spawn_counter: 0,
+            engine_last_used: std::collections::HashMap::new(),
         };
         for i in 0..n {
             let meta = SessionMeta {
@@ -461,6 +503,25 @@ mod tests {
         app.duplicate_active();
         assert_eq!(app.tabs.len(), before, "local PTY must not be duplicated");
         assert_eq!(app.active, 1, "focus untouched");
+    }
+
+    /// The engine picker floats the most-recently-used engine to the top, ties broken
+    /// alphabetically (and never-used ones sort after every used one).
+    #[test]
+    fn engine_order_puts_most_recent_first() {
+        let mut app = app_with(1);
+        app.note_engine_used("grok");
+        app.note_engine_used("claude");
+        let ordered: Vec<&str> = app.engine_order().iter().map(|e| e.id).collect();
+        assert_eq!(ordered[0], "claude", "most recently used floats to top");
+        assert!(
+            ordered.iter().position(|&i| i == "grok").unwrap()
+                < ordered.iter().position(|&i| i == "devin").unwrap()
+        );
+        // select_default_engine picks the most recent, not the configured default.
+        app.selected = 99; // sentinel; will be overwritten
+        app.select_default_engine();
+        assert_eq!(app.engine_order()[app.selected].id, "claude");
     }
 
     /// No-op reorders (same slot, out of range, single tab) never change the list.

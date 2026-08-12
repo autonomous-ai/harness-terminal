@@ -1140,7 +1140,8 @@ impl Application {
                 CHROME_FG,
             );
         }
-        for (i, e) in ENGINES.iter().enumerate() {
+        let ordered = self.app.engine_order();
+        for (i, e) in ordered.iter().enumerate() {
             let sel = i == self.app.selected;
             let color = if sel { WHITE } else { CHROME_DIM };
             let line = format!("  {}  {}  {}", e.id, e.label, if sel { "◄" } else { "" });
@@ -1156,7 +1157,7 @@ impl Application {
         }
         // Under the engine list, a running description of the selected engine so a diver can read
         // what each framework is before committing to a spawn.
-        if let Some(e) = ENGINES.get(self.app.selected) {
+        if let Some(e) = ordered.get(self.app.selected) {
             draw_text(
                 fb,
                 &mut self.cache,
