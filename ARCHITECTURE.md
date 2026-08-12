@@ -1,4 +1,4 @@
-# Architecture — autonomous-term
+# Architecture — harness-terminal
 
 Terminal-first dive into a fleet of agent sessions. This document is the design source of truth;
 it changes as the design does.
@@ -10,7 +10,7 @@ TAB = SESSION = PANE@HOST    (strictly 1:1)
 ```
 
 - **A session** is one running agent (Claude Code, Codex, OpenCode, …) in **one tmux pane on one host**.
-- **A tab** in autonomous-term connects to exactly that pane.
+- **A tab** in harness-terminal connects to exactly that pane.
 - **Local and remote are the same gesture.** Every pane has an address (`pane@host`); where it runs
   is metadata on the tab, not a mode. A locally-spawned session is just `pane@this-machine`.
 

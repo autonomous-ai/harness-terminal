@@ -1,4 +1,4 @@
-# autonomous-term
+# harness-terminal
 
 **A terminal-first client for working with AI coding agents across many computers and servers.**
 

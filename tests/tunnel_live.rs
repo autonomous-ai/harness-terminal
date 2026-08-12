@@ -6,8 +6,8 @@ use std::time::Duration;
 
 use alacritty_terminal::sync::FairMutex;
 use alacritty_terminal::term::{Config, Term};
-use autonomous_term::session::{Listener, TermSize};
-use autonomous_term::transport::{Transport, TunnelTransport};
+use harness_terminal::session::{Listener, TermSize};
+use harness_terminal::transport::{Transport, TunnelTransport};
 
 #[test]
 fn tunnel_relays_pane_bytes_into_grid() {
@@ -22,7 +22,7 @@ fn tunnel_relays_pane_bytes_into_grid() {
 
     let size = TermSize { lines: 20, cols: 60 };
     let term: Arc<FairMutex<Term<Listener>>> = Arc::new(FairMutex::new(Term::new(Config::default(), &size, Listener)));
-    let echo = autonomous_term::session::EchoCanceller::default();
+    let echo = harness_terminal::session::EchoCanceller::default();
     let tx = TunnelTransport::spawn("127.0.0.1", port, "\\$SHELL", size, Arc::clone(&term), Arc::new(echo))
         .expect("tunnel spawn against live daemon");
 

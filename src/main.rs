@@ -1,4 +1,4 @@
-//! autonomous-term — a terminal-first dive into a fleet of AI agent sessions.
+//! harness-terminal — a terminal-first dive into a fleet of AI agent sessions.
 //!
 //! Keyboard-first TUI: `prefix + /` opens the session palette, `prefix + n` opens the engine
 //! picker, `prefix + q` quits. The active tab is a live alacritty Term; the tab bar / palette /
@@ -12,9 +12,9 @@ use crossterm::execute;
 use ratatui::backend::CrosstermBackend;
 use ratatui::Terminal;
 
-use autonomous_term::app::{App, Overlay};
-use autonomous_term::session::TermSize;
-use autonomous_term::tui;
+use harness_terminal::app::{App, Overlay};
+use harness_terminal::session::TermSize;
+use harness_terminal::tui;
 
 /// The prefix key (like tmux's C-b). Hold it to enter "command mode".
 const PREFIX: KeyCode = KeyCode::Char(' ');
@@ -72,7 +72,7 @@ fn handle_key(app: &mut App, key: KeyEvent, in_command: &mut bool) -> bool {
                         let host = if host.trim().is_empty() { "127.0.0.1".to_string() } else { host.trim().to_string() };
                         // Preferred transport: the harness pane-relay tunnel (path 1) on the machine's
                         // harness control port.
-                        app.spawn_tunnel(&host, autonomous_term::harness::HARNESS_PORT_DEFAULT, eng);
+                        app.spawn_tunnel(&host, harness_terminal::harness::HARNESS_PORT_DEFAULT, eng);
                         app.overlay = Overlay::None;
                     }
                 }
@@ -147,7 +147,7 @@ fn handle_key(app: &mut App, key: KeyEvent, in_command: &mut bool) -> bool {
             KeyCode::Char('q') => return true,
             KeyCode::Char('s') => {
                 // Refresh + peek the local harness fleet (commander-bus status badges).
-                match autonomous_term::harness::HarnessClient::local().status() {
+                match harness_terminal::harness::HarnessClient::local().status() {
                     Ok(st) => {
                         app.fleet = st;
                         // Report the fleet summary into the pane so it's visible for a moment.
@@ -214,5 +214,5 @@ fn close_tab(app: &mut App) {
 }
 
 fn engines_len() -> usize {
-    autonomous_term::engines::ENGINES.len()
+    harness_terminal::engines::ENGINES.len()
 }
