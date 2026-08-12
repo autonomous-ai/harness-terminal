@@ -188,6 +188,23 @@ impl App {
         }
     }
 
+    /// Move the active tab left/right in the bar by `delta` (-1/1), keeping it focused. Lets a
+    /// diver arrange the fleet bar (frequently-dropped-into sessions toward the front) without
+    /// closing/reopening. Clamps at the edges and tracks the active index.
+    pub fn move_tab(&mut self, delta: isize) {
+        let len = self.tabs.len();
+        if len < 2 {
+            return;
+        }
+        let to = self.active as isize + delta;
+        if to < 0 || to >= len as isize {
+            return;
+        }
+        let to = to as usize;
+        self.tabs.swap(self.active, to);
+        self.active = to;
+    }
+
     /// Focus the currently-selected palette entry.
     pub fn jump_to_selection(&mut self) {
         if let Some(&i) = self.filtered.get(self.selected) {
@@ -248,3 +265,4 @@ fn engine_cmd(id: &str) -> Option<&'static str> {
     }
     ENGINES.iter().find(|e| e.id == id).map(|e| e.cmd)
 }
+

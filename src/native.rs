@@ -656,12 +656,13 @@ impl Application {
     fn render_help(&mut self, fb: &mut Framebuffer) {
         let (base_y, line_px) = self.overlay_base_y();
         draw_text(fb, &mut self.cache, "  harness-terminal keys  ", 32, base_y, self.font_px, WHITE);
-        let bindings: [(&str, &str); 21] = [
+        let bindings: [(&str, &str); 22] = [
             ("Ctrl+Space", "prefix (then a command)"),
             ("prefix /", "palette: jump to any session"),
             ("prefix n", "new session (engine picker)"),
             ("prefix r", "attach to a remote pane@host"),
             ("prefix s", "fleet status"),
+            ("prefix { }", "move tab left / right"),
             ("prefix f", "search scrollback"),
             ("prefix h", "search all sessions (fleet)"),
             ("prefix [", "copy mode"),
@@ -1132,6 +1133,8 @@ impl Application {
                 "b" => self.scroll_to_bottom(),
                 "f" => { self.app.overlay = Overlay::Find; self.find_query.clear(); self.find_hit = None; self.find_all = Vec::new(); },
                 "h" => { self.app.overlay = Overlay::FleetSearch; self.fleet_q.clear(); self.fleet_matches.clear(); self.fleet_sel = 0; },
+                "{" => self.app.move_tab(-1),
+                "}" => self.app.move_tab(1),
                 "[" => self.start_copy_mode(),
                 "?" => { self.app.overlay = Overlay::Help; }
                 "," => {
