@@ -362,7 +362,8 @@ impl Application {
             let s = &self.app.tabs[i];
             let sel = row == self.app.selected;
             let color = if sel { WHITE } else { CHROME_DIM };
-            let line = format!("  {} · {} · {}  {}", s.meta.host, s.meta.engine, s.meta.title, if sel { "◄" } else { "" });
+            let name = s.meta.name.clone().unwrap_or_else(|| s.meta.engine.clone());
+            let line = format!("  {} · {} · {}  {}", s.meta.host, name, s.meta.title, if sel { "◄" } else { "" });
             draw_text(fb, &mut self.cache, &line, 32, base_y + (row + 1) * line_px, self.font_px, color);
         }
     }

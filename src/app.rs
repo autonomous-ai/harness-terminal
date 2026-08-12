@@ -151,7 +151,8 @@ impl App {
         self.filtered = (0..self.tabs.len())
             .filter(|&i| {
                 let s = &self.tabs[i];
-                let hay = format!("{} {} {}", s.meta.host, s.meta.engine, s.meta.title).to_lowercase();
+                let name = s.meta.name.clone().unwrap_or_default();
+                let hay = format!("{} {} {} {}", s.meta.host, s.meta.engine, name, s.meta.title).to_lowercase();
                 q.is_empty() || hay.contains(&q)
             })
             .collect();
