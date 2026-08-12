@@ -1,3 +1,5 @@
+<img width="1028" height="659" alt="image" src="https://github.com/user-attachments/assets/fd783b3a-a508-44d8-b868-5ce5b8200993" />
+
 # harness-terminal
 
 **A terminal-first client for working with AI coding agents across many computers and servers.**
