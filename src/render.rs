@@ -239,18 +239,34 @@ pub fn draw_grid(
 ) {
     let lines = term.screen_lines();
     let cols = term.columns();
+    // Cursor cell (block) — draw on top of its own cell after painting the background.
+    let cursor = &term.grid().cursor.point;
+
     for row in 0..lines {
         for col in 0..cols {
-            let (x0, y0) = (col as u32 * cell_w, row as u32 * cell_h);
+            let x0 = col as u32 * cell_w;
+            let y0 = row as u32 * cell_h;
+            let is_cursor = row as i32 == cursor.line.0 && col == cursor.column.0 as usize;
             let cell = &term.grid()[Line(row as i32)][Column(col)];
-            let bg = cell_color(&cell.bg);
-            // Optimize: skip painting solid-black background at the default (empty) cell when it
-            // matches an empty default; we still paint it to be safe.
+
+            // Background.
+            let mut bg = cell_color(&cell.bg);
+            if is_cursor {
+                // Classic block cursor: use the cell's foreground as the block fill.
+                bg = cell_color(&cell.fg);
+            }
             paint_bg(buf, x0 as usize, y0 as usize, cell_w as usize, cell_h as usize, bg);
             if cell.c == ' ' {
                 continue;
             }
-            let fg = cell_color(&cell.fg);
+
+            // Foreground: normal cell fg, or (cursor) theme background so the glyph inverts.
+            let mut fg = cell_color(&cell.fg);
+            if is_cursor {
+                // Invert: draw the glyph in the cell's original background color.
+                let mut bgsave = cell_color(&cell.bg);
+                std::mem::swap(&mut fg, &mut bgsave);
+            }
             let (r, g, b) = fg.to_rgb();
             let bold = cell.flags.contains(Flags::BOLD);
             let (gw, gh, alpha) = cache.glyph(cell.c, font_px, bold);
