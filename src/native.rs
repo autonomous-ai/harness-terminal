@@ -644,6 +644,21 @@ impl Application {
 
     /// Start a text selection at a pressed cursor position, or clear the selection when clicking.
     /// Single click = simple drag; double click = expand to a word (semantic); triple = whole line.
+    /// Alt+click: reposition the shell/readline cursor at the clicked cell. We report the cursor
+    /// position with the standard "active position report" sequence (`ESC [ row ; col R`), which
+    /// line editors that support click-to-move (zsh, fish, and readline via inputrc) honor.
+    fn mouse_alt_click(&mut self, x: f64, y: f64) {
+        let Some(pt) = self.mouse_to_cell(x, y) else { return };
+        // Only meaningful against live (unscrolled) screen coordinates; report 1-based.
+        if self.scrolled || pt.line.0 < 0 {
+            return;
+        }
+        let seq = format!("\x1b[{};{}R", pt.line.0 + 1, pt.column.0 + 1);
+        if let Some(active) = self.app.active_session() {
+            active.write(seq.as_bytes());
+        }
+    }
+
     fn mouse_press(&mut self, x: f64, y: f64) {
         let Some(pt) = self.mouse_to_cell(x, y) else {
             // Click outside the grid (on chrome) clears any selection.
@@ -814,6 +829,11 @@ impl ApplicationHandler for Application {
                     let (x, y) = self.cursor;
                     match state {
                         ElementState::Pressed => {
+                            if self.mods.alt_key() {
+                                // Alt+click moves the shell cursor instead of selecting.
+                                self.mouse_alt_click(x, y);
+                                return;
+                            }
                             self.mouse_press(x, y);
                             if let Some(w) = &self.window {
                                 w.request_redraw();
