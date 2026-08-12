@@ -55,6 +55,7 @@ enum PaletteAction {
     Broadcast,
     Peek,
     UndoClose,
+    Duplicate,
     SessionInfo,
     ToggleFocus,
     Help,
@@ -76,6 +77,7 @@ impl PaletteAction {
             ("broadcast a line to all sessions", Broadcast),
             ("peek at all session tails", Peek),
             ("undo close (reopen last)", UndoClose),
+            ("duplicate active tab (fork same engine@host)", Duplicate),
             ("show session info (kind/host/task)", SessionInfo),
             ("toggle focus mode (hide tab bar + status)", ToggleFocus),
             ("show this help", Help),
@@ -1379,6 +1381,7 @@ impl Application {
             ("mute", "mute/unmute the active tab"),
             ("last_window", "flip to the previous tab"),
             ("undo_close", "undo close (reopen last closed tab)"),
+            ("duplicate", "duplicate this tab (fork same engine@host)"),
             ("copy_scrollback", "copy whole scrollback to clipboard"),
             ("export_scrollback", "write scrollback to a .log file"),
             ("peek", "peek tails of all sessions"),
@@ -2037,6 +2040,10 @@ impl Application {
                 self.peek_sel = 0;
             }
             UndoClose => self.app.reopen_last_closed(),
+            Duplicate => {
+                self.app.duplicate_active();
+                self.flash = Some(("duplicated".to_string(), std::time::Instant::now()));
+            }
             SessionInfo => {
                 self.app.overlay = Overlay::Info;
             }
@@ -2345,6 +2352,10 @@ impl Application {
                     self.peek_sel = 0;
                 }
                 Some("undo_close") => self.app.reopen_last_closed(),
+                Some("duplicate") => {
+                    self.app.duplicate_active();
+                    self.flash = Some(("duplicated".to_string(), std::time::Instant::now()));
+                }
                 Some("page_up") => {
                     scroll_active(self, 20);
                     if let Some(s) = self.app.active_session() {

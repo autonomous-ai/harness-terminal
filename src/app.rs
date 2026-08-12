@@ -285,6 +285,37 @@ impl App {
         self.overlay = Overlay::None;
     }
 
+    /// Duplicate the active tab: spawn a fresh session with the same identity (same transport kind,
+    /// host, engine) and focus it. Effectively a "fork this session" — a diver running one agent can
+    /// branch a second pane of the same engine on the same machine without re-picking through the
+    /// new-session overlay. The local PTY kind is excluded because it owns a bring-up `program`;
+    /// there's no single program to re-run, so we only clone tmux/ssh/tunnel (which re-attach to a
+    /// real pane). No-op when there's no active tab or the clone fails.
+    pub fn duplicate_active(&mut self) {
+        let Some(active) = self.active_session() else {
+            return;
+        };
+        let kind = active.kind();
+        // Local PTYs can't be re-created generically (they'd need the original program/args to
+        // re-run); pane-backed kinds just re-attach to a fresh clone, so clone those only.
+        if kind != "tmux" && kind != "ssh" && kind != "tunnel" {
+            return;
+        }
+        let spec = crate::restore::TabSpec {
+            kind: kind.to_string(),
+            host: active.meta.host.clone(),
+            engine: active.meta.engine.clone(),
+            port: None,
+            name: None,
+        };
+        let before = self.tabs.len();
+        self.restore_tab(&spec);
+        if self.tabs.len() > before {
+            self.active = self.tabs.len() - 1;
+            crate::restore::save(&self.tab_specs());
+        }
+    }
+
     /// Reopen a previously-persisted tab. Chooses the right transport from `kind` so a session
     /// comes back with the same identity (local pane vs remote ssh vs tunnel). Best-effort: a
     /// failed re-spawn just leaves no tab.
@@ -418,6 +449,18 @@ mod tests {
             app.tabs[app.active].meta.engine, "e1",
             "active e1 shifted from slot 1 to slot 0"
         );
+    }
+
+    /// Duplicating a local PTY tab is a no-op: there's no generic program/args to re-run, so we
+    /// only fork pane-backed (tmux/ssh/tunnel) sessions. Tab count and focus stay untouched.
+    #[test]
+    fn duplicate_local_pty_is_noop() {
+        let mut app = app_with(3);
+        app.active = 1;
+        let before = app.tabs.len();
+        app.duplicate_active();
+        assert_eq!(app.tabs.len(), before, "local PTY must not be duplicated");
+        assert_eq!(app.active, 1, "focus untouched");
     }
 
     /// No-op reorders (same slot, out of range, single tab) never change the list.

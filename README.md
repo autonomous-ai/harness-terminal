@@ -54,6 +54,7 @@ The prefix is `Ctrl+Space` (tmux-style), then a command:
 | `Ctrl+Space` `d` | copy the whole scrollback to the clipboard |
 | `Ctrl+Space` `w` | write the scrollback to a `.log` file |
 | `Ctrl+Space` `u` | undo close (reopen the last closed tab) |
+| `Ctrl+Space` `k` | duplicate the active tab (fork the same engine@host) |
 | `Ctrl+Space` `m` | mute/unmute the active tab (no more busy nagging) |
 | `Ctrl+Space` `?` | help (full keybinding reference) |
 | `Ctrl+Space` `o` | jump to the next busy (produced-output) tab |
@@ -134,7 +135,7 @@ mute = "v"          # prefix+v toggles mute
 
 Action names: `palette`, `new_session`, `remote_attach`, `local_shell`, `quit`, `fleet`,
 `goto_tab0`, `next_busy`, `mute`, `last_window`, `paste`, `broadcast`, `close_tab`,
-`copy_scrollback`, `export_scrollback`, `peek`, `undo_close`, `page_up`, `scroll_bottom`,
+`copy_scrollback`, `export_scrollback`, `peek`, `undo_close`, `duplicate`, `page_up`, `scroll_bottom`,
 `search`, `search_all`, `move_left`, `move_right`, `copy_mode`, `help`, `command_palette`,
 `rename`, `session_info`, `toggle_focus`. The digit keys `1-9` / `0` (tab switching) and `Tab`
 are not remappable.
