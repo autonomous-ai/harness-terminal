@@ -57,6 +57,9 @@ struct Application {
     mouse_anchor: Option<Point>,
     /// Latest cursor position in framebuffer px (winit's MouseInput has no position; we read this).
     cursor: (f64, f64),
+    /// Last (press-time, press-position, accumulated-click-count) to detect double/triple clicks.
+    /// winit 0.30 doesn't hand us a click count, so we time consecutive presses ourselves.
+    last_press: Option<(std::time::Instant, (f64, f64), u32)>,
 }
 
 impl Application {
@@ -78,6 +81,7 @@ impl Application {
             find_hit: None,
             mouse_anchor: None,
             cursor: (0.0, 0.0),
+            last_press: None,
         }
     }
 
@@ -565,7 +569,29 @@ impl Application {
         Some(Point::new(Line((row as usize).try_into().unwrap()), Column(col as usize)))
     }
 
+    /// Detect how many clicks this press represents. A press within ~250ms and ~4px of the previous
+    /// one increments the count (up to 3); anything else resets to 1.
+    fn click_count(&mut self, x: f64, y: f64) -> u32 {
+        const THRESHOLD_MS: u64 = 250;
+        const THRESHOLD_PX: f64 = 4.0;
+        let now = std::time::Instant::now();
+        let click = if let Some((prev_at, (px, py), prev_count)) = self.last_press {
+            let dt = now.duration_since(prev_at).as_millis() as u64;
+            let dist = ((px - x).powi(2) + (py - y).powi(2)).sqrt();
+            if dt < THRESHOLD_MS && dist < THRESHOLD_PX {
+                (prev_count + 1).min(3)
+            } else {
+                1
+            }
+        } else {
+            1
+        };
+        self.last_press = Some((now, (x, y), click));
+        click
+    }
+
     /// Start a text selection at a pressed cursor position, or clear the selection when clicking.
+    /// Single click = simple drag; double click = expand to a word (semantic); triple = whole line.
     fn mouse_press(&mut self, x: f64, y: f64) {
         let Some(pt) = self.mouse_to_cell(x, y) else {
             // Click outside the grid (on chrome) clears any selection.
@@ -574,12 +600,27 @@ impl Application {
                 g.selection = None;
             }
             self.mouse_anchor = None;
+            self.last_press = None;
             return;
         };
+        let clicks = self.click_count(x, y);
         self.mouse_anchor = Some(pt);
         if let Some(active) = self.app.active_session() {
             let mut g = active.term.lock();
-            g.selection = Some(Selection::new(SelectionType::Simple, pt, Side::Left));
+            let sel = match clicks {
+                // Double-click: word selection drives semantic expansion off a non-empty range (a
+                // distinct end point keeps bracket-search from hijacking a single cell).
+                2 => {
+                    let s = Selection::new(SelectionType::Semantic, pt, Side::Left);
+                    let mut s2 = s;
+                    s2.update(Point::new(pt.line + Line(1), Column(0)), Side::Right);
+                    s2
+                }
+                3 => Selection::new(SelectionType::Lines, pt, Side::Left),
+                // Single click: plain drag-select; on the same cell it just anchors.
+                _ => Selection::new(SelectionType::Simple, pt, Side::Left),
+            };
+            g.selection = Some(sel);
         }
     }
 
