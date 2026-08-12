@@ -31,12 +31,21 @@ impl Dimensions for TermSize {
 }
 
 /// Sink for terminal render events. Rendering is drawn synchronously from the grid, so wakeups
-/// are currently no-ops; a future dirty-region/GPU client can hook `Event::Wakeup` here.
+/// are currently no-ops; a future dirty-region/GPU client can hook `Event::Wakeup` here. We do act
+/// on `ClipboardStore`, which the alacritty emulator issues for an OSC 52 write (e.g. an agent's
+/// `pbcopy`/`wl-copy` over the pane) — the data is copied to the system clipboard.
 #[derive(Clone, Default)]
 pub struct Listener;
 
 impl EventListener for Listener {
-    fn send_event(&self, _event: Event) {}
+    fn send_event(&self, event: Event) {
+        if let Event::ClipboardStore(_, text) = event {
+            // Best-effort: a missing/wrong clipboard backend must not break terminal I/O.
+            if let Ok(mut cb) = arboard::Clipboard::new() {
+                let _ = cb.set_text(text);
+            }
+        }
+    }
 }
 
 /// Latency smoothing for remote-byte transports.

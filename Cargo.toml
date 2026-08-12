@@ -20,6 +20,7 @@ tungstenite = "0.24"
 winit = "0.30"            # native window + event loop
 softbuffer = "0.4"        # CPU framebuffer surface
 ab_glyph = "0.2"          # glyph rasterization (system font -> bitmap)
+arboard = "3.4"           # system clipboard (OSC 52 store/load)
 
 [dev-dependencies]
 serde_json = "1"

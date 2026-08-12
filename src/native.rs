@@ -439,6 +439,21 @@ impl Application {
             }
 
             if let Some(s) = self.app.active_session_mut() {
+                // Paste clipboard: Ctrl+V (and Cmd+V, the mac convention) reads the system clipboard
+                // and writes it to the session, bracketing with bracketed-paste if the app asked.
+                let is_paste = (mods.control_key() && matches!(key, Key::Character(c) if c == "v"))
+                    || (mods.super_key() && matches!(key, Key::Character(c) if c == "v"));
+                if is_paste {
+                    if let Ok(mut cb) = arboard::Clipboard::new() {
+                        if let Ok(text) = cb.get_text() {
+                            // Bracketed paste is negotiated; we always bracket to be safe with
+                            // multi-line input (most modern shells/clis accept it).
+                            let seq = format!("\x1b[200~{}\x1b[201~", text);
+                            s.write(seq.as_bytes());
+                        }
+                    }
+                    return;
+                }
                 match key {
                     Key::Character(c) => {
                         if mods.control_key() {
