@@ -718,7 +718,7 @@ impl Application {
     fn render_help(&mut self, fb: &mut Framebuffer) {
         let (base_y, line_px) = self.overlay_base_y();
         draw_text(fb, &mut self.cache, "  harness-terminal keys  ", 32, base_y, self.font_px, WHITE);
-        let bindings: [(&str, &str); 25] = [
+        let bindings: [(&str, &str); 26] = [
             ("Ctrl+Space", "prefix (then a command)"),
             ("prefix /", "palette: jump to any session"),
             ("prefix n", "new session (engine picker)"),
@@ -735,6 +735,7 @@ impl Application {
             ("1-9 / Tab", "switch tab"),
             ("prefix o", "jump to next busy tab"),
             ("prefix l", "flip to the previous tab"),
+            ("prefix u", "undo close (reopen last closed tab)"),
             ("x / c", "close tab / go to tab 0"),
             ("g / b", "scroll up a page / jump to bottom"),
             ("prefix d", "copy whole scrollback to clipboard"),
@@ -1255,6 +1256,7 @@ impl Application {
                 "d" => self.copy_whole_scrollback(),
                 "w" => self.export_scrollback(),
                 "y" => { self.app.overlay = Overlay::Peek; self.peek_sel = 0; },
+                "u" => self.app.reopen_last_closed(),
                 "g" => { scroll_active(self, 20); if let Some(s) = self.app.active_session() { s.set_scrolled(true); } }
                 "b" => self.scroll_to_bottom(),
                 "f" => { self.app.overlay = Overlay::Find; self.find_query.clear(); self.find_hit = None; self.find_all = Vec::new(); },
@@ -1652,6 +1654,17 @@ fn collect_fleet_matches(
 
 fn close_tab(app: &mut App) {
     if !app.tabs.is_empty() {
+        // Stash the closed tab's spec so prefix+u can undo a mistaken close. Kind + host + engine
+        // are enough to re-spawn the same identity (TMUX/etc. re-attach to the same pane@host).
+        if let Some(s) = app.tabs.get(app.active) {
+            app.last_closed = Some(crate::restore::TabSpec {
+                kind: s.kind().to_string(),
+                host: s.meta.host.clone(),
+                engine: s.meta.engine.clone(),
+                port: None,
+                name: s.meta.name.clone(),
+            });
+        }
         app.tabs.remove(app.active);
         if app.active >= app.tabs.len() {
             app.active = app.tabs.len().saturating_sub(1);

@@ -50,6 +50,8 @@ pub struct App {
     pub fleet: crate::harness::FleetStatus,
     /// Time of the next reconnect sweep (monotonic), so a dead daemon can't hammer it every frame.
     next_reconnect: std::time::Instant,
+    /// The most recently closed tab's spec, so `prefix+u` can undo a mistaken close.
+    pub last_closed: Option<crate::restore::TabSpec>,
 }
 
 impl App {
@@ -65,6 +67,7 @@ impl App {
             remote_host: String::new(),
             fleet: crate::harness::FleetStatus::default(),
             next_reconnect: std::time::Instant::now(),
+            last_closed: None,
         }
     }
 
@@ -207,6 +210,20 @@ impl App {
         let to = to as usize;
         self.tabs.swap(self.active, to);
         self.active = to;
+    }
+
+    /// Undo the most recent tab close, re-spawning the same identity (same pane@host / engine) and
+    /// focusing it. No-op when nothing has been closed or the re-spawn fails.
+    pub fn reopen_last_closed(&mut self) {
+        if let Some(spec) = self.last_closed.clone() {
+            self.last_closed = None;
+            let before = self.tabs.len();
+            self.restore_tab(&spec);
+            if self.tabs.len() > before {
+                self.active = self.tabs.len() - 1;
+                crate::restore::save(&self.tab_specs());
+            }
+        }
     }
 
     /// Focus the currently-selected palette entry.
