@@ -130,6 +130,35 @@ impl Engine {
     }
 }
 
+/// Whether `cmd` resolves on this machine's PATH. Pure filesystem scan (no subprocess): walks the
+/// `$PATH`-split dirs for an executable file named `cmd` (or `cmd.exe`). Used to dim engines in the
+/// new-session picker that a diver doesn't actually have installed, so picking one doesn't surprise.
+/// A command may still fail at spawn (a bare stub, a broken install) — this is a hint, not a promise.
+pub fn is_installed(cmd: &str) -> bool {
+    let path = std::env::var_os("PATH").unwrap_or_default();
+    for dir in std::env::split_paths(&path) {
+        let candidate = dir.join(cmd);
+        if is_executable(&candidate) {
+            return true;
+        }
+        // Windows shims come as `cmd.exe`; harmless no-op elsewhere.
+        #[cfg(windows)]
+        {
+            if is_executable(&candidate.with_extension("exe")) {
+                return true;
+            }
+        }
+    }
+    false
+}
+
+fn is_executable(p: &std::path::Path) -> bool {
+    use std::os::unix::fs::PermissionsExt;
+    std::fs::metadata(p)
+        .map(|m| m.is_file() && (m.permissions().mode() & 0o111) != 0)
+        .unwrap_or(false)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -144,5 +173,14 @@ mod tests {
             assert!(!e.cmd.is_empty());
             assert!(Engine::by_id(e.id).is_some());
         }
+    }
+
+    /// A present executable on PATH is found; a nonsense name is not.
+    #[test]
+    fn is_installed_finds_present_executable() {
+        if cfg!(unix) {
+            assert!(is_installed("sh")); // guaranteed present
+        }
+        assert!(!is_installed("unlikely-nonexistent-binary-harness"));
     }
 }

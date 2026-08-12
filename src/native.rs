@@ -1756,14 +1756,24 @@ impl Application {
             self.font_px,
             WHITE,
         );
-        // Reuse `app.selected` as-is; the engine list offset accounts for the extra dir row.
+        // Rows: header(0), legend(1), dir(2), engines(3+). The engine list offsets below account
+        // for the legend + dir slots.
+        draw_text(
+            fb,
+            &mut self.cache,
+            "  ✗ = not on PATH  ",
+            32,
+            base_y + line_px,
+            self.font_px,
+            CHROME_DIM,
+        );
         if self.new_cwd.is_empty() {
             draw_text(
                 fb,
                 &mut self.cache,
                 "  dir:  (blank = start_cwd · pre-filled from last use)  ",
                 32,
-                base_y + line_px,
+                base_y + 2 * line_px,
                 self.font_px,
                 CHROME_FG,
             );
@@ -1773,22 +1783,43 @@ impl Application {
                 &mut self.cache,
                 &format!("  dir: {}", self.new_cwd),
                 32,
-                base_y + line_px,
+                base_y + 2 * line_px,
                 self.font_px,
                 CHROME_FG,
             );
         }
         let ordered = self.app.engine_order();
+        // Cache which engines are actually on this machine's PATH so the picker isn't re-scanning
+        // disk every frame (a half-dozen stat calls per tab-frame adds up); still a hint, not a
+        // promise — a present binary can fail at spawn.
+        let installed: Vec<bool> = ordered
+            .iter()
+            .map(|e| crate::engines::is_installed(e.cmd))
+            .collect();
         for (i, e) in ordered.iter().enumerate() {
             let sel = i == self.app.selected;
-            let color = if sel { WHITE } else { CHROME_DIM };
-            let line = format!("  {}  {}  {}", e.id, e.label, if sel { "◄" } else { "" });
+            let present = installed[i];
+            let color = if sel {
+                WHITE
+            } else if present {
+                CHROME_DIM
+            } else {
+                CHROME_ERR
+            };
+            let mark = if sel {
+                "◄"
+            } else if present {
+                ""
+            } else {
+                "✗"
+            };
+            let line = format!("  {}  {}  {}", e.id, e.label, mark);
             draw_text(
                 fb,
                 &mut self.cache,
                 &line,
                 32,
-                base_y + (i + 2) * line_px,
+                base_y + (i + 3) * line_px,
                 self.font_px,
                 color,
             );
@@ -1801,7 +1832,7 @@ impl Application {
                 &mut self.cache,
                 &format!("      {} — {}", e.label, e.desc),
                 32,
-                base_y + (ENGINES.len() + 2) * line_px,
+                base_y + (ENGINES.len() + 3) * line_px,
                 self.font_px,
                 CHROME_DIM,
             );

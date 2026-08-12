@@ -14,6 +14,9 @@ entries record user-visible and architectural changes since the last tagged mile
   in tiled panes that update each frame, so a diver sees what all agents are doing at once instead
   of hopping tab to tab. Up/Down/1-9 focus a tile, Enter dives into it; per-tile `@host` headers
   and the active tile's white border keep orientation. Also reachable from the command palette.
+- **Engine install hints in the new-session picker** — each engine row now marks whether its CLI
+  is actually on PATH (`✗` in red for absent), so a diver doesn't pick a framework that isn't
+  installed and fail on spawn. A pure `which`-style PATH scan (`engines::is_installed`), no subprocess.
 - **Do-Not-Disturb (`prefix+M`)** — flip a fleet-wide switch that swallows every OS notification
   (backgrounded-busy nag and terminal-bell popup) at the source. In-bar `!N`/🔔 badges still render,
   so a diver who mutes popups can see later that something rang; a `🔕` chip shows in the triage while
