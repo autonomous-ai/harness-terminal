@@ -9,12 +9,17 @@ alacritty_terminal = "0.26"
 crossterm = "0.29.0"
 fuzzy-matcher = "0.3.7"
 parking_lot = "0.12.5"
+# Legacy TUI backend (--tui fallback for running headless inside an SSH session on a server).
 ratatui = "0.30.2"
 # Harness local status (GET /api/status on the joined-machine control port).
 reqwest = { version = "0.12", default-features = false, features = ["blocking", "rustls-tls", "json"] }
 serde = { version = "1", features = ["derive"] }
 # Harness pane-relay tunnel (ws://host:port/api/pane-ws) for remote attach.
 tungstenite = "0.24"
+# ── Standalone native window (our terminal, no host emulator) ───────────────
+winit = "0.30"            # native window + event loop
+softbuffer = "0.4"        # CPU framebuffer surface
+ab_glyph = "0.2"          # glyph rasterization (system font -> bitmap)
 
 [dev-dependencies]
 serde_json = "1"

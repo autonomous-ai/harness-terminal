@@ -6,7 +6,9 @@
 
 pub mod app;
 pub mod engines;
+pub mod native;
 pub mod harness;
 pub mod session;
 pub mod transport;
+pub mod render;
 pub mod tui;
