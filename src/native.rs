@@ -52,6 +52,7 @@ enum PaletteAction {
     SearchAll,
     CopyScrollback,
     ExportLog,
+    CopyIdentity,
     Broadcast,
     Peek,
     UndoClose,
@@ -79,6 +80,7 @@ impl PaletteAction {
             ("search all sessions", SearchAll),
             ("copy whole scrollback", CopyScrollback),
             ("export scrollback to .log file", ExportLog),
+            ("copy session identity (engine@host)", CopyIdentity),
             ("broadcast a line to all sessions", Broadcast),
             ("peek at all session tails", Peek),
             ("undo close (reopen last)", UndoClose),
@@ -578,6 +580,24 @@ impl Application {
         if let Ok(mut cb) = arboard::Clipboard::new() {
             let _ = cb.set_text(text);
         }
+    }
+
+    /// `prefix+j`: copy the active session's identity to the system clipboard — `<engine|name>@host`
+    /// for a local PTY, `pane@host` for a pane-backed tab (the exact target `prefix+r` attach
+    /// accepts). Quick way to share or reference a session without hand-typing `user@host:session`.
+    fn copy_identity(&mut self) {
+        let Some(s) = self.app.active_session() else {
+            return;
+        };
+        let head = s.meta.name.clone().unwrap_or_else(|| s.meta.engine.clone());
+        let id = format!("{}@{}", head, s.meta.host);
+        if let Ok(mut cb) = arboard::Clipboard::new() {
+            let _ = cb.set_text(id);
+        }
+        self.flash = Some((
+            format!("copied {}@{}", head, s.meta.host),
+            std::time::Instant::now(),
+        ));
     }
 
     /// `prefix+w`: write the active session's whole scrollback to a timestamped text file in the
@@ -1715,6 +1735,10 @@ impl Application {
             ("duplicate", "duplicate this tab (fork same engine@host)"),
             ("copy_scrollback", "copy whole scrollback to clipboard"),
             ("export_scrollback", "write scrollback to a .log file"),
+            (
+                "copy_identity",
+                "copy session identity (engine@host) to clipboard",
+            ),
             ("peek", "peek tails of all sessions"),
             ("session_info", "show this tab's info (kind/host/task)"),
             ("toggle_focus", "focus mode (hide tab bar + status)"),
@@ -2391,6 +2415,7 @@ impl Application {
             }
             CopyScrollback => self.copy_whole_scrollback(),
             ExportLog => self.export_scrollback(),
+            CopyIdentity => self.copy_identity(),
             Broadcast => {
                 self.broadcast_query.clear();
                 self.app.overlay = Overlay::Broadcast;
@@ -2740,6 +2765,7 @@ impl Application {
                 }
                 Some("copy_scrollback") => self.copy_whole_scrollback(),
                 Some("export_scrollback") => self.export_scrollback(),
+                Some("copy_identity") => self.copy_identity(),
                 Some("peek") => {
                     self.app.overlay = Overlay::Peek;
                     self.peek_sel = 0;
