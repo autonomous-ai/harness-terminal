@@ -1113,13 +1113,19 @@ impl Application {
                 .enumerate()
                 .filter(|&(i, &b)| b && i != self.app.active)
                 .count();
-            if down > 0 || busy > 0 {
+            // Queued type-ahead across down panes (sum of staged bytes) — a host coming back with
+            // parked input deserves the triage's attention too.
+            let queued: usize = self.app.tabs.iter().map(|s| s.pending_bytes()).sum();
+            if down > 0 || busy > 0 || queued > 0 {
                 let mut triage = String::new();
                 if down > 0 {
                     triage += &format!("↓{down} ");
                 }
                 if busy > 0 {
                     triage += &format!("!{busy} ");
+                }
+                if queued > 0 {
+                    triage += &format!("⏳{queued} ");
                 }
                 draw_text(
                     fb,
