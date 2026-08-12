@@ -112,6 +112,28 @@ pub fn load_engine_recency() -> std::collections::HashMap<String, u64> {
     serde_json::from_str(&raw).unwrap_or_default()
 }
 
+fn recent_dirs_path() -> std::path::PathBuf {
+    config_dir().join("recent-dirs.json")
+}
+
+/// Persist the MRU working-directory list (most-recent first, already capped by the caller), so the
+/// new-session picker pre-fills the last repo you spawned in. Best-effort like the others.
+pub fn save_recent_dirs(dirs: &[String]) {
+    let _ = std::fs::create_dir_all(config_dir());
+    let _ = std::fs::write(
+        recent_dirs_path(),
+        serde_json::to_string_pretty(dirs).unwrap_or_default(),
+    );
+}
+
+/// Load the recent working-directory list (empty on missing file / bad JSON).
+pub fn load_recent_dirs() -> Vec<String> {
+    let Ok(raw) = std::fs::read_to_string(recent_dirs_path()) else {
+        return Vec::new();
+    };
+    serde_json::from_str(&raw).unwrap_or_default()
+}
+
 /// Persist which tab was focused last, so a relaunch opens on it rather than always tab 0.
 /// Best-effort like the others.
 pub fn save_active(idx: usize) {

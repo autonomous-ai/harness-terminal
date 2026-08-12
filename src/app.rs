@@ -61,6 +61,9 @@ pub struct App {
     spawn_counter: u64,
     /// engine id -> last spawn tick, for picker recency ordering.
     pub engine_last_used: std::collections::HashMap<String, u64>,
+    /// Working directories local tabs were spawned in, most-recent first (MRU). Pre-fills the
+    /// new-session picker's `dir:` so respawning in the same repo is one Enter. Cap 8.
+    pub last_dirs: Vec<String>,
 }
 
 impl App {
@@ -95,6 +98,7 @@ impl App {
             last_closed: None,
             spawn_counter: counter,
             engine_last_used: recency,
+            last_dirs: crate::restore::load_recent_dirs(),
         }
     }
 
@@ -111,6 +115,16 @@ impl App {
     pub fn spawn_local(&mut self, host: &str, engine_id: &str, cwd: Option<String>) {
         let program = engine_cmd(engine_id).unwrap_or("bash");
         let meta = self.meta_for(host, engine_id);
+        if let Some(dir) = &cwd {
+            // Remember the working dir (MRU, capped) so the next new-session pre-fills it.
+            let dir = dir.trim().to_string();
+            if !dir.is_empty() {
+                self.last_dirs.retain(|d| d != &dir);
+                self.last_dirs.insert(0, dir);
+                self.last_dirs.truncate(8);
+                crate::restore::save_recent_dirs(&self.last_dirs);
+            }
+        }
         self.push_ok(
             Session::local(meta, program, Vec::new(), self.size, cwd),
             engine_id,
@@ -457,6 +471,7 @@ mod tests {
             last_closed: None,
             spawn_counter: 0,
             engine_last_used: std::collections::HashMap::new(),
+            last_dirs: Vec::new(),
         };
         for i in 0..n {
             let meta = SessionMeta {
@@ -550,6 +565,29 @@ mod tests {
         assert_eq!(a2.tabs[0].meta.engine, "e0");
         a2.move_tab_from_to(9, 0); // from out of range
         assert_eq!(a2.tabs.len(), 3);
+    }
+
+    /// Spawning a local tab in a cwd records it MRU-first, dedups the old entry, and caps at 8 — the
+    /// new-session picker pre-fills `last_dirs[0]`.
+    #[test]
+    fn spawn_local_tracks_recent_dirs_mru_capped() {
+        let mut app = app_with(0);
+        // A blank/explicit cwd is remembered; repeated spawns float to the front without duplicating.
+        app.spawn_local("this-host", "claude", Some("/a".to_string()));
+        app.spawn_local("this-host", "claude", Some("/b".to_string()));
+        app.spawn_local("this-host", "claude", Some("/a".to_string()));
+        assert_eq!(app.last_dirs, vec!["/a".to_string(), "/b".to_string()]);
+        // Blank cwd is not recorded (picker keeps its pre-fill).
+        app.spawn_local("this-host", "claude", None);
+        assert_eq!(app.last_dirs, vec!["/a".to_string(), "/b".to_string()]);
+        // Cap at 8.
+        let mut app8 = app_with(0);
+        for i in 0..12 {
+            app8.spawn_local("this-host", "claude", Some(format!("/d{i}")));
+        }
+        assert_eq!(app8.last_dirs.len(), 8);
+        assert_eq!(app8.last_dirs[0], "/d11");
+        assert!(!app8.last_dirs.contains(&"/d0".to_string()));
     }
 
     /// A pinned tab refuses close (`close_tab` returns false and leaves the tab), while an

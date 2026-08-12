@@ -1491,7 +1491,7 @@ impl Application {
             draw_text(
                 fb,
                 &mut self.cache,
-                "  dir:  (blank = config start_cwd)  ",
+                "  dir:  (blank = start_cwd · pre-filled from last use)  ",
                 32,
                 base_y + line_px,
                 self.font_px,
@@ -2439,7 +2439,8 @@ impl Application {
             NewSession => {
                 self.app.overlay = Overlay::NewSession;
                 self.app.select_default_engine();
-                self.new_cwd.clear();
+                // Pre-fill the last repo a local tab was spawned in (MRU), so respawning is one Enter.
+                self.new_cwd = self.app.last_dirs.first().cloned().unwrap_or_default();
             }
             RemoteAttach => {
                 self.app.overlay = Overlay::RemoteAttach;
@@ -2764,7 +2765,7 @@ impl Application {
                 Some("new_session") => {
                     self.app.overlay = Overlay::NewSession;
                     self.app.select_default_engine();
-                    self.new_cwd.clear();
+                    self.new_cwd = self.app.last_dirs.first().cloned().unwrap_or_default();
                 }
                 Some("remote_attach") => {
                     self.app.overlay = Overlay::RemoteAttach;
