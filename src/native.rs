@@ -300,6 +300,11 @@ impl Application {
             let head = s.meta.name.clone().unwrap_or_else(|| s.meta.engine.clone());
             info = format!(" {} · {} · {} · [{} {}]", s.meta.host, head, live, s.kind(), link);
         }
+        // When the viewport is scrolled back from the live bottom, say so — a dead giveaway that
+        // keys won't take you to fresh output until you press Escape (or the b key).
+        if self.scrolled {
+            info += "  ▾ scrolled (Esc/b to bottom)";
+        }
         draw_text(fb, &mut self.cache, &info, 6, status_base, self.font_px, CHROME_FG);
         let hints = " prefix+/ palette  prefix+n new  prefix+r remote  prefix+s fleet  prefix+[ copy  prefix+? help  prefix+q quit ";
         let hw = draw_text(fb, &mut self.cache, hints, 6, status_base, self.font_px, CHROME_DIM);
