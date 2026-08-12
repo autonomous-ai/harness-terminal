@@ -14,6 +14,10 @@ entries record user-visible and architectural changes since the last tagged mile
   in tiled panes that update each frame, so a diver sees what all agents are doing at once instead
   of hopping tab to tab. Up/Down/1-9 focus a tile, Enter dives into it; per-tile `@host` headers
   and the active tile's white border keep orientation. Also reachable from the command palette.
+- **Reconnect-all-down (`prefix+T`)** — force a connect attempt on EVERY down remote pane at once,
+  bypassing each transport's backoff. When several hosts drop together (a blip, a reboot), one key
+  re-runs the connect path fleet-wide instead of tab-hopping and pressing `R` per pane; flashes how
+  many were reached vs. still down.
 - **Pane-recovery signal (`↻`)** — the moment a down (disconnected) remote pane comes back alive,
   its tab shows a short-lived `↻` badge (and the fleet-grid tile too) and — when backgrounded and
   unmuted — one "N sessions reconnected" notification fires. A host that silently reappears is now

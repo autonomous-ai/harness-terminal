@@ -69,6 +69,7 @@ enum PaletteAction {
     NextHost,
     Dnd,
     Reconnect,
+    ReconnectAll,
     Destroy,
     Interrupt,
     Help,
@@ -102,6 +103,7 @@ impl PaletteAction {
             ("jump to next host (page fleet by machine)", NextHost),
             ("toggle do-not-disturb (mute all OS notifications)", Dnd),
             ("force reconnect active tab (bypass backoff)", Reconnect),
+            ("force reconnect ALL down panes", ReconnectAll),
             ("kill active tab's pane (destroy remote session)", Destroy),
             ("send Ctrl-C to active tab (stop the run)", Interrupt),
             ("show this help", Help),
@@ -1081,6 +1083,42 @@ impl Application {
                 ))
             }
         }
+    }
+
+    /// `prefix+T`: force a live-again attempt on EVERY down remote pane at once, ignoring each
+    /// transport's auto-reconnect backoff. The fleet-shaped cousin of `reconnect_active`: when
+    /// several hosts dropped together (a network blip, a box reboot), one key re-runs the connect
+    /// path for all of them instead of tab-hopping and pressing `R` per pane. PTYs are skipped
+    /// (nothing to re-attach); the focused tab's reconnect, when down, also fires so the dive
+    /// session isn't left behind. Flashes how many were attempted vs. actually reached.
+    fn reconnect_all_down(&mut self) {
+        let down: Vec<usize> = (0..self.app.tabs.len())
+            .filter(|&i| {
+                let s = &self.app.tabs[i];
+                s.kind() != "pty" && !s.alive()
+            })
+            .collect();
+        if down.is_empty() {
+            self.flash = Some((
+                "no down panes — fleet is healthy".to_string(),
+                std::time::Instant::now(),
+            ));
+            return;
+        }
+        let mut ok = 0usize;
+        for i in &down {
+            if self.app.tabs[*i].reconnect_now().is_ok() {
+                ok += 1;
+            }
+        }
+        self.flash = Some((
+            format!(
+                "reconnect-all: {} reached, {} still down",
+                ok,
+                down.len() - ok
+            ),
+            std::time::Instant::now(),
+        ));
     }
 
     /// Kill the active tab's pane (remote tmux/ssh/tunnel), then close the tab so the watchdog
@@ -2135,6 +2173,7 @@ impl Application {
             ("next_host", "jump to next host (page the fleet by machine)"),
             ("dnd", "toggle do-not-disturb (mute all OS notifications)"),
             ("reconnect", "force reconnect active tab (bypass backoff)"),
+            ("reconnect_all", "force reconnect ALL down panes at once"),
             ("destroy", "kill active tab's remote pane"),
             ("interrupt", "send Ctrl-C to active tab (stop the run)"),
             ("mute", "mute/unmute the active tab"),
@@ -3025,6 +3064,7 @@ impl Application {
             NextHost => self.next_host(),
             Dnd => self.toggle_dnd(),
             Reconnect => self.reconnect_active(),
+            ReconnectAll => self.reconnect_all_down(),
             Destroy => self.destroy_active(),
             Interrupt => self.interrupt_active(),
             Help => {
@@ -3336,6 +3376,7 @@ impl Application {
                 Some("pin") => self.toggle_pin_active(),
                 Some("next_pinned") => self.next_pinned(),
                 Some("reconnect") => self.reconnect_active(),
+                Some("reconnect_all") => self.reconnect_all_down(),
                 Some("destroy") => self.destroy_active(),
                 Some("last_window") => self.last_window(),
                 Some("paste") => self.paste_clipboard(),

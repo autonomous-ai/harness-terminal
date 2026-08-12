@@ -22,6 +22,7 @@ pub const ACTIONS: &[(&str, &str)] = &[
     ("next_down", "Q"),
     ("next_host", "H"),
     ("dnd", "M"),
+    ("reconnect_all", "T"),
     ("mute", "m"),
     ("last_window", "l"),
     ("paste", "p"),
