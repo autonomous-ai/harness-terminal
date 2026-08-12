@@ -306,6 +306,8 @@ impl Application {
         let mut x = 6usize;
         for (i, s) in self.app.tabs.iter().enumerate() {
             let active = i == self.app.active;
+            // Color the active tab's dot by its host so a fleet diver reads 'which machine' at a
+            // glance; matches the host hue used across tabs and it's stable across restarts.
             let dot = if active { "●" } else { "○" };
             // Show the pane's live OSC title (what the agent is doing) when it has announced one.
             let live = s.live_title().unwrap_or_else(|| s.meta.title.clone());
@@ -318,7 +320,7 @@ impl Application {
             // Show the user's rename if set; otherwise the plain engine id.
             let head = s.meta.name.clone().unwrap_or_else(|| s.meta.engine.clone());
             let label = format!(" {}{} {} {} ", flag, head, live, dot);
-            let color = if active { WHITE } else { CHROME_DIM };
+            let color = if active { host_color(&s.meta.host) } else { CHROME_DIM };
             x += draw_text(fb, &mut self.cache, &label, x, tab_base, self.font_px, color) + 12;
             if x > fb.width.saturating_sub(20) {
                 break;
@@ -1220,6 +1222,27 @@ impl Application {
     }
 }
 
+/// A stable accent color for a host string, so every tab pointing at the same machine (and the
+/// details pane) shares a hue and a fleet diver can tell at a glance which host a tab is on.
+/// Deterministic — same host always yields the same color, across sessions and restarts.
+fn host_color(host: &str) -> (u8, u8, u8) {
+    // FNV-1a over the host; pick a hue from the warm-to-cool range and keep it readable on black.
+    let h = host.bytes().fold(0x811c_9dc5u32, |acc, b| (acc ^ b as u32).wrapping_mul(0x0100_0193));
+    // 32 hues across the spectrum, OSV below is luminance-boosted so text reads on near-black.
+    let hue = (h >> 4) % 32;
+    const TABLE: [(u8, u8, u8); 32] = [
+        (0xe0, 0x5b, 0x5b), (0xe0, 0x8b, 0x5b), (0xe0, 0xb8, 0x5b), (0xbf, 0xe0, 0x5b),
+        (0x8b, 0xe0, 0x5b), (0x5b, 0xe0, 0x8b), (0x5b, 0xe0, 0xbf), (0x5b, 0xdd, 0xe0),
+        (0x5b, 0xa8, 0xe0), (0x5b, 0x74, 0xe0), (0x8b, 0x5b, 0xe0), (0xbf, 0x5b, 0xe0),
+        (0xe0, 0x5b, 0xd0), (0xe0, 0x5b, 0x9b), (0x9b, 0x7b, 0x5b), (0x9b, 0x9b, 0x5b),
+        (0x5b, 0x9b, 0x7b), (0x5b, 0x7b, 0x9b), (0x7b, 0x5b, 0x9b), (0x9b, 0x5b, 0x7b),
+        (0xf7, 0x9e, 0x8b), (0xf7, 0xbe, 0x8b), (0xd9, 0xf7, 0x8b), (0xa7, 0xf7, 0x8b),
+        (0x8b, 0xf7, 0xa7), (0x8b, 0xf7, 0xd9), (0x8b, 0xdd, 0xf7), (0x8b, 0xa7, 0xf7),
+        (0xa7, 0x8b, 0xf7), (0xd9, 0x8b, 0xf7), (0xf7, 0x8b, 0xd9), (0xf7, 0x8b, 0xa7),
+    ];
+    TABLE[(hue % 32) as usize]
+}
+
 /// Expand the word containing byte index `col` in a line of text, growing to whitespace/bracket
 /// boundaries on both sides. Returns the substring (may be empty if `col` sits on a boundary).
 fn expand_click_word(line: &str, col: usize) -> &str {
@@ -1396,7 +1419,18 @@ pub fn run(app: App) -> Result<(), Box<dyn std::error::Error>> {
 
 #[cfg(test)]
 mod tests {
-    use super::expand_click_word;
+    use super::{expand_click_word, host_color};
+
+    /// Every host gets a stable, in-table color; the same host never changes across calls, and two
+    /// different hosts can share a color (fine) but the mapping is deterministic.
+    #[test]
+    fn host_color_is_deterministic() {
+        let a = host_color("build-host");
+        assert_eq!(a, host_color("build-host"));
+        let b = host_color("10.0.0.4");
+        assert_eq!(b, host_color("10.0.0.4"));
+        assert_ne!(a, (0, 0, 0), "colors must be visible on black");
+    }
 
     /// Cmd+click word expansion picks the whole token, not the shell quoting around it.
     #[test]
