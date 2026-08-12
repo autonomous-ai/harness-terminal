@@ -69,6 +69,11 @@ struct Application {
     copy_pos: (i32, usize),
     /// Copy-mode anchor: where the block selection started (Some while selecting), in grid coords.
     copy_anchor: Option<(i32, usize)>,
+    /// Live copy-mode search query (the `/` prompt). While non-empty, `n`/`N` move cursor between
+    /// matches of this text; Enter/`g` jump the cursor to the next match then drop back to nav.
+    copy_query: String,
+    /// Whether the copy-mode `/` prompt is currently active (accepting typing).
+    copy_searching: bool,
     /// Mouse state: the cell anchor where a drag-selection started (Some while left button held).
     /// With winit 0.30 we track presses/releases ourselves; dragging updates the selection end.
     mouse_anchor: Option<Point>,
@@ -117,6 +122,8 @@ impl Application {
             copy_mode: false,
             copy_pos: (0, 0),
             copy_anchor: None,
+            copy_query: String::new(),
+            copy_searching: false,
             mouse_anchor: None,
             cursor: (0.0, 0.0),
             last_press: None,
@@ -413,7 +420,13 @@ impl Application {
         // for navigation, with the current motion hints.
         if self.copy_mode {
             let selecting = if self.copy_anchor.is_some() { "[selecting]" } else { "[v=select]" };
-            let msg = format!(" COPY MODE · h/j/k/l/w/b move {} · Enter copy · Esc quit ", selecting);
+            let msg = if self.copy_searching {
+                format!(" COPY SEARCH /{} · Enter jump · Esc cancel ", self.copy_query)
+            } else if !self.copy_query.is_empty() {
+                format!(" COPY MODE · h/j/k/l/w/b move {} · n/N search /{} · Enter copy · / search · Esc quit ", selecting, self.copy_query)
+            } else {
+                format!(" COPY MODE · h/j/k/l/w/b move {} · / search · Enter copy · Esc quit ", selecting)
+            };
             let cw = draw_text(fb, &mut self.cache, &msg, 6, status_base, self.font_px, (0x00, 0x00, 0x00));
             // Clear the region background to green behind the message for contrast.
             let green = argb(255, 0x18, 0xe0, 0x8a);
@@ -605,6 +618,8 @@ impl Application {
         let top = g.grid().display_offset();
         self.copy_pos = ((top as i32 * -1), 0);
         self.copy_anchor = None;
+        self.copy_query.clear();
+        self.copy_searching = false;
         self.copy_mode = true;
         self.scrolled = true;
     }
@@ -634,6 +649,8 @@ impl Application {
         g.selection = None;
         self.copy_mode = false;
         self.copy_anchor = None;
+        self.copy_query.clear();
+        self.copy_searching = false;
         if !text.is_empty() {
             drop(g);
             if let Ok(mut cb) = arboard::Clipboard::new() {
@@ -654,6 +671,45 @@ impl Application {
         let l = (l + dl).clamp(min_line, max_line);
         let c = (c as i32 + dc).clamp(0, cols - 1) as usize;
         self.copy_pos = (l, c);
+    }
+
+    /// Jump the copy-mode read cursor to the next match of `copy_query` at-or-after (or, for
+    /// `backwards`, at-or-before) the current position, wrapping around the scrollback. Sets the
+    /// cursor to the match's start column so the user can Inspect/select from it. Returns whether a
+    /// match was found.
+    fn copy_goto(&mut self, backwards: bool) {
+        let Some(active) = self.app.active_session() else { return };
+        if self.copy_query.is_empty() {
+            return;
+        }
+        let query = self.copy_query.clone();
+        let (cur_line, _) = self.copy_pos;
+        // Start the scan just past the cursor (forwards) or just before it (backwards) so `n`/`N`
+        // walk distinct matches rather than re-selecting the current one.
+        let search_start = if backwards { cur_line - 1 } else { cur_line + 1 };
+        let g = active.term.lock();
+        let full = crate::render::all_matches(&g, &query);
+        drop(g);
+        if full.is_empty() {
+            self.copy_pos = (cur_line, 0);
+            return;
+        }
+        // Pick the nearest match at/after `search_start` (forwards) or at/before it (backwards),
+        // wrapping to the other end of the scrollback when there's no further hit on that side.
+        let chosen = if backwards {
+            full.iter()
+                .filter(|m| m.0 <= search_start)
+                .max_by_key(|m| m.0)
+                .or_else(|| full.iter().max_by_key(|m| m.0))
+        } else {
+            full.iter()
+                .filter(|m| m.0 >= search_start)
+                .min_by_key(|m| m.0)
+                .or_else(|| full.iter().min_by_key(|m| m.0))
+        };
+        if let Some((l, c, _)) = chosen.copied() {
+            self.copy_pos = (l, c);
+        }
     }
 
     /// Render the search overlay: query prompt + current match location in the status area.
@@ -694,8 +750,42 @@ impl Application {
     /// Handle a key while in copy mode: vim-style motion keys move the read cursor; `v` starts
     /// (or re-anchors) a selection; Enter/Space copies and exits; Esc/Q exits; g/G go to top/bottom.
     fn handle_copy_key(&mut self, key: &Key, _mods: &ModifiersState) {
+        // While the search prompt is open, typing builds `copy_query` (live); Enter jumps to the
+        // next match and exits the prompt; Esc/Backspace-empty dismisses it back to nav.
+        if self.copy_searching {
+            match key {
+                Key::Character(c) if c == "/" => { /* ignore a second slash */ }
+                Key::Character(c) => {
+                    self.copy_query.push_str(c);
+                    return;
+                }
+                Key::Named(n) => {
+                    match n {
+                        winit::keyboard::NamedKey::Backspace => {
+                            self.copy_query.pop();
+                            return;
+                        }
+                        winit::keyboard::NamedKey::Enter => {
+                            self.copy_searching = false;
+                            self.copy_goto(false);
+                            return;
+                        }
+                        winit::keyboard::NamedKey::Escape => {
+                            self.copy_query.clear();
+                            self.copy_searching = false;
+                            return;
+                        }
+                        _ => return,
+                    }
+                }
+                _ => return,
+            }
+        }
         match key {
             Key::Character(c) => match c.as_str() {
+                "/" => { self.copy_query.clear(); self.copy_searching = true; }
+                "n" => { if !self.copy_query.is_empty() { self.copy_goto(false); } }
+                "N" => { if !self.copy_query.is_empty() { self.copy_goto(true); } }
                 // vim motions
                 "h" | "j" | "k" | "l" | "w" | "b" => {
                     let (dl, dc) = match c.as_str() {
@@ -723,7 +813,7 @@ impl Application {
                     let g = active.term.lock();
                     self.copy_pos = (g.grid().bottommost_line().0, 0);
                 }
-                "q" => { self.copy_mode = false; self.copy_anchor = None; }
+                "q" => { self.copy_mode = false; self.copy_anchor = None; self.copy_query.clear(); self.copy_searching = false; }
                 _ => {}
             },
             Key::Named(n) => match n {
@@ -735,7 +825,7 @@ impl Application {
                 winit::keyboard::NamedKey::ArrowRight => self.copy_move(0, 1),
                 winit::keyboard::NamedKey::PageUp => self.copy_move(-20, 0),
                 winit::keyboard::NamedKey::PageDown => self.copy_move(20, 0),
-                winit::keyboard::NamedKey::Escape => { self.copy_mode = false; self.copy_anchor = None; }
+                winit::keyboard::NamedKey::Escape => { self.copy_mode = false; self.copy_anchor = None; self.copy_query.clear(); self.copy_searching = false; }
                 _ => {}
             },
             _ => {}
