@@ -66,6 +66,7 @@ enum PaletteAction {
     Pin,
     NextPinned,
     NextDown,
+    NextHost,
     Reconnect,
     Destroy,
     Interrupt,
@@ -97,6 +98,7 @@ impl PaletteAction {
             ("pin/unpin active tab (protect from close)", Pin),
             ("jump to next pinned tab", NextPinned),
             ("jump to next down/reconnecting tab", NextDown),
+            ("jump to next host (page fleet by machine)", NextHost),
             ("force reconnect active tab (bypass backoff)", Reconnect),
             ("kill active tab's pane (destroy remote session)", Destroy),
             ("send Ctrl-C to active tab (stop the run)", Interrupt),
@@ -926,6 +928,20 @@ impl Application {
                 self.set_active(i);
                 return;
             }
+        }
+    }
+
+    /// `prefix+H`: jump to the next unique host in the fleet, wrapping. For a fleet spread across
+    /// machines this pages by machine instead of by tab — a three-host farm becomes three stops
+    /// rather than a trip through every pane. It lands on the first tab of the next distinct host
+    /// after the active one; ties in the linear tab order are resolved by cycling order. No-op when
+    /// every tab is on one host (or there are no tabs).
+    fn next_host(&mut self) {
+        let hosts: Vec<&str> = self.app.tabs.iter().map(|s| s.meta.host.as_str()).collect();
+        if let Some(i) = next_host_index(&hosts, self.app.active) {
+            let target = self.app.tabs[i].meta.host.clone();
+            self.flash = Some((format!("host {target}"), std::time::Instant::now()));
+            self.set_active(i);
         }
     }
 
@@ -2002,6 +2018,7 @@ impl Application {
             ("next_quiet", "jump to next quiet (awaiting-you) tab"),
             ("next_down", "jump to next down/reconnecting tab"),
             ("next_pinned", "jump to next pinned tab"),
+            ("next_host", "jump to next host (page the fleet by machine)"),
             ("reconnect", "force reconnect active tab (bypass backoff)"),
             ("destroy", "kill active tab's remote pane"),
             ("interrupt", "send Ctrl-C to active tab (stop the run)"),
@@ -2886,6 +2903,7 @@ impl Application {
             Pin => self.toggle_pin_active(),
             NextPinned => self.next_pinned(),
             NextDown => self.next_down(),
+            NextHost => self.next_host(),
             Reconnect => self.reconnect_active(),
             Destroy => self.destroy_active(),
             Interrupt => self.interrupt_active(),
@@ -3191,6 +3209,7 @@ impl Application {
                 Some("next_busy") => self.next_busy(),
                 Some("next_quiet") => self.next_quiet(),
                 Some("next_down") => self.next_down(),
+                Some("next_host") => self.next_host(),
                 Some("mute") => self.toggle_mute_active(),
                 Some("interrupt") => self.interrupt_active(),
                 Some("pin") => self.toggle_pin_active(),
@@ -4744,11 +4763,43 @@ pub fn run(app: App) -> Result<(), Box<dyn std::error::Error>> {
     Ok(())
 }
 
+/// The tab `prefix+H` should land on given each tab's host (in tab order): the first tab of the
+/// next distinct host after `active`, in host-first-occurrence order, wrapping around. Returns None
+/// when `hosts` is empty or has only one distinct host (nothing to page by). Pure so it can be
+/// unit-tested without building a window or PTYs.
+fn next_host_index(hosts: &[&str], active: usize) -> Option<usize> {
+    if hosts.is_empty() {
+        return None;
+    }
+    // Distinct hosts in tab order (a monotonic scan keeps the first tab per host).
+    let mut uniq: Vec<&str> = Vec::new();
+    for h in hosts {
+        if !uniq.contains(h) {
+            uniq.push(h);
+        }
+    }
+    if uniq.len() < 2 {
+        return None;
+    }
+    let cur = *hosts.get(active)?;
+    let cur_idx = uniq.iter().position(|h| *h == cur).unwrap_or(0);
+    let target = uniq[(cur_idx + 1) % uniq.len()];
+    // First tab of `target` AFTER `active`, else (wrap) the first tab of `target` overall.
+    hosts
+        .iter()
+        .enumerate()
+        .skip(active + 1)
+        .find(|&(_, h)| *h == target)
+        .map(|(i, _)| i)
+        .or_else(|| hosts.iter().position(|h| *h == target))
+}
+
 #[cfg(test)]
 mod tests {
     use super::{
         argb_to_rgb, broadcast_bytes, collect_fleet_matches, engine_accent, expand_click_word,
-        fmt_duration, group_notifications, host_color, join_labels, recall_index, FleetMatch,
+        fmt_duration, group_notifications, host_color, join_labels, next_host_index, recall_index,
+        FleetMatch,
     };
 
     use std::sync::Arc;
@@ -4987,5 +5038,40 @@ mod tests {
         assert_eq!(fmt_duration(d(3600)), "1h");
         assert_eq!(fmt_duration(d(23 * 3600)), "23h");
         assert_eq!(fmt_duration(d(24 * 3600)), "1d");
+    }
+
+    /// `prefix+H` pages by host: from a three-host fleet it steps to the first tab of the next
+    /// distinct host (in first-occurrence order), not the adjacent pane.
+    #[test]
+    fn next_host_pages_by_distinct_host_in_first_occurrence_order() {
+        // Tab order: a0 a1 (host-a), b0 (host-b), c0 c1 (host-c).
+        let hosts = ["host-a", "host-a", "host-b", "host-c", "host-c"];
+        // Active on host-a -> next host in first-occurrence order is host-b, first tab = index 2.
+        assert_eq!(next_host_index(&hosts, 0), Some(2));
+        // Active on index 1 (still host-a) -> same next host.
+        assert_eq!(next_host_index(&hosts, 1), Some(2));
+        // Active on host-b -> next is host-c, first tab = index 3.
+        assert_eq!(next_host_index(&hosts, 2), Some(3));
+    }
+
+    #[test]
+    fn next_host_wraps_to_first_distinct_host() {
+        let hosts = ["host-a", "host-b", "host-c"];
+        // Active on the LAST distinct host (host-c) -> wrap to the first host, its first tab.
+        assert_eq!(next_host_index(&hosts, 2), Some(0));
+    }
+
+    #[test]
+    fn next_host_from_later_tab_still_picks_next_not_adjacent() {
+        let hosts = ["host-a", "host-b", "host-b", "host-c"];
+        // Active on host-b's second tab (index 2) -> next distinct host is host-c (index 3),
+        // NOT host-b's adjacent behavior blocking on same-host tabs.
+        assert_eq!(next_host_index(&hosts, 2), Some(3));
+    }
+
+    #[test]
+    fn next_host_is_none_for_single_or_empty_fleet() {
+        assert_eq!(next_host_index(&[], 0), None);
+        assert_eq!(next_host_index(&["only-host", "only-host"], 0), None);
     }
 }

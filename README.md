@@ -67,6 +67,7 @@ The prefix is `Ctrl+Space` (tmux-style), then a command:
 | `Ctrl+Space` `?` | help (full keybinding reference) |
 | `Ctrl+Space` `o` | jump to the next busy (produced-output) tab |
 | `Ctrl+Space` `z` | jump to the next quiet (done/awaiting-input) tab |
+| `Ctrl+Space` `H` | jump to the next host (page the fleet by machine) |
 | `Ctrl+Space` `Q` | jump to the next down/reconnecting tab |
 | `Ctrl+Space` `l` | flip back to the previous tab |
 | `Ctrl+Space` `i` | show the active tab's info (kind, host, task, size, state) |
@@ -150,7 +151,7 @@ mute = "v"          # prefix+v toggles mute
 ```
 
 Action names: `palette`, `new_session`, `remote_attach`, `local_shell`, `quit`, `fleet`,
-`goto_tab0`, `next_busy`, `next_quiet`, `next_down`, `mute`, `last_window`, `paste`, `broadcast`, `close_tab`,
+`goto_tab0`, `next_busy`, `next_quiet`, `next_down`, `next_host`, `mute`, `last_window`, `paste`, `broadcast`, `close_tab`,
 `copy_scrollback`, `export_scrollback`, `copy_identity`, `copy_fleet`, `peek`, `fleet_grid`, `undo_close`, `duplicate`, `page_up`, `scroll_bottom`,
 `search`, `search_all`, `move_left`, `move_right`, `copy_mode`, `help`, `command_palette`,
 `rename`, `session_info`, `toggle_focus`, `pin`, `next_pinned`, `reconnect`, `destroy`, `interrupt`. The digit keys `1-9` / `0` (tab switching) and `Tab`

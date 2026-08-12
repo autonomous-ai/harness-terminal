@@ -14,6 +14,9 @@ entries record user-visible and architectural changes since the last tagged mile
   in tiled panes that update each frame, so a diver sees what all agents are doing at once instead
   of hopping tab to tab. Up/Down/1-9 focus a tile, Enter dives into it; per-tile `@host` headers
   and the active tile's white border keep orientation. Also reachable from the command palette.
+- **Next-host jump (`prefix+H`)** — page the fleet by machine: jump to the first tab of the next
+  distinct host after the active one, wrapping, instead of stepping through every pane. For a fleet
+  spread across several boxes this turns N panes into N hosts of stops. Also in the command palette.
 - **Quiet ("awaiting-you") signal** — tracks when each tab last produced output and counts a live,
   backgrounded, unprotected tab sitting silent past a threshold as quiet (likely done / parked
   waiting on your input). Shown as a `⌛N` fleet-triage count and a `prefix+z` jump to the next
