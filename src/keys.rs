@@ -37,6 +37,7 @@ pub const ACTIONS: &[(&str, &str)] = &[
     ("command_palette", ";"),
     ("rename", ","),
     ("session_info", "i"),
+    ("toggle_focus", "v"),
 ];
 
 /// The built-in full keybinding table. `(action, key)` in ACTIONS order.

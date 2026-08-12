@@ -59,6 +59,7 @@ The prefix is `Ctrl+Space` (tmux-style), then a command:
 | `Ctrl+Space` `o` | jump to the next busy (produced-output) tab |
 | `Ctrl+Space` `l` | flip back to the previous tab |
 | `Ctrl+Space` `i` | show the active tab's info (kind, host, task, size, state) |
+| `Ctrl+Space` `v` | focus mode: hide the tab bar + status line (distraction-free) |
 | `1-9` / `0` / `Tab` | switch tab (`0` = last) |
 | `Ctrl+Space` `{` / `}` | move the active tab left / right |
 | `x` / `c` | close tab / jump to tab 0 |
@@ -129,4 +130,5 @@ Action names: `palette`, `new_session`, `remote_attach`, `local_shell`, `quit`, 
 `goto_tab0`, `next_busy`, `mute`, `last_window`, `paste`, `broadcast`, `close_tab`,
 `copy_scrollback`, `export_scrollback`, `peek`, `undo_close`, `page_up`, `scroll_bottom`,
 `search`, `search_all`, `move_left`, `move_right`, `copy_mode`, `help`, `command_palette`,
-`rename`, `session_info`. The digit keys `1-9` / `0` (tab switching) and `Tab` are not remappable.
+`rename`, `session_info`, `toggle_focus`. The digit keys `1-9` / `0` (tab switching) and `Tab`
+are not remappable.

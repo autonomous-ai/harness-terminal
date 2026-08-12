@@ -56,6 +56,7 @@ enum PaletteAction {
     Peek,
     UndoClose,
     SessionInfo,
+    ToggleFocus,
     Help,
     Quit,
 }
@@ -76,6 +77,7 @@ impl PaletteAction {
             ("peek at all session tails", Peek),
             ("undo close (reopen last)", UndoClose),
             ("show session info (kind/host/task)", SessionInfo),
+            ("toggle focus mode (hide tab bar + status)", ToggleFocus),
             ("show this help", Help),
             ("quit", Quit),
         ]
@@ -199,6 +201,9 @@ struct Application {
     /// quiet. Reset when the tab is focused (looked at) or stops growing, so each silent→busy
     /// transition nudges the user exactly once.
     notified: Vec<bool>,
+    /// Focus mode (prefix+v): hide the tab bar + status line so the grid gets the whole window.
+    /// A distraction-free dive into one session. Toggle again to bring the chrome back.
+    focus: bool,
 }
 
 impl Application {
@@ -284,6 +289,7 @@ impl Application {
             palette_sel: 0,
             quit_requested: false,
             key_action,
+            focus: false,
         }
     }
 
@@ -520,6 +526,16 @@ impl Application {
         }
     }
 
+    /// `prefix+v`: toggle focus mode — hide the tab bar + status line so the grid fills the whole
+    /// window for a distraction-free dive. The resize runs `redraw` which re-sizes the session to the
+    /// now-larger grid. Toggle again to bring the chrome back.
+    fn toggle_focus(&mut self) {
+        self.focus = !self.focus;
+        let state = if self.focus { "focus" } else { "chrome" };
+        self.flash = Some((state.to_string(), std::time::Instant::now()));
+        self.redraw();
+    }
+
     fn redraw(&mut self) {
         let (Some(w), Some(h)) = (
             NonZeroU32::new(self.size.width),
@@ -567,7 +583,9 @@ impl Application {
 
     /// Render the whole frame into the framebuffer.
     fn render(&mut self, fb: &mut Framebuffer) {
-        let (tab_h, status_h) = (self.cell_h as usize, self.cell_h as usize);
+        // In focus mode both bars collapse to zero so the grid fills the window edge to edge.
+        let bar_h = if self.focus { 0 } else { self.cell_h as usize };
+        let (tab_h, status_h) = (bar_h, bar_h);
         let term_top = tab_h;
         let term_bottom = fb.height.saturating_sub(status_h);
         let gline_px = self.cell_h as usize;
@@ -641,173 +659,183 @@ impl Application {
         }
 
         // Tab bar (top row). Flag backgrounded tabs that produced output since we last looked.
-        let activity = self.activity_flags();
-        let tab_base = self.cell_h as usize / 2;
-        let mut x = 6usize;
-        for (i, s) in self.app.tabs.iter().enumerate() {
-            let active = i == self.app.active;
-            // Color the active tab's dot by its host so a fleet diver reads 'which machine' at a
-            // glance; matches the host hue used across tabs and it's stable across restarts.
-            let dot = if active { "●" } else { "○" };
-            // Show the pane's live OSC title (what the agent is doing) when it has announced one.
-            let live = s.live_title().unwrap_or_else(|| s.meta.title.clone());
-            let mut live = live.replace('\n', " ");
-            if live.chars().count() > 18 {
-                live = live.chars().take(18).collect::<String>() + "…";
-            }
-            // A magnitude badge shows how much a backgrounded tab produced since we last looked
-            // (rooted at 1 so one line displays as "!1", capped so it doesn't eat the bar); a muted
-            // tab is dimmed and shows M instead so its silence is read at a glance.
-            let delta = self.grew_delta.get(i).copied().unwrap_or(0);
-            let flag = if activity[i] {
-                format!("!{}", delta.min(999))
-            } else {
-                String::new()
-            };
-            let mute = if self.muted.get(i).copied().unwrap_or(false) {
-                " M "
-            } else {
-                " "
-            };
-            // Show the user's rename if set; otherwise the plain engine id.
-            let head = s.meta.name.clone().unwrap_or_else(|| s.meta.engine.clone());
-            let label = format!(" {}{} {} {}{} ", flag, head, live, mute, dot);
-            // Active tab: tinted by a stable hash of its host (dive context). Inactive tabs fall back
-            // to the engine's own accent color so you can spot the "claude" tab from across the bar.
-            let color = if active {
-                host_color(&s.meta.host)
-            } else {
-                engine_accent(&s.meta.engine)
-            };
-            x += draw_text(
-                fb,
-                &mut self.cache,
-                &label,
-                x,
-                tab_base,
-                self.font_px,
-                color,
-            ) + 12;
-            if x > fb.width.saturating_sub(20) {
-                break;
-            }
-        }
-
-        // Status line (bottom row): left = session info, right = hints.
-        let status_base = fb.height.saturating_sub(self.cell_h as usize / 2);
-        let mut info = String::new();
-        if let Some(s) = self.app.active_session() {
-            let link = if s.alive() {
-                "●".to_string()
-            } else {
-                // Show the live retry state (attempts + backoff seconds) so a dropped tunnel is
-                // visibly healing itself rather than silently sitting on a dead pane.
-                format!(
-                    "○ {}",
-                    s.retry_info()
-                        .unwrap_or_else(|| "reconnecting…".to_string())
-                )
-            };
-            let live = s.live_title().unwrap_or_else(|| s.meta.title.clone());
-            let head = s.meta.name.clone().unwrap_or_else(|| s.meta.engine.clone());
-            info = format!(
-                " {} · {} · {} · [{} {}]",
-                s.meta.host,
-                head,
-                live,
-                s.kind(),
-                link
-            );
-            // Show how many scrollback lines this session has accumulated, so a diver monitoring a
-            // long agent run sees growth at a glance without entering the tab.
-            info += &format!(" · {} ln", s.history_len());
-        }
-        // Link-health badge for the whole fleet (refreshed on the throttled reconnect sweep): a
-        // diver wants to know the e2ee tunnel to the harness daemon is up without opening the panel.
-        let tunnel = if self.app.fleet.connected {
-            "● tunnel up"
+        if self.focus {
+            // Focus mode: no tab bar — the grid owns the full height.
         } else {
-            "○ tunnel down"
-        };
-        info = format!("  {} · {}", tunnel, info);
-        // When the viewport is scrolled back from the live bottom, say so — a dead giveaway that
-        // keys won't take you to fresh output until you press Escape (or the b key). Also show how
-        // far back we are as a percentage so a long agent log stays navigable.
-        let scrolled_now = self
-            .app
-            .active_session()
-            .map(|s| s.scrolled())
-            .unwrap_or(false);
-        if scrolled_now {
-            let pct = self
-                .app
-                .active_session()
-                .and_then(|s| {
-                    let g = s.term.lock();
-                    let hist = g.grid().history_size();
-                    if hist == 0 {
-                        None
-                    } else {
-                        let above = g.grid().display_offset().min(hist);
-                        Some(((hist - above) * 100 / hist).min(100))
-                    }
-                })
-                .unwrap_or(0);
-            // A fully-scrolled-back log reads 100% (at the very top), which can look like 'live'; keep
-            // it below 100 so '100% = at the top' stays unambiguous vs the live-bottom position.
-            let pct = pct.min(99);
-            info += &format!("  ▾ {pct}% (Esc/b to bottom)");
-        }
-        // A transient confirmation toast (e.g. "wrote 12k bytes → /path") overrides the session
-        // info for a couple seconds so an export's destination is readable before it fades.
-        if let Some((text, at)) = &self.flash {
-            if at.elapsed() < std::time::Duration::from_secs(3) {
-                info = format!("  ⚑ {text}");
-            } else {
-                self.flash = None;
-            }
-        }
-        draw_text(
-            fb,
-            &mut self.cache,
-            &info,
-            6,
-            status_base,
-            self.font_px,
-            CHROME_FG,
-        );
-        let hints = " prefix+/ palette  prefix+a broadcast  prefix+h search all  prefix+n new  prefix+r remote  prefix+s fleet  prefix+o busy  prefix+[ copy  prefix+p paste  prefix+l last  prefix+? help  prefix+q quit ";
-        let hw = draw_text(
-            fb,
-            &mut self.cache,
-            hints,
-            6,
-            status_base,
-            self.font_px,
-            CHROME_DIM,
-        );
-        // Move the hint to the right edge by re-drawing after clearing a wide column is complex;
-        // simplest right-align: draw hints over the info end offset. We draw at the right edge:
-        let hx = fb.width.saturating_sub(hw + 6);
-        // Overwrite: clear the column first via black, then draw.
-        for py in
-            status_base.saturating_sub(self.font_px as usize)..(status_base + self.font_px as usize)
-        {
-            for px in hx.min(fb.width)..fb.width {
-                if py < fb.height {
-                    fb.pixels[py * fb.width + px] = 0;
+            let activity = self.activity_flags();
+            let tab_base = self.cell_h as usize / 2;
+            let mut x = 6usize;
+            for (i, s) in self.app.tabs.iter().enumerate() {
+                let active = i == self.app.active;
+                // Color the active tab's dot by its host so a fleet diver reads 'which machine' at a
+                // glance; matches the host hue used across tabs and it's stable across restarts.
+                let dot = if active { "●" } else { "○" };
+                // Show the pane's live OSC title (what the agent is doing) when it has announced one.
+                let live = s.live_title().unwrap_or_else(|| s.meta.title.clone());
+                let mut live = live.replace('\n', " ");
+                if live.chars().count() > 18 {
+                    live = live.chars().take(18).collect::<String>() + "…";
+                }
+                // A magnitude badge shows how much a backgrounded tab produced since we last looked
+                // (rooted at 1 so one line displays as "!1", capped so it doesn't eat the bar); a muted
+                // tab is dimmed and shows M instead so its silence is read at a glance.
+                let delta = self.grew_delta.get(i).copied().unwrap_or(0);
+                let flag = if activity[i] {
+                    format!("!{}", delta.min(999))
+                } else {
+                    String::new()
+                };
+                let mute = if self.muted.get(i).copied().unwrap_or(false) {
+                    " M "
+                } else {
+                    " "
+                };
+                // Show the user's rename if set; otherwise the plain engine id.
+                let head = s.meta.name.clone().unwrap_or_else(|| s.meta.engine.clone());
+                let label = format!(" {}{} {} {}{} ", flag, head, live, mute, dot);
+                // Active tab: tinted by a stable hash of its host (dive context). Inactive tabs fall back
+                // to the engine's own accent color so you can spot the "claude" tab from across the bar.
+                let color = if active {
+                    host_color(&s.meta.host)
+                } else {
+                    engine_accent(&s.meta.engine)
+                };
+                x += draw_text(
+                    fb,
+                    &mut self.cache,
+                    &label,
+                    x,
+                    tab_base,
+                    self.font_px,
+                    color,
+                ) + 12;
+                if x > fb.width.saturating_sub(20) {
+                    break;
                 }
             }
-        }
-        draw_text(
-            fb,
-            &mut self.cache,
-            hints,
-            hx,
-            status_base,
-            self.font_px,
-            CHROME_DIM,
-        );
+        } // end if self.focus (tab bar)
+
+        // Status line (bottom row): left = session info, right = hints.
+        // `status_base` lives here (not inside the else) because the copy-mode banner below also
+        // anchors to it and must keep rendering in focus mode.
+        let status_base = fb.height.saturating_sub(self.cell_h as usize / 2);
+        if self.focus {
+            // Focus mode: no status line either — just the grid.
+        } else {
+            let mut info = String::new();
+            if let Some(s) = self.app.active_session() {
+                let link = if s.alive() {
+                    "●".to_string()
+                } else {
+                    // Show the live retry state (attempts + backoff seconds) so a dropped tunnel is
+                    // visibly healing itself rather than silently sitting on a dead pane.
+                    format!(
+                        "○ {}",
+                        s.retry_info()
+                            .unwrap_or_else(|| "reconnecting…".to_string())
+                    )
+                };
+                let live = s.live_title().unwrap_or_else(|| s.meta.title.clone());
+                let head = s.meta.name.clone().unwrap_or_else(|| s.meta.engine.clone());
+                info = format!(
+                    " {} · {} · {} · [{} {}]",
+                    s.meta.host,
+                    head,
+                    live,
+                    s.kind(),
+                    link
+                );
+                // Show how many scrollback lines this session has accumulated, so a diver monitoring a
+                // long agent run sees growth at a glance without entering the tab.
+                info += &format!(" · {} ln", s.history_len());
+            }
+            // Link-health badge for the whole fleet (refreshed on the throttled reconnect sweep): a
+            // diver wants to know the e2ee tunnel to the harness daemon is up without opening the panel.
+            let tunnel = if self.app.fleet.connected {
+                "● tunnel up"
+            } else {
+                "○ tunnel down"
+            };
+            info = format!("  {} · {}", tunnel, info);
+            // When the viewport is scrolled back from the live bottom, say so — a dead giveaway that
+            // keys won't take you to fresh output until you press Escape (or the b key). Also show how
+            // far back we are as a percentage so a long agent log stays navigable.
+            let scrolled_now = self
+                .app
+                .active_session()
+                .map(|s| s.scrolled())
+                .unwrap_or(false);
+            if scrolled_now {
+                let pct = self
+                    .app
+                    .active_session()
+                    .and_then(|s| {
+                        let g = s.term.lock();
+                        let hist = g.grid().history_size();
+                        if hist == 0 {
+                            None
+                        } else {
+                            let above = g.grid().display_offset().min(hist);
+                            Some(((hist - above) * 100 / hist).min(100))
+                        }
+                    })
+                    .unwrap_or(0);
+                // A fully-scrolled-back log reads 100% (at the very top), which can look like 'live'; keep
+                // it below 100 so '100% = at the top' stays unambiguous vs the live-bottom position.
+                let pct = pct.min(99);
+                info += &format!("  ▾ {pct}% (Esc/b to bottom)");
+            }
+            // A transient confirmation toast (e.g. "wrote 12k bytes → /path") overrides the session
+            // info for a couple seconds so an export's destination is readable before it fades.
+            if let Some((text, at)) = &self.flash {
+                if at.elapsed() < std::time::Duration::from_secs(3) {
+                    info = format!("  ⚑ {text}");
+                } else {
+                    self.flash = None;
+                }
+            }
+            draw_text(
+                fb,
+                &mut self.cache,
+                &info,
+                6,
+                status_base,
+                self.font_px,
+                CHROME_FG,
+            );
+            let hints = " prefix+/ palette  prefix+a broadcast  prefix+h search all  prefix+n new  prefix+r remote  prefix+s fleet  prefix+o busy  prefix+[ copy  prefix+p paste  prefix+l last  prefix+? help  prefix+q quit ";
+            let hw = draw_text(
+                fb,
+                &mut self.cache,
+                hints,
+                6,
+                status_base,
+                self.font_px,
+                CHROME_DIM,
+            );
+            // Move the hint to the right edge by re-drawing after clearing a wide column is complex;
+            // simplest right-align: draw hints over the info end offset. We draw at the right edge:
+            let hx = fb.width.saturating_sub(hw + 6);
+            // Overwrite: clear the column first via black, then draw.
+            for py in status_base.saturating_sub(self.font_px as usize)
+                ..(status_base + self.font_px as usize)
+            {
+                for px in hx.min(fb.width)..fb.width {
+                    if py < fb.height {
+                        fb.pixels[py * fb.width + px] = 0;
+                    }
+                }
+            }
+            draw_text(
+                fb,
+                &mut self.cache,
+                hints,
+                hx,
+                status_base,
+                self.font_px,
+                CHROME_DIM,
+            );
+        } // end if self.focus (status line)
 
         // Copy mode banner: a prominent green status bar so the user knows keystrokes are captured
         // for navigation, with the current motion hints.
@@ -1217,6 +1245,7 @@ impl Application {
             ("export_scrollback", "write scrollback to a .log file"),
             ("peek", "peek tails of all sessions"),
             ("session_info", "show this tab's info (kind/host/task)"),
+            ("toggle_focus", "focus mode (hide tab bar + status)"),
             ("help", "this help"),
             ("quit", "quit"),
         ] {
@@ -1873,6 +1902,7 @@ impl Application {
             SessionInfo => {
                 self.app.overlay = Overlay::Info;
             }
+            ToggleFocus => self.toggle_focus(),
             Help => {
                 self.app.overlay = Overlay::Help;
             }
@@ -2211,6 +2241,7 @@ impl Application {
                 Some("session_info") => {
                     self.app.overlay = Overlay::Info;
                 }
+                Some("toggle_focus") => self.toggle_focus(),
                 Some("rename") => {
                     // Rename the active tab. Pre-fill with the current custom name (if any) so
                     // editing doesn't start from scratch.
