@@ -58,6 +58,8 @@ The prefix is `Ctrl+Space` (tmux-style), then a command:
 | `Cmd`/`Ctrl`+click | open the URL / file path under the cursor |
 | `Alt`+click | move the shell cursor (click-to-move) |
 | `Cmd+C` | copy selection |
+| `Ctrl+Space` `p` | paste clipboard (bracketed) |
+| `Ctrl+Space` `l` | flip to the previous tab |
 
 Backgrounded tabs that keep producing output are flagged with a `!` in the tab bar.
 

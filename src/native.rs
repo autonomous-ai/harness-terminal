@@ -189,6 +189,19 @@ impl Application {
         }
     }
 
+    /// `prefix+p`: paste the system clipboard into the active session via the bracketed-paste
+    /// sequence. Works uniformly for local and remote/tunnel sessions, so it's the reliable paste
+    /// when Ctrl+V is taken by a window manager.
+    fn paste_clipboard(&mut self) {
+        let Some(s) = self.app.active_session() else { return };
+        if let Ok(mut cb) = arboard::Clipboard::new() {
+            if let Ok(text) = cb.get_text() {
+                let seq = format!("\x1b[200~{}\x1b[201~", text);
+                s.write(seq.as_bytes());
+            }
+        }
+    }
+
     /// `prefix+o`: jump to the next backgrounded tab that produced output since we last looked,
     /// wrapping around. Makes the activity badge actionable — a key to reach 'the one that just
     /// did something'. If none is flagged, does nothing.
@@ -342,7 +355,7 @@ impl Application {
             info += "  ▾ scrolled (Esc/b to bottom)";
         }
         draw_text(fb, &mut self.cache, &info, 6, status_base, self.font_px, CHROME_FG);
-        let hints = " prefix+/ palette  prefix+n new  prefix+r remote  prefix+s fleet  prefix+o busy  prefix+[ copy  prefix+l last  prefix+? help  prefix+q quit ";
+        let hints = " prefix+/ palette  prefix+n new  prefix+r remote  prefix+s fleet  prefix+o busy  prefix+[ copy  prefix+p paste  prefix+l last  prefix+? help  prefix+q quit ";
         let hw = draw_text(fb, &mut self.cache, hints, 6, status_base, self.font_px, CHROME_DIM);
         // Move the hint to the right edge by re-drawing after clearing a wide column is complex;
         // simplest right-align: draw hints over the info end offset. We draw at the right edge:
@@ -449,7 +462,7 @@ impl Application {
     fn render_help(&mut self, fb: &mut Framebuffer) {
         let (base_y, line_px) = self.overlay_base_y();
         draw_text(fb, &mut self.cache, "  harness-terminal keys  ", 32, base_y, self.font_px, WHITE);
-        let bindings: [(&str, &str); 18] = [
+        let bindings: [(&str, &str); 19] = [
             ("Ctrl+Space", "prefix (then a command)"),
             ("prefix /", "palette: jump to any session"),
             ("prefix n", "new session (engine picker)"),
@@ -459,6 +472,7 @@ impl Application {
             ("prefix [", "copy mode"),
             ("prefix ,", "rename the active tab"),
             ("prefix ?", "this help"),
+            ("prefix p", "paste clipboard (bracketed)"),
             ("1-9 / Tab", "switch tab"),
             ("prefix o", "jump to next busy tab"),
             ("prefix l", "flip to the previous tab"),
@@ -781,6 +795,7 @@ impl Application {
                 "c" => { if !self.app.tabs.is_empty() { self.set_active(0); } }
                 "o" => self.next_busy(),
                 "l" => self.last_window(),
+                "p" => self.paste_clipboard(),
                 "x" => { close_tab(&mut self.app); }
                 "g" => { scroll_active(self, 20); self.scrolled = true; }
                 "b" => self.scroll_to_bottom(),
