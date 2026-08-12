@@ -1547,6 +1547,17 @@ impl Application {
                 color,
             );
         }
+        if let Some(e) = ENGINES.get(self.app.selected) {
+            draw_text(
+                fb,
+                &mut self.cache,
+                &format!("      {} — {}", e.label, e.desc),
+                32,
+                base_y + (ENGINES.len() + 3) * line_px,
+                self.font_px,
+                CHROME_DIM,
+            );
+        }
     }
 
     /// Recompute the focused search match (from the top if none, else continue from it) and scroll
