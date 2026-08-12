@@ -35,3 +35,24 @@ jobs:
 
       - name: test
         run: cargo test --release
+
+  # The app is macOS-first (osascript notifications, `open` for URLs, SF Mono default font), so
+  # verify the primary platform builds/links too. macOS runners have the AppKit/Metal deps winit
+  # needs, so no extra system packages are required.
+  macos:
+    name: build + test (macOS)
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Toolchain
+        run: rustup toolchain install stable --profile minimal --component rustfmt,clippy
+
+      - name: fmt — check
+        run: cargo fmt --check
+
+      - name: build (release)
+        run: cargo build --release
+
+      - name: test
+        run: cargo test --release
