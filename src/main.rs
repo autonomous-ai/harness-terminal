@@ -25,6 +25,30 @@ fn main() -> io::Result<()> {
                 println!("harness-terminal {}", env!("CARGO_PKG_VERSION"));
                 return Ok(());
             }
+            "--help" | "-h" => {
+                print!(
+                    "harness-terminal {v} — terminal-first dive into a fleet of agent sessions\n\
+                     \n\
+                     {indent}Each tab is one agent session (Claude Code, Codex, OpenCode, …) in one tmux\n\
+                     {indent}pane on one host — local, tmux, ssh, or over the harness e2ee tunnel.\n\
+                     \n\
+                     USAGE:\n\
+                     {indent}harness-terminal                 open the native window (default)\n\
+                     {indent}harness-terminal --tui           legacy ratatui fallback (headless/ssh)\n\
+                     \n\
+                     OPTIONS:\n\
+                     {indent}--tui        use the legacy TUI backend instead of the native window\n\
+                     {indent}-v, -V, --version\n\
+                     {indent}             print the version and exit\n\
+                     {indent}-h, --help   print this help and exit\n\
+                     \n\
+                     Config: ~/.config/harness-terminal/config.toml (see config.example.toml in the\n\
+                     {indent}repo for the full option surface, incl. [theme] and [keybindings]).\n",
+                    v = env!("CARGO_PKG_VERSION"),
+                    indent = "  ",
+                );
+                return Ok(());
+            }
             // Unknown flags are ignored rather than fatal — matches the config file's "broken input
             // degrades, never crashes" philosophy.
             _ => {}
