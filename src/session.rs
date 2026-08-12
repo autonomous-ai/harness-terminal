@@ -474,6 +474,15 @@ impl Session {
         capture_grid_to_string(term.grid())
     }
 
+    /// Capture just the tail of the *visible screen* (the live rows currently on screen, newest
+    /// last) as plain text split into logical lines. Cheap — it never walks history — so it can run
+    /// every frame while a hover preview is showing. Used by the tab-bar hover tooltip to show what
+    /// a session is doing right now without switching to it.
+    pub fn tail(&self, n: usize) -> Vec<String> {
+        let term = self.term.lock();
+        tail_to_string(term.grid(), n)
+    }
+
     /// Replay a previously-captured scrollback (from [`capture_scrollback`]) into a fresh session,
     /// reconstructing wrapping/color/cursor as if the pane had produced those bytes. Call right after
     /// construction, before the transport's live bytes arrive; the reconnect sweep then appends live
@@ -519,6 +528,20 @@ fn capture_grid_to_string(grid: &Grid<alacritty_terminal::term::cell::Cell>) -> 
             out.push('\n');
         }
         line += 1;
+    }
+    out
+}
+
+/// Newest visible screen rows first, up to `n`, as plain logical lines. Never walks history, so it
+/// is cheap enough for a hover preview running while the pane is live. Each row keeps the terminal
+/// width's leading spaces (from a partially-cleared line, say) but drops the grid's right-pad.
+fn tail_to_string(grid: &Grid<alacritty_terminal::term::cell::Cell>, n: usize) -> Vec<String> {
+    let cols = grid.columns();
+    let mut rows = grid.screen_lines() as i64;
+    let mut out = Vec::with_capacity(n);
+    while rows > 0 && out.len() < n {
+        out.push(row_text(grid, rows as i32 - 1, cols));
+        rows -= 1;
     }
     out
 }
@@ -682,6 +705,30 @@ mod tests {
     /// The retry backoff ladder grows exponentially and caps at 60s, so a dead daemon is probed on
     /// a sane schedule (5s, 10s, 20s, 40s, 60s, 60s, …) rather than hammered every sweep tick.
     #[test]
+    /// `tail` returns the newest visible rows first, never walking history, and strips the grid's
+    /// right-padding so the preview reads as plain lines (not a fixed-width block).
+    fn tail_returns_newest_screen_rows_first() {
+        use alacritty_terminal::{grid::Dimensions, vte::ansi::Processor};
+
+        let size = TermSize {
+            lines: 24,
+            cols: 40,
+        };
+        let term = FairMutex::new(Term::new(Config::default(), &size, Listener::default()));
+        // Fill enough rows that some scroll into history, then leave three distinct screen lines.
+        {
+            let mut p: Processor<StdSyncHandler> = Processor::default();
+            for i in 0..30 {
+                p.advance(&mut *term.lock(), format!("row{i}\r\n").as_bytes());
+            }
+            p.advance(&mut *term.lock(), b"last-a\r\n");
+            p.advance(&mut *term.lock(), b"last-b\r\n");
+            p.advance(&mut *term.lock(), b"last-c");
+        }
+        let tail = tail_to_string(term.lock().grid(), 3);
+        assert_eq!(tail, vec!["last-c", "last-b", "last-a"]);
+    }
+
     fn retry_backoff_ladder_caps_at_60() {
         assert_eq!(RetryState::backoff_seconds(0), 5);
         assert_eq!(RetryState::backoff_seconds(1), 10);

@@ -207,6 +207,9 @@ struct Application {
     /// Monotonic instant until which a terminal-bell badge is shown for each tab (index). A bell
     /// (a long agent run finishing) shows a 🔔 badge for a few seconds, then fades on its own.
     bell_until: Vec<Option<std::time::Instant>>,
+    /// The tab index currently under the pointer (for a hover-preview tooltip of its tail), or
+    /// None when the cursor isn't over a tab. Recompute on every CursorMoved against the tab bar.
+    hover_tab: Option<usize>,
 }
 
 impl Application {
@@ -294,6 +297,7 @@ impl Application {
             key_action,
             focus: false,
             bell_until: vec![None; tab_count],
+            hover_tab: None,
         }
     }
 
@@ -943,11 +947,103 @@ impl Application {
             Overlay::Info => self.render_info(fb),
             Overlay::None => {}
         }
+
+        // Tab-bar hover tooltip draws last so it sits on top of everything (its own overlay-less
+        // popover). Only shows in chrome mode (focus mode has no bar to hover).
+        if self.hover_tab.is_some() {
+            self.render_tooltip(fb);
+        }
     }
 
     fn overlay_base_y(&self) -> (usize, usize) {
         let line_px = self.font_px as usize + 6;
         (self.cell_h as usize + 4, line_px)
+    }
+
+    /// Hover tooltip: a small popover under the hovered tab showing that session's live tail, so a
+    /// fleet diver can check what a backgrounded agent is doing without switching out of the current
+    /// tab. Draws last (on top of overlays). Click-through is deliberately not wired — it's purely a
+    /// preview; switching still requires a click or the usual keys, so it never disrupts focus.
+    fn render_tooltip(&mut self, fb: &mut Framebuffer) {
+        let Some(i) = self.hover_tab else {
+            return;
+        };
+        let Some(s) = self.app.tabs.get(i) else {
+            return;
+        };
+        // Roughly the x center of the hovered tab: approximate by the hover cursor clamped to the
+        // bar's width, which lands the popover near the label the pointer is actually over.
+        let hx = (self
+            .cursor
+            .0
+            .clamp(6.0, (self.size.width.max(60) - 40) as f64)) as usize;
+        let base_y = self.cell_h as usize + 8;
+
+        let mut lines: Vec<String> = s.tail(5);
+        // Title / state header so the preview is self-describing.
+        let head = s.meta.name.clone().unwrap_or_else(|| s.meta.engine.clone());
+        let live = s.live_title().unwrap_or_else(|| s.meta.title.clone());
+        let alive = if s.alive() { "● live" } else { "○ down" };
+        lines.insert(0, format!(" {} · {} · {}", head, live, alive));
+        if lines.len() > 1 {
+            lines.push(" (hover → switch? no: click the tab) ".to_string());
+        }
+
+        // Measure the widest line so the panel hugs its content.
+        let mut wmax = 0usize;
+        let colpad = 18;
+        for l in &lines {
+            let mut w = 0usize;
+            for ch in l.chars() {
+                if ch != '\n' {
+                    w += self.cache.glyph(ch, self.font_px, false).0 as usize;
+                }
+            }
+            wmax = wmax.max(w);
+        }
+        let panel_w = wmax + colpad * 2;
+        let row_px = self.font_px as usize + 4;
+        let panel_h = lines.len() * row_px + 14;
+        let px0 = hx.min(fb.width.saturating_sub(panel_w + 8));
+        let py0 = base_y;
+        // Fill the panel background (dim near-black) then a soft border.
+        let bg = argb(255, 0x12, 0x12, 0x16);
+        for py in py0..(py0 + panel_h).min(fb.height) {
+            for px in px0..(px0 + panel_w).min(fb.width) {
+                fb.pixels[py * fb.width + px] = bg;
+            }
+        }
+        let border = argb(255, 0x3a, 0x3a, 0x44);
+        for px in px0..(px0 + panel_w).min(fb.width) {
+            if py0 < fb.height {
+                fb.pixels[py0 * fb.width + px] = border;
+            }
+            if py0 + panel_h - 1 < fb.height {
+                fb.pixels[(py0 + panel_h - 1) * fb.width + px] = border;
+            }
+        }
+        for py in py0..(py0 + panel_h).min(fb.height) {
+            if px0 < fb.width {
+                fb.pixels[py * fb.width + px0] = border;
+            }
+            if px0 + panel_w - 1 < fb.width {
+                fb.pixels[py * fb.width + px0 + panel_w - 1] = border;
+            }
+        }
+        // Draw the header bright, the tail dim.
+        let ty = py0 + 8;
+        for (k, l) in lines.iter().enumerate() {
+            let color = if k == 0 { WHITE } else { CHROME_DIM };
+            draw_text(
+                fb,
+                &mut self.cache,
+                l,
+                px0 + colpad,
+                ty + k * row_px,
+                self.font_px,
+                color,
+            );
+        }
     }
 
     fn render_palette(&mut self, fb: &mut Framebuffer) {
@@ -2954,6 +3050,47 @@ impl Application {
         ))
     }
 
+    /// Which tab the pointer is over in the tab bar (if any). Mirrors the render loop's label x
+    /// positions so the preview tooltip lines up with the painted labels: starts at x=6, each label
+    /// advances by its drawn width + 12, and the bar stops at `width - 20` the same way. Only the
+    /// top chrome row counts (y within the tab bar and below it); focus mode has no bar.
+    fn tab_at(&mut self, x: f64, y: f64) -> Option<usize> {
+        if self.focus {
+            return None;
+        }
+        // The tab bar occupies the first cell row, vertically centered in it.
+        if y < 0.0 || y >= self.cell_h as f64 || x < 6.0 {
+            return None;
+        }
+        let mut cx = 6i64;
+        for (i, s) in self.app.tabs.iter().enumerate() {
+            // A stable, cheap label (dot + tail of live title + head + status dot) for hit-testing;
+            // same font as the painted bar so the hover zone tracks the visible tab. Busy/bell badges
+            // shift a tab's painted edge by a few glyphs, which barely moves where the preview pops,
+            // so they're omitted here for speed and stability.
+            let live = s.live_title().unwrap_or_else(|| s.meta.title.clone());
+            let mut live = live.replace('\n', " ");
+            if live.chars().count() > 18 {
+                live = live.chars().take(18).collect::<String>() + "…";
+            }
+            let head = s.meta.name.clone().unwrap_or_else(|| s.meta.engine.clone());
+            let label = format!(" ○ {} {} ○ ", head, live);
+            // Measure the label width with the glyph cache (same font advance as render).
+            let mut w = 0i64;
+            for ch in label.chars() {
+                w += self.cache.glyph(ch, self.font_px, false).0 as i64;
+            }
+            if x >= cx as f64 && x < (cx + w + 12) as f64 {
+                return Some(i);
+            }
+            cx += w + 12;
+            if cx > (self.size.width as i64).saturating_sub(20) {
+                break;
+            }
+        }
+        None
+    }
+
     /// Does a URL begin/overlap the cell at framebuffer (x, y)? Used to show the hand cursor over
     /// links, mirroring exactly what `mouse_open` would open so the affordance never lies. Cheap: no
     /// grid write, no selection — just a read of the row under the pointer.
@@ -3343,6 +3480,15 @@ impl ApplicationHandler for Application {
             }
             WindowEvent::CursorMoved { position, .. } => {
                 self.cursor = (position.x, position.y);
+                // Track which tab the pointer is over so render can show a tail-preview tooltip.
+                // Only request a redraw when it changes (or exits) a tab, not on every mouse move.
+                let ht = self.tab_at(position.x, position.y);
+                if ht != self.hover_tab {
+                    self.hover_tab = ht;
+                    if let Some(w) = &self.window {
+                        w.request_redraw();
+                    }
+                }
                 // Hand cursor over clickable links: switch the icon only when the state actually
                 // changes so we don't spam the OS every mouse move.
                 let link = self.cell_has_link(position.x, position.y);
