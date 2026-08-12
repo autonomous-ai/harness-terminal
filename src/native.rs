@@ -115,6 +115,9 @@ struct Application {
     /// not focused. `None` until a tab has been sampled once (so a freshly-spawned tab doesn't
     /// immediately badge).
     seen_history: Vec<usize>,
+    /// A transient status-line toast (text, shown-at) for one-shot confirmations like an export
+    /// path. Displayed for a couple seconds, then fades on its own. None = no toast.
+    flash: Option<(String, std::time::Instant)>,
     /// Per-tab: whether a backgrounded-output notification has ALREADY fired since the tab last went
     /// quiet. Reset when the tab is focused (looked at) or stops growing, so each silent→busy
     /// transition nudges the user exactly once.
@@ -163,6 +166,7 @@ impl Application {
             base_font,
             seen_history,
             notified: vec![false; tab_count],
+            flash: None,
         }
     }
 
@@ -261,6 +265,28 @@ impl Application {
         }
         if let Ok(mut cb) = arboard::Clipboard::new() {
             let _ = cb.set_text(text);
+        }
+    }
+
+    /// `prefix+w`: write the active session's whole scrollback to a timestamped text file in the
+    /// current directory (or HOME if that fails). Bigger than the clipboard and leaves a lasting
+    /// artifact — a diver can dump a long agent log to disk to grep, diff, or share. Shows the path
+    /// in the OSC title slot so the user sees where it landed.
+    fn export_scrollback(&mut self) {
+        let Some(s) = self.app.active_session() else { return };
+        let text = s.capture_scrollback();
+        if text.trim().is_empty() {
+            return;
+        }
+        let slug = s.meta.name.clone().unwrap_or_else(|| s.meta.engine.clone());
+        let slug: String = slug.chars().map(|c| if c.is_ascii_alphanumeric() || c == '-' || c == '_' { c } else { '_' }).collect();
+        let base = std::env::current_dir().unwrap_or_else(|_| std::env::temp_dir());
+        // The timestamp needs to be readable but collision-safe; epoch-ms keeps it unique.
+        let stamp = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map(|d| d.as_millis()).unwrap_or(0);
+        let path = base.join(format!("{}-{}.log", slug, stamp));
+        if std::fs::write(&path, &text).is_ok() {
+            let shown = path.to_string_lossy();
+            self.flash = Some((format!("wrote {} bytes → {}", text.len(), shown), std::time::Instant::now()));
         }
     }
 
@@ -492,6 +518,15 @@ impl Application {
             let pct = pct.min(99);
             info += &format!("  ▾ {pct}% (Esc/b to bottom)");
         }
+        // A transient confirmation toast (e.g. "wrote 12k bytes → /path") overrides the session
+        // info for a couple seconds so an export's destination is readable before it fades.
+        if let Some((text, at)) = &self.flash {
+            if at.elapsed() < std::time::Duration::from_secs(3) {
+                info = format!("  ⚑ {text}");
+            } else {
+                self.flash = None;
+            }
+        }
         draw_text(fb, &mut self.cache, &info, 6, status_base, self.font_px, CHROME_FG);
         let hints = " prefix+/ palette  prefix+a broadcast  prefix+h search all  prefix+n new  prefix+r remote  prefix+s fleet  prefix+o busy  prefix+[ copy  prefix+p paste  prefix+l last  prefix+? help  prefix+q quit ";
         let hw = draw_text(fb, &mut self.cache, hints, 6, status_base, self.font_px, CHROME_DIM);
@@ -676,7 +711,7 @@ impl Application {
     fn render_help(&mut self, fb: &mut Framebuffer) {
         let (base_y, line_px) = self.overlay_base_y();
         draw_text(fb, &mut self.cache, "  harness-terminal keys  ", 32, base_y, self.font_px, WHITE);
-        let bindings: [(&str, &str); 23] = [
+        let bindings: [(&str, &str); 24] = [
             ("Ctrl+Space", "prefix (then a command)"),
             ("prefix /", "palette: jump to any session"),
             ("prefix n", "new session (engine picker)"),
@@ -696,6 +731,7 @@ impl Application {
             ("x / c", "close tab / go to tab 0"),
             ("g / b", "scroll up a page / jump to bottom"),
             ("prefix d", "copy whole scrollback to clipboard"),
+            ("prefix w", "write scrollback to a .log file"),
             ("Ctrl+= / Ctrl+-", "font zoom (Ctrl+0 reset)"),
             ("PgUp/PgDn", "scrollback"),
             ("Cmd/Ctrl+click", "open URL / file path"),
@@ -1174,6 +1210,7 @@ impl Application {
                 }
                 "x" => { close_tab(&mut self.app); }
                 "d" => self.copy_whole_scrollback(),
+                "w" => self.export_scrollback(),
                 "g" => { scroll_active(self, 20); if let Some(s) = self.app.active_session() { s.set_scrolled(true); } }
                 "b" => self.scroll_to_bottom(),
                 "f" => { self.app.overlay = Overlay::Find; self.find_query.clear(); self.find_hit = None; self.find_all = Vec::new(); },
