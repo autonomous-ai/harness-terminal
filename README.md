@@ -62,6 +62,7 @@ The prefix is `Ctrl+Space` (tmux-style), then a command:
 | `Ctrl+Space` `D` | kill the active tab's pane (destroy the remote tmux session) |
 | `Ctrl+Space` `?` | help (full keybinding reference) |
 | `Ctrl+Space` `o` | jump to the next busy (produced-output) tab |
+| `Ctrl+Space` `Q` | jump to the next down/reconnecting tab |
 | `Ctrl+Space` `l` | flip back to the previous tab |
 | `Ctrl+Space` `i` | show the active tab's info (kind, host, task, size, state) |
 | `Ctrl+Space` `v` | focus mode: hide the tab bar + status line (distraction-free) |
@@ -139,7 +140,7 @@ mute = "v"          # prefix+v toggles mute
 ```
 
 Action names: `palette`, `new_session`, `remote_attach`, `local_shell`, `quit`, `fleet`,
-`goto_tab0`, `next_busy`, `mute`, `last_window`, `paste`, `broadcast`, `close_tab`,
+`goto_tab0`, `next_busy`, `next_down`, `mute`, `last_window`, `paste`, `broadcast`, `close_tab`,
 `copy_scrollback`, `export_scrollback`, `peek`, `undo_close`, `duplicate`, `page_up`, `scroll_bottom`,
 `search`, `search_all`, `move_left`, `move_right`, `copy_mode`, `help`, `command_palette`,
 `rename`, `session_info`, `toggle_focus`, `pin`, `next_pinned`, `reconnect`, `destroy`. The digit keys `1-9` / `0` (tab switching) and `Tab`

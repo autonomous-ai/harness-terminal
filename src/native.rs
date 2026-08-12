@@ -60,6 +60,7 @@ enum PaletteAction {
     ToggleFocus,
     Pin,
     NextPinned,
+    NextDown,
     Reconnect,
     Destroy,
     Help,
@@ -86,6 +87,7 @@ impl PaletteAction {
             ("toggle focus mode (hide tab bar + status)", ToggleFocus),
             ("pin/unpin active tab (protect from close)", Pin),
             ("jump to next pinned tab", NextPinned),
+            ("jump to next down/reconnecting tab", NextDown),
             ("force reconnect active tab (bypass backoff)", Reconnect),
             ("kill active tab's pane (destroy remote session)", Destroy),
             ("show this help", Help),
@@ -677,6 +679,25 @@ impl Application {
         for step in 1..=n {
             let i = (self.app.active + step) % n;
             if flags[i] {
+                self.set_active(i);
+                return;
+            }
+        }
+    }
+
+    /// `prefix+Q`: jump to the next tab whose session is down (disconnected / in reconnect backoff),
+    /// wrapping. Complements `next_busy` (which finds tabs that produced output): when a host dies
+    /// and several panes go dark, this cycles just the dead ones so a diver sees what's reconnecting
+    /// instead of typing into a blank pane. No-op when every tab is alive.
+    fn next_down(&mut self) {
+        let n = self.app.tabs.len();
+        if n == 0 {
+            return;
+        }
+        for step in 1..=n {
+            let i = (self.app.active + step) % n;
+            let down = !self.app.tabs[i].alive() && self.app.tabs[i].kind() != "pty"; // live local PTY is never "down"
+            if down {
                 self.set_active(i);
                 return;
             }
@@ -1673,6 +1694,7 @@ impl Application {
             ("broadcast", "broadcast a line to all sessions"),
             ("paste", "paste clipboard (bracketed)"),
             ("next_busy", "jump to next busy tab"),
+            ("next_down", "jump to next down/reconnecting tab"),
             ("next_pinned", "jump to next pinned tab"),
             ("reconnect", "force reconnect active tab (bypass backoff)"),
             ("destroy", "kill active tab's remote pane"),
@@ -2379,6 +2401,7 @@ impl Application {
             ToggleFocus => self.toggle_focus(),
             Pin => self.toggle_pin_active(),
             NextPinned => self.next_pinned(),
+            NextDown => self.next_down(),
             Reconnect => self.reconnect_active(),
             Destroy => self.destroy_active(),
             Help => {
@@ -2677,6 +2700,7 @@ impl Application {
                     }
                 }
                 Some("next_busy") => self.next_busy(),
+                Some("next_down") => self.next_down(),
                 Some("mute") => self.toggle_mute_active(),
                 Some("pin") => self.toggle_pin_active(),
                 Some("next_pinned") => self.next_pinned(),
