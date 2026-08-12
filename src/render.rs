@@ -553,7 +553,7 @@ mod tests {
 
         // Build the grid at 80x24 and feed it two colored lines.
         let size = crate::session::TermSize { lines: 24, cols: 80 };
-        let term = FairMutex::new(Term::new(Config::default(), &size, Listener));
+        let term = FairMutex::new(Term::new(Config::default(), &size, Listener::default()));
         let bytes = b"\x1b[32mAAA\x1b[0m\r\n\x1b[31mMMM\x1b[0m";
         {
             let mut p: Processor<StdSyncHandler> = Processor::default();
@@ -596,7 +596,7 @@ mod tests {
         use crate::session::Listener;
 
         let size = crate::session::TermSize { lines: 8, cols: 40 };
-        let term = FairMutex::new(Term::new(Config::default(), &size, Listener));
+        let term = FairMutex::new(Term::new(Config::default(), &size, Listener::default()));
 
         // Feed 30 lines of a distinctive character so the screen (8 lines) overflows into history.
         let mut buf = Vec::new();
@@ -638,7 +638,7 @@ mod tests {
         use crate::session::Listener;
 
         let size = crate::session::TermSize { lines: 6, cols: 40 };
-        let term = FairMutex::new(Term::new(Config::default(), &size, Listener));
+        let term = FairMutex::new(Term::new(Config::default(), &size, Listener::default()));
         let mut buf = Vec::new();
         for i in 0..10 {
             buf.extend_from_slice(format!("\r\nrow {i} needle").as_bytes());
@@ -666,7 +666,7 @@ mod tests {
         use crate::session::Listener;
 
         let size = crate::session::TermSize { lines: 2, cols: 40 };
-        let term = FairMutex::new(Term::new(Config::default(), &size, Listener));
+        let term = FairMutex::new(Term::new(Config::default(), &size, Listener::default()));
         // Green foreground, then inverse on top of it ("A" becomes green-on-fg with inverse).
         let bytes = b"\x1b[32m\x1b[7mX";
         {
@@ -700,7 +700,7 @@ mod tests {
         use crate::session::Listener;
 
         let size = crate::session::TermSize { lines: 1, cols: 5 };
-        let term = FairMutex::new(Term::new(Config::default(), &size, Listener));
+        let term = FairMutex::new(Term::new(Config::default(), &size, Listener::default()));
         // Request a beam cursor (DECSCUSR 5 = beam; alacritty maps it to CursorShape::Beam). The
         // cursor stays at (0,0), so the beam is drawn over cell (0,0). No glyph is typed (space), so
         // the only non-background pixels come from the cursor itself.

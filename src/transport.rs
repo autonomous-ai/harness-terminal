@@ -76,7 +76,7 @@ impl LocalPtyTransport {
             wsize,
             /* window_id */ 0,
         )?;
-        let event_loop = EventLoop::new(Arc::clone(&term), Listener, pty, true, false)?;
+        let event_loop = EventLoop::new(Arc::clone(&term), Listener::default(), pty, true, false)?;
         let sender = event_loop.channel();
         let _handle = event_loop.spawn();
         Ok(LocalPtyTransport { sender })

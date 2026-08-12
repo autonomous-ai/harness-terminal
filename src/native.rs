@@ -159,7 +159,13 @@ impl Application {
         for (i, s) in self.app.tabs.iter().enumerate() {
             let active = i == self.app.active;
             let dot = if active { "●" } else { "○" };
-            let label = format!(" {} {} ", s.meta.engine, dot);
+            // Show the pane's live OSC title (what the agent is doing) when it has announced one.
+            let live = s.live_title().unwrap_or_else(|| s.meta.title.clone());
+            let mut live = live.replace('\n', " ");
+            if live.chars().count() > 18 {
+                live = live.chars().take(18).collect::<String>() + "…";
+            }
+            let label = format!(" {} {} {} ", s.meta.engine, live, dot);
             let color = if active { WHITE } else { CHROME_DIM };
             x += draw_text(fb, &mut self.cache, &label, x, tab_base, self.font_px, color) + 12;
             if x > fb.width.saturating_sub(20) {
@@ -172,7 +178,8 @@ impl Application {
         let mut info = String::new();
         if let Some(s) = self.app.active_session() {
             let link = if s.alive() { "●" } else { "○ reconnecting" };
-            info = format!(" {} · {} · {} · [{} {}]", s.meta.host, s.meta.engine, s.meta.title, s.kind(), link);
+            let live = s.live_title().unwrap_or_else(|| s.meta.title.clone());
+            info = format!(" {} · {} · {} · [{} {}]", s.meta.host, s.meta.engine, live, s.kind(), link);
         }
         draw_text(fb, &mut self.cache, &info, 6, status_base, self.font_px, CHROME_FG);
         let hints = " prefix+/ palette  prefix+n new  prefix+r remote  prefix+q quit ";

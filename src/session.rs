@@ -32,18 +32,43 @@ impl Dimensions for TermSize {
 
 /// Sink for terminal render events. Rendering is drawn synchronously from the grid, so wakeups
 /// are currently no-ops; a future dirty-region/GPU client can hook `Event::Wakeup` here. We do act
-/// on `ClipboardStore`, which the alacritty emulator issues for an OSC 52 write (e.g. an agent's
-/// `pbcopy`/`wl-copy` over the pane) — the data is copied to the system clipboard.
+/// on two events:
+/// - `ClipboardStore`, which the alacritty emulator issues for an OSC 52 write (e.g. an agent's
+///   `pbcopy`/`wl-copy` over the pane) — the data is copied to the system clipboard.
+/// - `Title`, which the emulator issues for an OSC 0/2 window-title write (e.g. an agent announcing
+///   what it's working on). The text is stored in a shared slot so the tab/status can show it.
 #[derive(Clone, Default)]
-pub struct Listener;
+pub struct Listener {
+    title: Arc<Mutex<Option<String>>>,
+}
+
+impl Listener {
+    /// Create a listener that records OSC window/task titles into `title`.
+    pub fn with_title(title: Arc<Mutex<Option<String>>>) -> Self {
+        Listener { title }
+    }
+}
 
 impl EventListener for Listener {
     fn send_event(&self, event: Event) {
-        if let Event::ClipboardStore(_, text) = event {
-            // Best-effort: a missing/wrong clipboard backend must not break terminal I/O.
-            if let Ok(mut cb) = arboard::Clipboard::new() {
-                let _ = cb.set_text(text);
+        match event {
+            Event::ClipboardStore(_, text) => {
+                // Best-effort: a missing/wrong clipboard backend must not break terminal I/O.
+                if let Ok(mut cb) = arboard::Clipboard::new() {
+                    let _ = cb.set_text(text);
+                }
             }
+            Event::Title(title) => {
+                if let Ok(mut t) = self.title.lock() {
+                    *t = Some(title);
+                }
+            }
+            Event::ResetTitle => {
+                if let Ok(mut t) = self.title.lock() {
+                    *t = None;
+                }
+            }
+            _ => {}
         }
     }
 }
@@ -133,9 +158,18 @@ pub struct Session {
     transport: Box<dyn Transport>,
     /// Echo cancellation for remote-byte transports (ssh/tunnel); None for local ones.
     echo: Option<Arc<EchoCanceller>>,
+    /// Live OSC title (what the shell/agent in the pane is currently doing), written by the
+    /// emulator's Listener and read by the tab/status chrome.
+    title: Arc<Mutex<Option<String>>>,
 }
 
 impl Session {
+    /// Current OSC window-title (from the pane's `\x1b]0;…\x07`), if one has been set. Used by the
+    /// chrome to show live task context per tab.
+    pub fn live_title(&self) -> Option<String> {
+        self.title.lock().ok().and_then(|t| t.clone())
+    }
+
     /// Create a session running a LOCAL program (shell or an engine CLI) in a fresh PTY.
     pub fn local(
         meta: SessionMeta,
@@ -143,9 +177,10 @@ impl Session {
         args: Vec<String>,
         size: TermSize,
     ) -> io::Result<Session> {
-        let term = Arc::new(FairMutex::new(Term::new(Config::default(), &size, Listener)));
+        let title = Arc::new(Mutex::new(None));
+        let term = Arc::new(FairMutex::new(Term::new(Config::default(), &size, Listener::with_title(Arc::clone(&title)))));
         let transport = LocalPtyTransport::spawn(program, args, size, Arc::clone(&term))?;
-        Ok(Session { meta, term, transport: Box::new(transport), echo: None })
+        Ok(Session { meta, term, transport: Box::new(transport), echo: None, title })
     }
 
     /// Create a session backed by a real tmux pane (control mode).
@@ -154,9 +189,10 @@ impl Session {
         program: &str,
         size: TermSize,
     ) -> io::Result<Session> {
-        let term = Arc::new(FairMutex::new(Term::new(Config::default(), &size, Listener)));
+        let title = Arc::new(Mutex::new(None));
+        let term = Arc::new(FairMutex::new(Term::new(Config::default(), &size, Listener::with_title(Arc::clone(&title)))));
         let transport = crate::transport::TmuxTransport::spawn(program, size, Arc::clone(&term))?;
-        Ok(Session { meta, term, transport: Box::new(transport), echo: None })
+        Ok(Session { meta, term, transport: Box::new(transport), echo: None, title })
     }
 
     /// Create a session whose pane is reached through the harness pane-relay tunnel at `host:port`.
@@ -168,14 +204,15 @@ impl Session {
         program: &str,
         size: TermSize,
     ) -> io::Result<Session> {
-        let term = Arc::new(FairMutex::new(Term::new(Config::default(), &size, Listener)));
+        let title = Arc::new(Mutex::new(None));
+        let term = Arc::new(FairMutex::new(Term::new(Config::default(), &size, Listener::with_title(Arc::clone(&title)))));
         // The tunnel crosses a latency link, so the session owns an echo canceller (Session::write
         // notes keystrokes; the transport's reader thread cancels the returned copy).
         let echo = Arc::new(EchoCanceller::default());
         let transport = crate::transport::TunnelTransport::spawn(
             host, port, program, size, Arc::clone(&term), Arc::clone(&echo),
         )?;
-        Ok(Session { meta, term, transport: Box::new(transport), echo: Some(echo) })
+        Ok(Session { meta, term, transport: Box::new(transport), echo: Some(echo), title })
     }
 
     /// Create a session whose pane lives on REMOTE host `host` (via ssh + tmux control mode).
@@ -185,13 +222,14 @@ impl Session {
         program: &str,
         size: TermSize,
     ) -> io::Result<Session> {
-        let term = Arc::new(FairMutex::new(Term::new(Config::default(), &size, Listener)));
+        let title = Arc::new(Mutex::new(None));
+        let term = Arc::new(FairMutex::new(Term::new(Config::default(), &size, Listener::with_title(Arc::clone(&title)))));
         // Remote ssh crosses a latency link — same echo-cancellation setup as the tunnel.
         let echo = Arc::new(EchoCanceller::default());
         let transport = crate::transport::RemoteTransport::spawn(
             &meta.host, program, size, Arc::clone(&term), Arc::clone(&echo),
         )?;
-        Ok(Session { meta, term, transport: Box::new(transport), echo: Some(echo) })
+        Ok(Session { meta, term, transport: Box::new(transport), echo: Some(echo), title })
     }
 
     /// Transport kind: "pty" / "tmux" / "ssh" / "tunnel" (shown in the status line).
@@ -276,5 +314,19 @@ mod tests {
         // The very same bytes returning now are no longer "expected echo" — they're real output.
         let out = c.filter_echo(b"xxxxx");
         assert_eq!(out, b"xxxxx", "expired pending echo must pass through as real output");
+    }
+
+    /// OSC window titles are captured into the shared slot and exposed via live_title; ResetTitle
+    /// clears them again.
+    #[test]
+    fn captures_osc_title_and_reset() {
+        use alacritty_terminal::event::Event as AEvent;
+
+        let title = Arc::new(Mutex::new(None));
+        let listener = Listener::with_title(Arc::clone(&title));
+        listener.send_event(AEvent::Title("fixing auth".to_string()));
+        assert_eq!(*title.lock().unwrap(), Some("fixing auth".to_string()));
+        listener.send_event(AEvent::ResetTitle);
+        assert!(title.lock().unwrap().is_none(), "ResetTitle should clear the slot");
     }
 }
