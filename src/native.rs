@@ -169,6 +169,13 @@ struct Application {
     /// osascript popup per tab (a `broadcast` to every host would otherwise fan out N launches).
     /// Muted tabs are never queued. Emptied each frame by `flush_notifications`.
     pending_notify: Vec<(String, usize)>,
+    /// Per-tab: whether the session was down (disconnected) on the previous frame. Used to detect the
+    /// down→alive recovery edge and nudge the diver once (a `↻` badge + one notification), so a box
+    /// that comes back is announced rather than silently reappearing.
+    was_down: Vec<bool>,
+    /// Monotonic instant until which each tab shows a `↻` recovery badge after its pane reconnected.
+    /// Mirrors `bell_until`'s self-fading timeline.
+    recover_until: Vec<Option<std::time::Instant>>,
     /// Global Do-Not-Disturb (prefix+M): while on, NO OS notifications are fired fleet-wide — neither
     /// the backgrounded-busy nag nor the terminal-bell popup. In-bar busy badges stay (they're not
     /// interruptions), just no popups. A single bool so nothing else in the fleet state shifts.
@@ -388,6 +395,8 @@ impl Application {
             focus: false,
             dnd: false,
             bell_until: vec![None; tab_count],
+            was_down: vec![false; tab_count],
+            recover_until: vec![None; tab_count],
             hover_tab: None,
             drag_tab: None,
             grid_sel: 0,
@@ -425,9 +434,12 @@ impl Application {
     fn poll_bells(&mut self) {
         let n = self.app.tabs.len();
         self.bell_until.resize(n, None);
+        self.was_down.resize(n, false);
+        self.recover_until.resize(n, None);
         let now = std::time::Instant::now();
-        // Events drained together at the end of this frame so same-burst bells coalesce.
+        // Events drained together at the end of this frame so same-burst events coalesce.
         let mut bells: Vec<usize> = Vec::new();
+        let mut recovered: Vec<usize> = Vec::new();
         for (i, s) in self.app.tabs.iter().enumerate() {
             if s.take_bell() {
                 // A bell while focused is a "your run finished" cue in view — just a badge. A bell in
@@ -443,10 +455,30 @@ impl Application {
                     self.bell_until[i] = None;
                 }
             }
+            // Recovery edge: a remote (non-PTY) pane was down last frame and is alive again — a box
+            // came back. Show a short `↻` badge and, when backgrounded and unmuted, queue ONE
+            // notification so a diver notices (a host that silently reappears is easy to miss). PTYs
+            // never flap, and reconnects that never complete (still down) don't fire.
+            let alive_now = s.alive();
+            if self.was_down[i] && alive_now && s.kind() != "pty" {
+                self.recover_until[i] = Some(now + std::time::Duration::from_secs(8));
+                if i != self.app.active && !self.muted.get(i).copied().unwrap_or(false) {
+                    recovered.push(i);
+                }
+            }
+            self.was_down[i] = !alive_now;
+            if let Some(until) = self.recover_until[i] {
+                if until < now {
+                    self.recover_until[i] = None;
+                }
+            }
         }
         // Queue each bell for (coalesced) delivery rather than notifying per-tab here.
         for i in bells {
             self.queue_notify("bell", i);
+        }
+        for i in recovered {
+            self.queue_notify("recover", i);
         }
     }
 
@@ -513,6 +545,19 @@ impl Application {
                     format!("{list} produced new output.")
                 } else {
                     format!("New output from {list}.")
+                };
+                notify_simple(&title, &body);
+            }
+            "recover" => {
+                let title = if n == 1 {
+                    format!("{list} · reconnected")
+                } else {
+                    format!("{n} sessions reconnected")
+                };
+                let body = if n == 1 {
+                    format!("Pane {list} is back online.")
+                } else {
+                    format!("Back online: {list}.")
                 };
                 notify_simple(&title, &body);
             }
@@ -1285,6 +1330,14 @@ impl Application {
                 } else {
                     ""
                 };
+                // A recovery badge marks a pane that just reconnected (down → alive), fading on its
+                // own like the bell badge. Reading `↻` at a glance beats silently watching a host
+                // come back.
+                let recover = if self.recover_until.get(i).copied().flatten().is_some() {
+                    "↻ "
+                } else {
+                    ""
+                };
                 // A down pane with queued type-ahead shows how much is staged to flush on reconnect,
                 // so input parked for a host coming back is visible in the fleet bar, not just the
                 // status line. (This is a 5-tier red "queued" marker, drawn dim on non-active tabs.)
@@ -1295,8 +1348,8 @@ impl Application {
                     String::new()
                 };
                 let label = format!(
-                    " {}{}{}{} {} {}{}{}{} ",
-                    bell, flag, pin, head, live, mute, where_s, queued_mark, dot
+                    " {}{}{}{}{} {} {}{}{}{} ",
+                    bell, recover, flag, pin, head, live, mute, where_s, queued_mark, dot
                 );
                 // Active tab: tinted by a stable hash of its host (dive context). Inactive tabs fall back
                 // to the engine's own accent color so you can spot the "claude" tab from across the bar.
@@ -2692,7 +2745,8 @@ impl Application {
                 format!("@{}", s.meta.host)
             };
             // Status glyph, matching the tab-bar chrome: nothing for a live idle tab; `!N` busy,
-            // `⌛` quiet (awaiting you), `○`/`↓` down, `⏳N` queued-input, `🔒` pinned, `M` muted.
+            // `⌛` quiet (awaiting you), `○`/`↓` down, `↻` just-reconnected, `⏳N` queued-input,
+            // `🔒` pinned, `M` muted.
             // Quiet and busy are mutually exclusive; down wins over both. The focused tile is the
             // one you're actively reading, so it's never flagged busy/quiet (same rule as the bar).
             let is_down = !s.alive() && s.kind() != "pty";
@@ -2713,6 +2767,9 @@ impl Application {
                 String::new()
             };
             let mut glyph_s = glyph;
+            if self.recover_until.get(idx).copied().flatten().is_some() {
+                glyph_s += "↻";
+            }
             if self.pinned.get(idx).copied().unwrap_or(false) {
                 glyph_s.push('🔒');
             }
@@ -4986,6 +5043,20 @@ mod tests {
         let batches = group_notifications(&pending);
         assert_eq!(batches.len(), 1);
         assert_eq!(batches[0], ("busy".to_string(), vec![7]));
+    }
+
+    /// The recover kind is its own bucket (distinct from busy/bell), so several panes reconnecting
+    /// in the same frame coalesce into ONE "N sessions reconnected" popup.
+    #[test]
+    fn group_notifications_keeps_recover_its_own_kind() {
+        let pending = vec![
+            ("busy".to_string(), 1),
+            ("recover".to_string(), 2),
+            ("recover".to_string(), 3),
+        ];
+        let batches = group_notifications(&pending);
+        let recover = batches.iter().find(|(k, _)| k == "recover").unwrap();
+        assert_eq!(recover.1, vec![2, 3]);
     }
 
     /// A fleet-wide broadcast produces N busy events; the list should collapse to "all N sessions"

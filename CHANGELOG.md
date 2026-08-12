@@ -14,6 +14,10 @@ entries record user-visible and architectural changes since the last tagged mile
   in tiled panes that update each frame, so a diver sees what all agents are doing at once instead
   of hopping tab to tab. Up/Down/1-9 focus a tile, Enter dives into it; per-tile `@host` headers
   and the active tile's white border keep orientation. Also reachable from the command palette.
+- **Pane-recovery signal (`↻`)** — the moment a down (disconnected) remote pane comes back alive,
+  its tab shows a short-lived `↻` badge (and the fleet-grid tile too) and — when backgrounded and
+  unmuted — one "N sessions reconnected" notification fires. A host that silently reappears is now
+  announced instead of blinked past. Honors per-tab mute and global Do-Not-Disturb.
 - **Engine install hints in the new-session picker** — each engine row now marks whether its CLI
   is actually on PATH (`✗` in red for absent), so a diver doesn't pick a framework that isn't
   installed and fail on spawn. A pure `which`-style PATH scan (`engines::is_installed`), no subprocess.
