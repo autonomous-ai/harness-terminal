@@ -388,7 +388,9 @@ impl Application {
                     }
                 })
                 .unwrap_or(0);
-            let pct = if self.scrolled && pct >= 100 { 99 } else { pct };
+            // A fully-scrolled-back log reads 100% (at the very top), which can look like 'live'; keep
+            // it below 100 so '100% = at the top' stays unambiguous vs the live-bottom position.
+            let pct = pct.min(99);
             info += &format!("  ▾ {pct}% (Esc/b to bottom)");
         }
         draw_text(fb, &mut self.cache, &info, 6, status_base, self.font_px, CHROME_FG);
