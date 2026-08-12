@@ -192,6 +192,17 @@ impl App {
     pub fn selected_engine(&self) -> Option<&'static str> {
         ENGINES.get(self.selected.min(ENGINES.len() - 1)).map(|e| e.id)
     }
+
+    /// Set the picker selection to the configured default engine (case-insensitive), falling back
+    /// to index 0. Called when the new-session overlay opens so Enter spawns the user's usual
+    /// engine without extra keystrokes.
+    pub fn select_default_engine(&mut self) {
+        let want = crate::config::Config::load().default_engine.to_lowercase();
+        self.selected = ENGINES
+            .iter()
+            .position(|e| e.id.eq_ignore_ascii_case(&want))
+            .unwrap_or(0);
+    }
 }
 
 /// Map an engine id to its launch command.

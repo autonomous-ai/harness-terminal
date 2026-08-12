@@ -12,4 +12,5 @@ pub mod session;
 pub mod transport;
 pub mod render;
 pub mod restore;
+pub mod config;
 pub mod tui;

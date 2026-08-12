@@ -77,10 +77,14 @@ struct Application {
     window_title: String,
     /// Base font scale (1.0 = 14px). Zoom multiplies font/margins; persisted in restore.
     zoom: f32,
+    /// Base font size in px from config (the size a fresh window opens at, before display-scale
+    /// and zoom). `zoom` still scales on top; Ctrl+0 resets zoom but not this.
+    base_font: f32,
 }
 
 impl Application {
     fn new(app: App) -> Self {
+        let base_font = crate::config::Config::load().font_px as f32;
         Application {
             window: None,
             context: None,
@@ -106,13 +110,14 @@ impl Application {
             last_press: None,
             window_title: String::new(),
             zoom: 1.0,
+            base_font,
         }
     }
 
     fn metrics_from_scale(&mut self) {
         if let Some(w) = &self.window {
             let s = w.scale_factor() as f32 * self.zoom;
-            self.font_px = (14.0 * s).round().clamp(8.0, 40.0) as u32;
+            self.font_px = (self.base_font * s).round().clamp(8.0, 40.0) as u32;
             self.cell_w = (8.0 * s).round().max(2.0) as u32;
             self.cell_h = (18.0 * s).round() as u32;
         }
@@ -637,7 +642,7 @@ impl Application {
         match key {
             Key::Character(c) => match c.as_str() {
                 "/" => { self.app.overlay = Overlay::Palette; self.app.query.clear(); self.app.selected = 0; self.app.refresh_filter(); }
-                "n" => { self.app.overlay = Overlay::NewSession; self.app.selected = 0; }
+                "n" => { self.app.overlay = Overlay::NewSession; self.app.select_default_engine(); }
                 "r" => { self.app.overlay = Overlay::RemoteAttach; self.app.remote_host.clear(); self.app.selected = 0; }
                 "t" => self.app.spawn_tmux("this-host", "shell"),
                 "q" => return true,
