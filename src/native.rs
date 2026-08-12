@@ -1103,7 +1103,17 @@ impl Application {
         let head = s.meta.name.clone().unwrap_or_else(|| s.meta.engine.clone());
         let live = s.live_title().unwrap_or_else(|| s.meta.title.clone());
         let alive = if s.alive() { "● live" } else { "○ down" };
-        lines.insert(0, format!(" {} · {} · {}", head, live, alive));
+        // Protection flags (pin 🔒 / mute M) appended so the peek preview shows shielding at a glance.
+        let prot = match (
+            self.pinned.get(i).copied().unwrap_or(false),
+            self.muted.get(i).copied().unwrap_or(false),
+        ) {
+            (true, true) => " · pinned🔒 muted",
+            (true, false) => " · pinned🔒",
+            (false, true) => " · muted",
+            (false, false) => "",
+        };
+        lines.insert(0, format!(" {} · {} · {}{}", head, live, alive, prot));
         if lines.len() > 1 {
             lines.push(" (hover → switch? no: click the tab) ".to_string());
         }
