@@ -429,6 +429,21 @@ impl Application {
         }
     }
 
+    /// Middle-click: paste the system clipboard into the active session WITHOUT the bracketed-paste
+    /// wrapper. Terminal middle-click paste has always been raw bytes; bracketing assumes the app
+    /// requested it, and most CLIs ignore the delimiter sequence but echo it, corrupting the line.
+    /// Raw write is what every X11 terminal does.
+    fn paste_raw(&mut self) {
+        let Some(s) = self.app.active_session() else {
+            return;
+        };
+        if let Ok(mut cb) = arboard::Clipboard::new() {
+            if let Ok(text) = cb.get_text() {
+                s.write(text.as_bytes());
+            }
+        }
+    }
+
     /// `Ctrl+D`: copy the active session's entire scrollback (history + screen) to the system
     /// clipboard as plain text. Handy for dumping an agent's whole log for pasting into an issue or
     /// a summary. Builds the text with the same capture path used for restart persistence.
@@ -3595,44 +3610,59 @@ impl ApplicationHandler for Application {
                 }
             }
             WindowEvent::MouseInput { state, button, .. } => {
-                if button == MouseButton::Left && self.app.overlay == Overlay::None {
-                    let (x, y) = self.cursor;
-                    match state {
-                        ElementState::Pressed => {
-                            if self.mods.alt_key() {
-                                // Alt+click moves the shell cursor instead of selecting.
-                                self.mouse_alt_click(x, y);
-                                return;
-                            }
-                            if self.mods.control_key() || self.mods.super_key() {
-                                // Cmd/Ctrl+click opens the URL/path under the cursor.
-                                self.mouse_open(x, y);
-                                return;
-                            }
-                            // Pressing on a tab starts a drag-reorder (or a click-to-switch); pressing
-                            // in the grid starts normal text selection. Both are mutually exclusive.
-                            if let Some(i) = self.tab_at(x, y) {
-                                self.drag_tab = Some(i);
-                                if let Some(w) = &self.window {
-                                    w.request_redraw();
-                                }
-                                return;
-                            }
-                            self.drag_tab = None;
-                            self.mouse_press(x, y);
-                            if let Some(w) = &self.window {
-                                w.request_redraw();
-                            }
+                if self.app.overlay != Overlay::None {
+                    return;
+                }
+                let (x, y) = self.cursor;
+                // Middle-click = paste the system clipboard (X11 muscle memory). Only the press
+                // matters; the release is discarded.
+                if button == MouseButton::Middle {
+                    if state == ElementState::Pressed {
+                        self.paste_raw();
+                        if let Some(w) = &self.window {
+                            w.request_redraw();
                         }
-                        ElementState::Released => {
-                            if self.drag_tab.is_some() {
-                                self.tab_drop(x, y);
-                            } else {
-                                self.mouse_release(x, y);
-                            }
+                    }
+                    return;
+                }
+                if button != MouseButton::Left {
+                    return;
+                }
+                match state {
+                    ElementState::Pressed => {
+                        if self.mods.alt_key() {
+                            // Alt+click moves the shell cursor instead of selecting.
+                            self.mouse_alt_click(x, y);
+                            return;
+                        }
+                        if self.mods.control_key() || self.mods.super_key() {
+                            // Cmd/Ctrl+click opens the URL/path under the cursor.
+                            self.mouse_open(x, y);
+                            return;
+                        }
+                        // Pressing on a tab starts a drag-reorder (or a click-to-switch); pressing
+                        // in the grid starts normal text selection. Both are mutually exclusive.
+                        if let Some(i) = self.tab_at(x, y) {
+                            self.drag_tab = Some(i);
                             if let Some(w) = &self.window {
                                 w.request_redraw();
                             }
+                            return;
+                        }
+                        self.drag_tab = None;
+                        self.mouse_press(x, y);
+                        if let Some(w) = &self.window {
+                            w.request_redraw();
+                        }
+                    }
+                    ElementState::Released => {
+                        if self.drag_tab.is_some() {
+                            self.tab_drop(x, y);
+                        } else {
+                            self.mouse_release(x, y);
+                        }
+                        if let Some(w) = &self.window {
+                            w.request_redraw();
                         }
                     }
                 }

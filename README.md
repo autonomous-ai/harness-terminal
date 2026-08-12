@@ -72,6 +72,7 @@ The prefix is `Ctrl+Space` (tmux-style), then a command:
 | `Alt`+click | move the shell cursor (click-to-move) |
 | `Cmd+C` | copy selection |
 | `Ctrl+Space` `p` | paste clipboard (bracketed) |
+| Middle-click | paste clipboard (raw) |
 
 Backgrounded tabs that keep producing output are flagged with a magnitude badge in the tab bar
 (e.g. `!43` — how many new lines since you last looked). Muted tabs show a dim `M` instead.
