@@ -278,10 +278,13 @@ impl Application {
         // Overlay status line with query and match count info.
         let line = if self.find_query.is_empty() {
             "  find: (type to search)  ".to_string()
-        } else if self.find_hit.is_some() {
-            format!("  find: {}  ({} matches · Enter next)", self.find_query, self.find_query)
         } else {
-            format!("  find: {}  (no match)", self.find_query)
+            let n = self.app.active_session().map(|s| crate::render::count_matches(&s.term.lock(), &self.find_query)).unwrap_or(0);
+            if n > 0 {
+                format!("  find: {}  ({} matches · Enter next)", self.find_query, n)
+            } else {
+                format!("  find: {}  (no match)", self.find_query)
+            }
         };
         draw_text(fb, &mut self.cache, &line, 6, status_base, self.font_px, WHITE);
     }

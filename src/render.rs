@@ -440,6 +440,30 @@ pub fn find(term: &Term<Listener>, query: &str, start: i32) -> Option<Find> {
     None
 }
 
+/// Count every non-overlapping match of `query` across the whole grid (history + screen). Used for
+/// the "N matches" indicator in the Find overlay.
+pub fn count_matches(term: &Term<Listener>, query: &str) -> usize {
+    if query.is_empty() {
+        return 0;
+    }
+    let q = query.to_lowercase();
+    let grid = term.grid();
+    let bottom = grid.bottommost_line().0;
+    let mut line = grid.topmost_line().0;
+    let mut total = 0usize;
+    while line <= bottom {
+        let text = line_text(term, line).to_lowercase();
+        let mut rest = text.as_str();
+        while let Some(ci) = rest.find(&q) {
+            total += 1;
+            let advance = ci + q.len();
+            rest = if advance < rest.len() { &rest[advance..] } else { "" };
+        }
+        line += 1;
+    }
+    total
+}
+
 /// Draw a line of text at pixel origin (x0,y0 baseline) with the given color/size. Used for the
 /// native chrome (tab bar, status line). Returns the pixel width consumed.
 pub fn draw_text(
@@ -722,10 +746,32 @@ mod tests {
         let left_edge_filled = (0..18).any(|py| fb.pixels[py * fb.width + cell_x] != 0);
         assert!(left_edge_filled, "beam cursor should draw a vertical bar at cell's left edge");
         // The bottom-right corner must be background — a block cursor would fill it with the cursor
-        // fg color (the "A" glyph doesn't reach the corner).
-        // The bottom-right corner must be background — a block cursor would fill it with the cursor
         // fg (white) color. Compare RGB only (alpha is always 255 in the framebuffer).
         let corner = fb.pixels[17 * fb.width + (9 - 1)] & 0x00ff_ffff;
         assert_eq!(corner, 0, "beam cursor must not fill the cell to its bottom-right corner");
+    }
+
+    /// Match counting: a query present multiple times across history counts all non-overlapping
+    /// occurrences (used for the "N matches" search indicator).
+    #[test]
+    fn counts_all_matches_across_history() {
+        use alacritty_terminal::sync::FairMutex;
+        use alacritty_terminal::term::{Config, Term};
+        use alacritty_terminal::vte::ansi::{Processor, StdSyncHandler};
+
+        use crate::session::Listener;
+
+        let size = crate::session::TermSize { lines: 4, cols: 40 };
+        let term = FairMutex::new(Term::new(Config::default(), &size, Listener::default()));
+        // Two "fix" on one line, one on another, none on the last.
+        let bytes = b"fix foo fix\r\nno match here\r\nfix again";
+        {
+            let mut p: Processor<StdSyncHandler> = Processor::default();
+            p.advance(&mut *term.lock(), bytes);
+        }
+        let g = term.lock();
+        assert_eq!(count_matches(&g, "fix"), 3, "expected 3 total non-overlapping matches");
+        assert_eq!(count_matches(&g, "zzz"), 0);
+        assert_eq!(count_matches(&g, ""), 0);
     }
 }
