@@ -199,6 +199,7 @@ impl ControlPipe {
             &term,
             echo.as_ref(),
             true,
+            false,
         )?;
         Ok(ControlPipe {
             argv0,
@@ -249,6 +250,7 @@ impl ControlPipe {
         term: &Arc<FairMutex<Term<Listener>>>,
         echo: Option<&Arc<EchoCanceller>>,
         recreate: bool,
+        capture: bool,
     ) -> io::Result<(
         Child,
         mpsc::Sender<Vec<u8>>,
@@ -268,6 +270,13 @@ impl ControlPipe {
         for cmd in Self::attach_cmds(session, size, program, recreate) {
             tx.send(cmd.into_bytes()).ok();
         }
+        // After a reconnect the grid is stale: request a full `capture-pane -ep` so the (surviving)
+        // pane's current contents are replayed into the grid, instead of starting blank. The reply
+        // arrives as raw escaped text inside a %begin/%end block (not %output lines), so the reader
+        // accumulates it below and replays on `%end`.
+        if capture {
+            tx.send(b"capture-pane -ep\n".to_vec()).ok();
+        }
 
         // Reader: parse control-mode notification lines; %output carries the pane's byte payload.
         // When the transport is remote, filter the returned bytes through echo cancellation before
@@ -281,6 +290,9 @@ impl ControlPipe {
                 let mut parser: Processor<StdSyncHandler> = Processor::default();
                 let mut out = BufReader::new(&mut child_stdout);
                 let mut line = String::new();
+                // Raw text buffered inside a %begin/%end block (a capture-pane reply). Replayed once
+                // at %end — ONCE because we clear it so live `%output` keeps flowing separately.
+                let mut block: Vec<u8> = Vec::new();
                 loop {
                     line.clear();
                     match out.read_line(&mut line) {
@@ -289,6 +301,22 @@ impl ControlPipe {
                             break;
                         }
                         Ok(_) => {
+                            if line.starts_with("%begin") {
+                                block = Vec::new();
+                                continue;
+                            }
+                            if line.starts_with("%end") {
+                                if !block.is_empty() {
+                                    let payload = match &e {
+                                        Some(c) => c.filter_echo(&block),
+                                        None => block.clone(),
+                                    };
+                                    let mut term = t.lock();
+                                    parser.advance(&mut *term, &payload);
+                                }
+                                block = Vec::new();
+                                continue;
+                            }
                             if let Some(payload) = parse_output(&line) {
                                 let payload = match &e {
                                     Some(c) => c.filter_echo(&payload),
@@ -296,6 +324,12 @@ impl ControlPipe {
                                 };
                                 let mut term = t.lock();
                                 parser.advance(&mut *term, &payload);
+                            } else if !block.is_empty() {
+                                // Raw content inside a capture block: escaped, not %output-prefixed.
+                                if let Some(decoded) = parse_escapes(line.trim_end_matches('\n')) {
+                                    block.extend_from_slice(&decoded);
+                                    block.push(b'\n');
+                                }
                             }
                         }
                     }
@@ -347,6 +381,7 @@ impl ControlPipe {
             &self.term,
             self.echo.as_ref(),
             false,
+            true,
         )?;
         self.child = child;
         self.tx = tx;
@@ -520,8 +555,9 @@ impl TunnelTransport {
         term: Arc<FairMutex<Term<Listener>>>,
         echo: Arc<EchoCanceller>,
     ) -> io::Result<TunnelTransport> {
-        let (tx, alive) =
-            TunnelTransport::build_connection(host, port, program, size, &term, &echo, true)?;
+        let (tx, alive) = TunnelTransport::build_connection(
+            host, port, program, size, &term, &echo, true, false,
+        )?;
         Ok(TunnelTransport {
             host: host.to_string(),
             port,
@@ -537,7 +573,9 @@ impl TunnelTransport {
     /// Open one WebSocket to `/api/pane-ws`, create the pane, and spawn the connection thread.
     /// Shared by initial [`TunnelTransport::spawn`] and [`TunnelTransport::reconnect`]. `recreate`
     /// mirrors [`ControlPipe`] semantics: a fresh spawn kills any stale session first, a reconnect
-    /// re-attaches (`new-session -A`) so a pane that survived the blip keeps its agent run.
+    /// re-attaches (`new-session -A`) so a pane that survived the blip keeps its agent run. `capture`
+    /// requests a `capture-pane -ep` on connect so a reconnect replays the pane's current screen
+    /// (the grid is stale after a link drop).
     fn build_connection(
         host: &str,
         port: u16,
@@ -546,6 +584,7 @@ impl TunnelTransport {
         term: &Arc<FairMutex<Term<Listener>>>,
         echo: &Arc<EchoCanceller>,
         recreate: bool,
+        capture: bool,
     ) -> io::Result<(mpsc::Sender<Vec<u8>>, Arc<std::sync::atomic::AtomicBool>)> {
         let name = format!("auton-{}", program.replace('/', "-"));
         let (tx, rx) = mpsc::channel::<Vec<u8>>();
@@ -587,6 +626,11 @@ impl TunnelTransport {
             )))
             .map_err(|e| io::Error::new(io::ErrorKind::Other, e.to_string()))?;
         }
+        // Replay the existing pane's screen into the grid after a reconnect (the grid is stale).
+        if capture {
+            ws.send(tungstenite::Message::Text("capture-pane -ep\n".to_string()))
+                .ok();
+        }
 
         // One thread owns the single connection: read `%output` → grid, drain tx → send-keys. The
         // returned bytes are echo-cancelled (see EchoCanceller) so the optimistic echo isn't doubled.
@@ -597,22 +641,39 @@ impl TunnelTransport {
             .name("tunnel".into())
             .spawn(move || {
                 let mut parser: Processor<StdSyncHandler> = Processor::default();
+                // Raw text buffered inside a %begin/%end block (a capture-pane reply), replayed once
+                // at %end; cleared so live `%output` keeps flowing separately. Same shape as the
+                // ControlPipe reader, so a re-attached tunnel repaints a stale grid too.
+                let mut block: Vec<u8> = Vec::new();
+                let mut feed = |line: &str, parser: &mut Processor<StdSyncHandler>| {
+                    if line.starts_with("%begin") {
+                        block = Vec::new();
+                    } else if line.starts_with("%end") {
+                        if !block.is_empty() {
+                            let mut term = t.lock();
+                            parser.advance(&mut *term, &e.filter_echo(&block));
+                        }
+                        block = Vec::new();
+                    } else if let Some(payload) = parse_output(line) {
+                        let mut term = t.lock();
+                        parser.advance(&mut *term, &e.filter_echo(&payload));
+                    } else if !block.is_empty() {
+                        if let Some(decoded) = parse_escapes(line.trim_end_matches('\n')) {
+                            block.extend_from_slice(&decoded);
+                            block.push(b'\n');
+                        }
+                    }
+                };
                 loop {
                     match ws.read() {
                         Ok(tungstenite::Message::Text(s)) => {
                             for line in s.lines() {
-                                if let Some(payload) = parse_output(line) {
-                                    let mut term = t.lock();
-                                    parser.advance(&mut *term, &e.filter_echo(&payload));
-                                }
+                                feed(line, &mut parser);
                             }
                         }
                         Ok(tungstenite::Message::Binary(b)) => {
                             for line in String::from_utf8_lossy(&b).lines() {
-                                if let Some(payload) = parse_output(line) {
-                                    let mut term = t.lock();
-                                    parser.advance(&mut *term, &e.filter_echo(&payload));
-                                }
+                                feed(&line, &mut parser);
                             }
                         }
                         Ok(_) => {}
@@ -648,6 +709,7 @@ impl TunnelTransport {
             &self.term,
             &self.echo,
             false,
+            true,
         )?;
         self.tx = tx;
         self.alive = alive;
