@@ -91,11 +91,19 @@ or attaches to panes already discovered by `autonomous-harness`. Engines and the
 - **Local echo** for remote tabs so typing feels local.
 - Open question (later): pull the commander bus (busy/idle/summary) into status badges.
 
-## 7. Native UI layer (DECIDED) — ratatui TUI
+## 7. Native UI layer (DECIDED) — winit + softbuffer
 
-We use **ratatui** (Rust, MIT) for the shell: tab bar, palette, engine picker drawn in a TUI around
-the `alacritty_terminal` grid. The active tab's `Term` grid is rendered as the main surface; the
-chrome (tabs/palette/status) is ratatui widgets. Keyboard-first, tmux-style prefix keys.
+The shell is a **standalone native window**: winit owns the window + input event loop, softbuffer
+provides a CPU-side framebuffer, and ab_glyph rasterizes glyphs onto it. `draw_grid` in `render.rs`
+walks the active `alacritty_terminal` `Term` grid and paints (cell) → (char, fg, bg) ARGB pixels.
+The chrome (tab bar, status line, palette/overlays, find bar) is drawn in the same buffer by the
+same rasterizer — no host terminal is involved. A legacy **ratatui** TUI survives only as the
+`--tui` fallback for headless/SSH use.
+
+**Theme.** Grid colors (ANSI 16, foreground, background, cursor, selection) come from a config
+`[theme]` block in config.toml, resolved into a `Theme`/`Colors` struct at startup and passed into
+the render path. Your personal palette overrides the built-in defaults per-tab, exactly as alacritty
+does.
 
 ## 8. Concurrency (DECIDED — initial)
 
@@ -106,13 +114,16 @@ transport threads.
 ## 9. The multilayer build (bottom → top)
 
 1. `engines` — 12 engine definitions (name, CLI command, colors).
-2. `session` — one `Term` + transport + its input/output channel.
-3. `transport` — `LocalPtyTransport` (alacritty PTY) and `TmuxTransport` (real tmux pane,
-   control-mode, proven end-to-end). `Box<dyn Transport>` per session; a remote tunnel-backed
-   impl slots in behind the same trait. (Same `Term` surface.)
-4. `app` — `Vec<Tab>`, active index, palette index, key dispatch.
-5. `tui` — ratatui shell drawing tabs/palette/status + the active `Term` grid.
-6. remote — the tunnel-backed transport (harness e2ee, `machineId`, tmux pane@host).
+2. `config` — TOML config (font_px, default_engine, font_path, scrollback_cap, start_cwd, theme).
+3. `restore` — persistence gates: session tabs/names, muted tabs, scrollback, window geometry.
+4. `session` — one `Term` + transport + its input/output channel.
+5. `transport` — `LocalPtyTransport` (alacritty PTY), `TmuxTransport` (real tmux pane,
+   control-mode, proven end-to-end), and `TunnelTransport` (harness pane-relay). `Box<dyn
+   Transport>` per session; remote = the same trait with a different byte source.
+6. `render` — draws the `Term` grid + chrome into the framebuffer (theme-aware).
+7. `app` — `Vec<Tab>`, active index, overlay state, key dispatch.
+8. `native` — winit window/event loop wiring the above; `tui` is the `--tui` fallback.
+9. remote — the tunnel-backed transport (harness e2ee, `machineId`, tmux pane@host).
 
 ## 10. Remote pane@host attach — current state
 
