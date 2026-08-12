@@ -84,7 +84,9 @@ Backgrounded tabs that keep producing output are flagged with a magnitude badge 
 (e.g. `!43` — how many new lines since you last looked). Muted tabs show a dim `M` instead.
 A tab that rings its terminal bell (a long agent run finishing) shows a short-lived `🔔` badge and
 nudges once with a notification when it isn't focused. Pane-backed (non-local) tabs append `@host`
-so a fleet diver reads where each session runs without hovering.
+so a fleet diver reads where each session runs without hovering. The tab bar's right edge shows a
+fleet-triage count (`↓2` panes down/reconnecting in red, `!3` busy) when either is non-zero, so a
+quiet fleet still advertises that something needs attention.
 
 ## Config
 

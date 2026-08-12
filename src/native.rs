@@ -29,6 +29,8 @@ use crate::session::TermSize;
 /// Chromeless text colors (macOS style).
 const CHROME_FG: (u8, u8, u8) = (0xcc, 0xcc, 0xcc);
 const CHROME_DIM: (u8, u8, u8) = (0x66, 0x66, 0x66);
+/// Muted red for the fleet-triage "N panes down" count — a host went dark, not a busy signal.
+const CHROME_ERR: (u8, u8, u8) = (0xf0, 0x6a, 0x6a);
 const WHITE: (u8, u8, u8) = (0xff, 0xff, 0xff);
 
 /// One fleet-search hit: which tab (index into `app.tabs`), the grid line in that session's
@@ -1071,6 +1073,41 @@ impl Application {
                     }
                     break;
                 }
+            }
+            // Fleet triage count, right edge: `↓N` panes down/reconnecting and `!M` busy, so when
+            // the fleet is quiet (no per-tab badges, no notifications firing) a diver still sees at
+            // a glance that 2 machines went dark or 3 agents are producing. Only shown when non-zero
+            // (a fully-healthy, idle fleet draws nothing — no chrome noise). The active tab is
+            // excluded from the busy count as it's what we're looking at.
+            let down = self
+                .app
+                .tabs
+                .iter()
+                .filter(|s| !s.alive() && s.kind() != "pty")
+                .count();
+            let busy = activity
+                .iter()
+                .enumerate()
+                .filter(|&(i, &b)| b && i != self.app.active)
+                .count();
+            if down > 0 || busy > 0 {
+                let mut triage = String::new();
+                if down > 0 {
+                    triage += &format!("↓{down} ");
+                }
+                if busy > 0 {
+                    triage += &format!("!{busy} ");
+                }
+                draw_text(
+                    fb,
+                    &mut self.cache,
+                    &triage,
+                    fb.width
+                        .saturating_sub((triage.chars().count() * self.cell_w as usize) + 24),
+                    tab_base,
+                    self.font_px,
+                    if down > 0 { CHROME_ERR } else { CHROME_DIM },
+                );
             }
         } // end if self.focus (tab bar)
 
