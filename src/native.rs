@@ -492,6 +492,9 @@ impl Application {
             let live = s.live_title().unwrap_or_else(|| s.meta.title.clone());
             let head = s.meta.name.clone().unwrap_or_else(|| s.meta.engine.clone());
             info = format!(" {} · {} · {} · [{} {}]", s.meta.host, head, live, s.kind(), link);
+            // Show how many scrollback lines this session has accumulated, so a diver monitoring a
+            // long agent run sees growth at a glance without entering the tab.
+            info += &format!(" · {} ln", s.history_len());
         }
         // Link-health badge for the whole fleet (refreshed on the throttled reconnect sweep): a
         // diver wants to know the e2ee tunnel to the harness daemon is up without opening the panel.
