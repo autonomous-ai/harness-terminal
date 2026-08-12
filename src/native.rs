@@ -1252,8 +1252,22 @@ impl Application {
             let sel = row == self.app.selected;
             let color = if sel { WHITE } else { CHROME_DIM };
             let name = s.meta.name.clone().unwrap_or_else(|| s.meta.engine.clone());
+            // Compact status flags so a jump carries context: live/pin/mute next to the name.
+            let live = if s.alive() { "" } else { "○" };
+            let pin = if self.pinned.get(i).copied().unwrap_or(false) {
+                "🔒"
+            } else {
+                " "
+            };
+            let mute = if self.muted.get(i).copied().unwrap_or(false) {
+                "M"
+            } else {
+                " "
+            };
+            let flags = format!("{live}{pin}{mute}");
             let line = format!(
-                "  {} · {} · {}  {}",
+                "  {} {} · {} · {}  {}",
+                flags,
                 s.meta.host,
                 name,
                 s.meta.title,
