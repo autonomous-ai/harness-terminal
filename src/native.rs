@@ -112,12 +112,17 @@ struct Application {
     /// not focused. `None` until a tab has been sampled once (so a freshly-spawned tab doesn't
     /// immediately badge).
     seen_history: Vec<usize>,
+    /// Per-tab: whether a backgrounded-output notification has ALREADY fired since the tab last went
+    /// quiet. Reset when the tab is focused (looked at) or stops growing, so each silent→busy
+    /// transition nudges the user exactly once.
+    notified: Vec<bool>,
 }
 
 impl Application {
     fn new(app: App) -> Self {
         let base_font = crate::config::Config::load().font_px as f32;
-        let seen_history = vec![usize::MAX; app.tabs.len()];
+        let tab_count = app.tabs.len();
+        let seen_history = vec![usize::MAX; tab_count];
         Application {
             window: None,
             context: None,
@@ -153,6 +158,7 @@ impl Application {
             zoom: crate::restore::load_zoom(),
             base_font,
             seen_history,
+            notified: vec![false; tab_count],
         }
     }
 
@@ -184,17 +190,26 @@ impl Application {
     fn activity_flags(&mut self) -> Vec<bool> {
         let n = self.app.tabs.len();
         self.seen_history.resize(n, usize::MAX);
+        self.notified.resize(n, false);
         let mut flags = vec![false; n];
         for (i, s) in self.app.tabs.iter().enumerate() {
             if i == self.app.active {
-                // We're looking at it now: re-baseline and don't flag.
+                // We're looking at it now: re-baseline, don't flag, and reset any pending nudge.
                 self.seen_history[i] = s.history_len();
+                self.notified[i] = false;
                 continue;
             }
             let len = s.history_len();
             let grew = self.seen_history[i] != usize::MAX && len > self.seen_history[i];
             self.seen_history[i] = len;
             flags[i] = grew;
+            // Fire a one-shot OS notification the first time a backgrounded agent goes busy, so a
+            // diver is nudged without having to watch the badge. Once the tab is looked at (or it
+            // settles), `notified` is reset and the next transition nags again.
+            if grew && !self.notified[i] {
+                self.notified[i] = true;
+                notify_busy(&s.meta.engine, &s.meta.host, &s.meta.name);
+            }
         }
         flags
     }
@@ -1846,6 +1861,24 @@ impl ApplicationHandler for Application {
             w.request_redraw();
         }
     }
+}
+
+/// One-shot macOS notification that a backgrounded agent session went busy (produced new output).
+/// Shells out to `osascript` — no extra crate dependency, and the terminal already assumes macOS.
+/// Best-effort: a missing/denied osascript (rare, headless) must not touch the terminal.
+fn notify_busy(engine: &str, host: &str, name: &Option<String>) {
+    let label = name.as_deref().unwrap_or(engine);
+    let title = format!("{label} · {host} — busy");
+    let body = format!("Session {engine}@{host} produced new output.");
+    let script = format!(
+        "display notification \"{body}\" with title \"{title}\""
+    );
+    let _ = std::process::Command::new("osascript")
+        .arg("-e")
+        .arg(script)
+        .stdout(std::process::Stdio::null())
+        .stderr(std::process::Stdio::null())
+        .spawn();
 }
 
 /// Entry point: create the native window and run the event loop.
