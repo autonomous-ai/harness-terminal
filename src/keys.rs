@@ -17,6 +17,7 @@ pub const ACTIONS: &[(&str, &str)] = &[
     ("fleet", "s"),
     ("goto_tab0", "c"),
     ("next_busy", "o"),
+    ("next_quiet", "z"),
     ("next_down", "Q"),
     ("mute", "m"),
     ("last_window", "l"),

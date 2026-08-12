@@ -6,6 +6,11 @@ entries record user-visible and architectural changes since the last tagged mile
 ## Unreleased / 0.1.0 (in progress)
 
 ### Added
+- **Quiet ("awaiting-you") signal** — tracks when each tab last produced output and counts a live,
+  backgrounded, unprotected tab sitting silent past a threshold as quiet (likely done / parked
+  waiting on your input). Shown as a `⌛N` fleet-triage count and a `prefix+z` jump to the next
+  quiet tab, with a `silence` age row in `prefix+i` info. Threshold via `quiet_after_secs`
+  config (default 120s). Complements busy: `!M` = producing, `⌛N` = finished/stalled.
 - **Configurable color theme** — `[theme]` / `[theme.ansi]` in `config.toml` override the
   foreground, background, cursor, selection, copy-cursor, and the 16 ANSI colors. Absent theme =
   exact built-in defaults; sparse `[theme.ansi]` maps override only the listed entries.

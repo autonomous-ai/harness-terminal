@@ -32,6 +32,12 @@ pub struct Config {
     /// binary was launched. Absent/empty = use the app's current working directory.
     #[serde(default)]
     pub start_cwd: Option<String>,
+    /// How many seconds a live, backgrounded, unprotected tab must sit without producing output
+    /// before it counts as "quiet" (a likely-done / waiting-for-input signal) in the fleet triage
+    /// and `prefix+b` jump. Absent = 120s. Large values damp a chatty fleet; small values surface
+    /// a stuck run faster.
+    #[serde(default)]
+    pub quiet_after_secs: Option<u64>,
     /// Optional color theme. Absent (or a broken `[theme]` block) keeps the built-in palette.
     #[serde(default)]
     pub theme: Option<Theme>,
@@ -137,6 +143,7 @@ impl Default for Config {
             font_path: None,
             scrollback_cap: None,
             start_cwd: None,
+            quiet_after_secs: None,
             theme: None,
             keybindings: None,
         }
@@ -195,6 +202,15 @@ mod tests {
         assert_eq!(c.scrollback_cap, Some(1_048_576));
         let d: Config = toml::from_str("font_px = 14").unwrap();
         assert_eq!(d.scrollback_cap, None);
+    }
+
+    /// A quiet threshold round-trips; absent falls back to None (default 120s in the UI).
+    #[test]
+    fn quiet_after_secs_roundtrips() {
+        let c: Config = toml::from_str("quiet_after_secs = 60").unwrap();
+        assert_eq!(c.quiet_after_secs, Some(60));
+        let d: Config = toml::from_str("font_px = 14").unwrap();
+        assert_eq!(d.quiet_after_secs, None);
     }
 
     /// A start-working-directory round-trips; absent falls back to None (app cwd).

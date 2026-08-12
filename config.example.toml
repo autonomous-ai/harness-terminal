@@ -21,6 +21,11 @@ default_engine = "claude"
 # launched. Leave unset to use the app's cwd (or set a per-tab dir in prefix+n).
 # start_cwd = "/Users/you/dev/myrepo"
 
+# A live, backgrounded, unprotected tab that sits silent this many seconds counts
+# as "quiet" (likely done / waiting on your input) in the fleet triage (`⌛N`) and
+# the prefix+z jump. Default 120.
+# quiet_after_secs = 120
+
 # Optional color theme. Every entry is optional — unset values keep the built-in
 # palette, so a partial block works. Colors are [r, g, b], each 0-255.
 # [theme]
@@ -52,7 +57,7 @@ default_engine = "claude"
 #
 # Action names (with their defaults):
 #   palette "/"  new_session "n"  remote_attach "r"  local_shell "t"
-#   quit "q"  fleet "s"  goto_tab0 "c"  next_busy "o"  mute "m"
+#   quit "q"  fleet "s"  goto_tab0 "c"  next_busy "o"  next_quiet "z"  mute "m"
 #   last_window "l"  paste "p"  broadcast "a"  close_tab "x"
 #   copy_scrollback "d"  export_scrollback "w"  copy_identity "j"  copy_fleet "E"  peek "y"  undo_close "u"
 #   duplicate "k"  pin "A"  next_pinned "P"  next_down "Q"  reconnect "R"  destroy "D"

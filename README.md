@@ -64,6 +64,7 @@ The prefix is `Ctrl+Space` (tmux-style), then a command:
 | `Ctrl+Space` `D` | kill the active tab's pane (destroy the remote tmux session) |
 | `Ctrl+Space` `?` | help (full keybinding reference) |
 | `Ctrl+Space` `o` | jump to the next busy (produced-output) tab |
+| `Ctrl+Space` `z` | jump to the next quiet (done/awaiting-input) tab |
 | `Ctrl+Space` `Q` | jump to the next down/reconnecting tab |
 | `Ctrl+Space` `l` | flip back to the previous tab |
 | `Ctrl+Space` `i` | show the active tab's info (kind, host, task, size, state) |
@@ -87,8 +88,8 @@ A tab that rings its terminal bell (a long agent run finishing) shows a short-li
 nudges once with a notification when it isn't focused. Pane-backed (non-local) tabs append `@host`
 so a fleet diver reads where each session runs without hovering. A down pane with input you typed
 while it was dead shows `⏳N` (bytes staged to flush on reconnect). The tab bar's right edge shows a
-fleet-triage count (`↓2` panes down/reconnecting in red, `!3` busy, `⏳N` queued) when any is
-non-zero, so a quiet fleet still advertises that something needs attention.
+fleet-triage count (`↓2` panes down/reconnecting in red, `!3` busy, `⌛2` quiet/done agents, `⏳N`
+queued) when any is non-zero, so a quiet fleet still advertises that something needs attention.
 
 ## Config
 
@@ -104,6 +105,7 @@ default_engine = "claude"   # engine the new-session picker starts on
 font_path = ""              # optional TTF/OTF monospace font
 scrollback_cap = 262144     # cap on persisted per-tab scrollback (bytes)
 start_cwd = ""              # dir new local tabs open in
+quiet_after_secs = 120      # silent this long (backgrounded, live) -> counted quiet/"awaiting-you"
 
 [theme]                     # optional: entries overrides, the rest keep defaults
 foreground = [234, 234, 234]
@@ -146,7 +148,7 @@ mute = "v"          # prefix+v toggles mute
 ```
 
 Action names: `palette`, `new_session`, `remote_attach`, `local_shell`, `quit`, `fleet`,
-`goto_tab0`, `next_busy`, `next_down`, `mute`, `last_window`, `paste`, `broadcast`, `close_tab`,
+`goto_tab0`, `next_busy`, `next_quiet`, `next_down`, `mute`, `last_window`, `paste`, `broadcast`, `close_tab`,
 `copy_scrollback`, `export_scrollback`, `copy_identity`, `copy_fleet`, `peek`, `undo_close`, `duplicate`, `page_up`, `scroll_bottom`,
 `search`, `search_all`, `move_left`, `move_right`, `copy_mode`, `help`, `command_palette`,
 `rename`, `session_info`, `toggle_focus`, `pin`, `next_pinned`, `reconnect`, `destroy`. The digit keys `1-9` / `0` (tab switching) and `Tab`

@@ -232,6 +232,10 @@ struct Application {
     /// not focused. `None` until a tab has been sampled once (so a freshly-spawned tab doesn't
     /// immediately badge).
     seen_history: Vec<usize>,
+    /// Monotonic instant each tab last produced output (as observed by `activity_flags` — a grown
+    /// scrollback while backgrounded). The focused tab is never stamped, so the tab you're actively
+    /// reading never counts as "quiet". Feeds the quiet/waiting triage count and `prefix+b`.
+    last_output: Vec<std::time::Instant>,
     /// A transient status-line toast (text, shown-at) for one-shot confirmations like an export
     /// path. Displayed for a couple seconds, then fades on its own. None = no toast.
     flash: Option<(String, std::time::Instant)>,
@@ -275,6 +279,11 @@ impl Application {
         };
         let tab_count = app.tabs.len();
         let seen_history = vec![usize::MAX; tab_count];
+        // Quiet threshold from config: how long a live, backgrounded, unprotected tab can sit silent
+        // before it counts as waiting-on-input. Fresh tabs start stamped "now" so they never read
+        // instantly quiet on open.
+        let now = std::time::Instant::now();
+        let last_output = vec![now; tab_count];
         // Bring back any tabs the user muted last session (prefix+m) so they stay muted across a
         // restart instead of nagging again the moment the window reopens.
         let mut muted = vec![false; tab_count];
@@ -351,6 +360,7 @@ impl Application {
             zoom: crate::restore::load_zoom(),
             base_font,
             seen_history,
+            last_output,
             notified: vec![false; tab_count],
             flash: None,
             peek_sel: 0,
@@ -512,6 +522,12 @@ impl Application {
             let grew = self.seen_history[i] != usize::MAX && len > self.seen_history[i];
             self.grew_delta[i] = len.saturating_sub(self.seen_history[i]);
             self.seen_history[i] = len;
+            if grew {
+                // This is genuine fresh output from a session we're not looking at — a timestamp of
+                // "last did something." The focused tab is never stamped (it can't reach this arm),
+                // so a tab you're actively reading stays busy-forever, never quiet.
+                self.last_output[i] = std::time::Instant::now();
+            }
             flags[i] = grew;
             // A muted tab is intentionally ignored: no busy badge, no OS notification. It still
             // feeds its seen-history so it isn't flagged the moment it's unmuted.
@@ -768,6 +784,77 @@ impl Application {
         for step in 1..=n {
             let i = (self.app.active + step) % n;
             if flags[i] {
+                self.set_active(i);
+                return;
+            }
+        }
+    }
+
+    /// Which live, backgrounded, unprotected tabs have sat silent past the quiet threshold — the
+    /// inverse of `activity_flags`'s busy. A session that's been quiet this long is almost certainly
+    /// done (or paused at an input prompt) and waiting on you, so it's worth the triage count's
+    /// `⌛N`. The focused tab, dead tabs, and pinned/muted tabs (deliberately shielded) are excluded;
+    /// a tab is only counted once its history has been sampled AND it has actually sat idle.
+    fn quiet_flags(&self) -> (bool, usize, std::time::Duration) {
+        let present = self.seen_history.len() == self.app.tabs.len();
+        let threshold = std::time::Duration::from_secs(
+            crate::config::Config::load()
+                .quiet_after_secs
+                .unwrap_or(120),
+        );
+        let now = std::time::Instant::now();
+        let mut any = false;
+        let mut count = 0;
+        let mut max_idle = std::time::Duration::ZERO;
+        for (i, s) in self.app.tabs.iter().enumerate() {
+            let live = s.alive() && s.kind() != "pty";
+            let watched = i == self.app.active;
+            let shielded = self.pinned.get(i).copied().unwrap_or(false)
+                || self.muted.get(i).copied().unwrap_or(false);
+            let sampled = present && self.seen_history[i] != usize::MAX;
+            if !(live && !watched && !shielded && sampled) {
+                continue;
+            }
+            let idle = now - self.last_output[i];
+            if idle >= threshold {
+                any = true;
+                count += 1;
+                if idle > max_idle {
+                    max_idle = idle;
+                }
+            }
+        }
+        (any, count, max_idle)
+    }
+
+    /// `prefix+b`: jump to the next tab whose live session has gone quiet (sat silent past the
+    /// quiet threshold — likely done, or parked at an input prompt waiting on you), wrapping.
+    /// Complements `next_busy`/`next_down`: busy means "just produced output", quiet means
+    /// "finished/stalled — needs a look". No-op when no tab is quiet.
+    fn next_quiet(&mut self) {
+        let present = self.seen_history.len() == self.app.tabs.len();
+        let threshold = std::time::Duration::from_secs(
+            crate::config::Config::load()
+                .quiet_after_secs
+                .unwrap_or(120),
+        );
+        let n = self.app.tabs.len();
+        if n == 0 {
+            return;
+        }
+        for step in 1..=n {
+            let i = (self.app.active + step) % n;
+            let s = &self.app.tabs[i];
+            let live = s.alive() && s.kind() != "pty";
+            let watched = i == self.app.active;
+            let shielded = self.pinned.get(i).copied().unwrap_or(false)
+                || self.muted.get(i).copied().unwrap_or(false);
+            let sampled = present && self.seen_history[i] != usize::MAX;
+            if !(live && !watched && !shielded && sampled) {
+                continue;
+            }
+            let idle = std::time::Instant::now() - self.last_output[i];
+            if idle >= threshold {
                 self.set_active(i);
                 return;
             }
@@ -1169,7 +1256,11 @@ impl Application {
             // Queued type-ahead across down panes (sum of staged bytes) — a host coming back with
             // parked input deserves the triage's attention too.
             let queued: usize = self.app.tabs.iter().map(|s| s.pending_bytes()).sum();
-            if down > 0 || busy > 0 || queued > 0 {
+            // Quiet (not recently-produced-output) live sessions — the inverse of busy: a session
+            // that's sat silent past the threshold is likely done / parked waiting on you. Shown as
+            // a dim `⌛N` alongside busy's `!M` so the two triage counters read together.
+            let (any_quiet, quiet_n, _) = self.quiet_flags();
+            if down > 0 || busy > 0 || queued > 0 || any_quiet {
                 let mut triage = String::new();
                 if down > 0 {
                     triage += &format!("↓{down} ");
@@ -1179,6 +1270,9 @@ impl Application {
                 }
                 if queued > 0 {
                     triage += &format!("⏳{queued} ");
+                }
+                if any_quiet {
+                    triage += &format!("⌛{quiet_n} ");
                 }
                 draw_text(
                     fb,
@@ -1852,6 +1946,7 @@ impl Application {
             ("broadcast", "broadcast a line to all sessions"),
             ("paste", "paste clipboard (bracketed)"),
             ("next_busy", "jump to next busy tab"),
+            ("next_quiet", "jump to next quiet (awaiting-you) tab"),
             ("next_down", "jump to next down/reconnecting tab"),
             ("next_pinned", "jump to next pinned tab"),
             ("reconnect", "force reconnect active tab (bypass backoff)"),
@@ -1935,6 +2030,18 @@ impl Application {
                 None => "live".to_string(),
             }
         ));
+        // Idle age — how long this session has sat without producing output. Negative/zero means
+        // it produced output this very frame (or we never sampled it); otherwise the readable time.
+        if s.alive() && s.kind() != "pty" {
+            let now = std::time::Instant::now();
+            let idle = now.saturating_duration_since(self.last_output[self.app.active]);
+            let idle_txt = if idle.is_zero() || self.seen_history[self.app.active] == usize::MAX {
+                "now".to_string()
+            } else {
+                format!("quiet {}", fmt_duration(idle))
+            };
+            rows.push(format!("  silence    {idle_txt}"));
+        }
         // Staged type-ahead (visible in the bar too): how much input is parked to flush on reconnect.
         let queued = s.pending_bytes();
         if queued > 0 {
@@ -2878,6 +2985,7 @@ impl Application {
                     }
                 }
                 Some("next_busy") => self.next_busy(),
+                Some("next_quiet") => self.next_quiet(),
                 Some("next_down") => self.next_down(),
                 Some("mute") => self.toggle_mute_active(),
                 Some("pin") => self.toggle_pin_active(),
@@ -3573,6 +3681,22 @@ impl Application {
 /// The bytes sent to every session when a broadcast line is committed: the query plus a trailing
 /// newline. A blank query sends nothing (never broadcast a bare newline). Shared free function so
 /// the fan-out formatting is unit-testable without building real `Session`s.
+/// Format a monotonic duration in the most readable compact unit: under a minute as `%ds`,
+/// otherwise `%dm`, `%dh`, or `%dd`. Used for a session's quiet ("idle") age — the readable
+/// inverse of "produced output just now".
+fn fmt_duration(d: std::time::Duration) -> String {
+    let secs = d.as_secs();
+    if secs < 60 {
+        format!("{secs}s")
+    } else if secs < 3600 {
+        format!("{}m", secs / 60)
+    } else if secs < 86400 {
+        format!("{}h", secs / 3600)
+    } else {
+        format!("{}d", secs / 86400)
+    }
+}
+
 fn broadcast_bytes(q: &str) -> Vec<u8> {
     if q.is_empty() {
         Vec::new()
@@ -4373,7 +4497,7 @@ pub fn run(app: App) -> Result<(), Box<dyn std::error::Error>> {
 mod tests {
     use super::{
         argb_to_rgb, broadcast_bytes, collect_fleet_matches, engine_accent, expand_click_word,
-        group_notifications, host_color, join_labels, recall_index, FleetMatch,
+        fmt_duration, group_notifications, host_color, join_labels, recall_index, FleetMatch,
     };
 
     use std::sync::Arc;
@@ -4598,5 +4722,19 @@ mod tests {
         // Stepping newer from the oldest wraps to the newest.
         assert_eq!(recall_index(n, 1, Some(0)), 1);
         assert_eq!(recall_index(n, 1, Some(2)), 0);
+    }
+
+    /// Idle-age formatting stays compact and readable at every scale — seconds, minutes, hours,
+    /// days — never a raw millisecond dump.
+    #[test]
+    fn fmt_duration_readable_units() {
+        let d = |s: u64| std::time::Duration::from_secs(s);
+        assert_eq!(fmt_duration(d(0)), "0s");
+        assert_eq!(fmt_duration(d(59)), "59s");
+        assert_eq!(fmt_duration(d(60)), "1m");
+        assert_eq!(fmt_duration(d(3599)), "59m");
+        assert_eq!(fmt_duration(d(3600)), "1h");
+        assert_eq!(fmt_duration(d(23 * 3600)), "23h");
+        assert_eq!(fmt_duration(d(24 * 3600)), "1d");
     }
 }
