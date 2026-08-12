@@ -59,6 +59,7 @@ The prefix is `Ctrl+Space` (tmux-style), then a command:
 | `Ctrl+Space` `u` | undo close (reopen the last closed tab) |
 | `Ctrl+Space` `k` | duplicate the active tab (fork the same engine@host) |
 | `Ctrl+Space` `m` | mute/unmute the active tab (no more busy nagging) |
+| `Ctrl+Space` `M` | toggle do-not-disturb: mute ALL OS notifications fleet-wide (in-bar badges stay) |
 | `Ctrl+Space` `A` | pin/unpin the active tab (won't close with `x` until unpinned) |
 | `Ctrl+Space` `P` | jump to the next pinned tab |
 | `Ctrl+Space` `R` | force-reconnect a dead tab now (bypasses the auto-retry backoff) |
@@ -151,7 +152,7 @@ mute = "v"          # prefix+v toggles mute
 ```
 
 Action names: `palette`, `new_session`, `remote_attach`, `local_shell`, `quit`, `fleet`,
-`goto_tab0`, `next_busy`, `next_quiet`, `next_down`, `next_host`, `mute`, `last_window`, `paste`, `broadcast`, `close_tab`,
+`goto_tab0`, `next_busy`, `next_quiet`, `next_down`, `next_host`, `dnd`, `mute`, `last_window`, `paste`, `broadcast`, `close_tab`,
 `copy_scrollback`, `export_scrollback`, `copy_identity`, `copy_fleet`, `peek`, `fleet_grid`, `undo_close`, `duplicate`, `page_up`, `scroll_bottom`,
 `search`, `search_all`, `move_left`, `move_right`, `copy_mode`, `help`, `command_palette`,
 `rename`, `session_info`, `toggle_focus`, `pin`, `next_pinned`, `reconnect`, `destroy`, `interrupt`. The digit keys `1-9` / `0` (tab switching) and `Tab`

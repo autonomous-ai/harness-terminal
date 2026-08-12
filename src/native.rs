@@ -67,6 +67,7 @@ enum PaletteAction {
     NextPinned,
     NextDown,
     NextHost,
+    Dnd,
     Reconnect,
     Destroy,
     Interrupt,
@@ -99,6 +100,7 @@ impl PaletteAction {
             ("jump to next pinned tab", NextPinned),
             ("jump to next down/reconnecting tab", NextDown),
             ("jump to next host (page fleet by machine)", NextHost),
+            ("toggle do-not-disturb (mute all OS notifications)", Dnd),
             ("force reconnect active tab (bypass backoff)", Reconnect),
             ("kill active tab's pane (destroy remote session)", Destroy),
             ("send Ctrl-C to active tab (stop the run)", Interrupt),
@@ -167,6 +169,10 @@ struct Application {
     /// osascript popup per tab (a `broadcast` to every host would otherwise fan out N launches).
     /// Muted tabs are never queued. Emptied each frame by `flush_notifications`.
     pending_notify: Vec<(String, usize)>,
+    /// Global Do-Not-Disturb (prefix+M): while on, NO OS notifications are fired fleet-wide — neither
+    /// the backgrounded-busy nag nor the terminal-bell popup. In-bar busy badges stay (they're not
+    /// interruptions), just no popups. A single bool so nothing else in the fleet state shifts.
+    dnd: bool,
     /// The currently-focused search match (absolute line, col, width); recomputed on each query
     /// change / Enter and passed to draw_grid for highlighting.
     find_hit: Option<crate::render::Find>,
@@ -380,6 +386,7 @@ impl Application {
             quit_requested: false,
             key_action,
             focus: false,
+            dnd: false,
             bell_until: vec![None; tab_count],
             hover_tab: None,
             drag_tab: None,
@@ -448,6 +455,12 @@ impl Application {
     /// host (which produces output in N tabs at once) fans out as a single notification instead of N
     /// osascript launches.
     fn queue_notify(&mut self, kind: &str, tab: usize) {
+        // Global Do-Not-Disturb swallows every fleet notification (busy nag + bell popup) at the
+        // source, so nothing even reaches the merge/launch path. In-bar badges are unaffected — a
+        // diver who mutes popups still sees the `!N`/🔔 in the bar to act on later.
+        if self.dnd {
+            return;
+        }
         self.pending_notify.push((kind.to_string(), tab));
     }
 
@@ -962,6 +975,20 @@ impl Application {
         }
     }
 
+    /// `prefix+M`: toggle global Do-Not-Disturb. When on, no OS notifications fire fleet-wide — the
+    /// backgrounded-busy nag and the terminal-bell popup are both swallowed at `queue_notify`. In-bar
+    /// busy/bell badges still render, so a diver who mutes popups can still see, later, that a tab
+    /// rang. Toggle again to restore notifications. The status line shows `🔕` while on.
+    fn toggle_dnd(&mut self) {
+        self.dnd = !self.dnd;
+        let state = if self.dnd {
+            "do-not-disturb ON"
+        } else {
+            "notifications restored"
+        };
+        self.flash = Some((state.to_string(), std::time::Instant::now()));
+    }
+
     /// `prefix+!`: send an interrupt (Ctrl-C) to the active session so a diver can stop a runaway agent
     /// run without dropping into its raw terminal. `Session::write` handles the typing — buffered
     /// into `pending` if the transport is momentarily down, flushed on reconnect.
@@ -1328,7 +1355,7 @@ impl Application {
             // that's sat silent past the threshold is likely done / parked waiting on you. Shown as
             // a dim `⌛N` alongside busy's `!M` so the two triage counters read together.
             let (any_quiet, quiet_n, _) = self.quiet_flags();
-            if down > 0 || busy > 0 || queued > 0 || any_quiet {
+            if down > 0 || busy > 0 || queued > 0 || any_quiet || self.dnd {
                 let mut triage = String::new();
                 if down > 0 {
                     triage += &format!("↓{down} ");
@@ -1341,6 +1368,9 @@ impl Application {
                 }
                 if any_quiet {
                     triage += &format!("⌛{quiet_n} ");
+                }
+                if self.dnd {
+                    triage += "🔕 ";
                 }
                 draw_text(
                     fb,
@@ -2019,6 +2049,7 @@ impl Application {
             ("next_down", "jump to next down/reconnecting tab"),
             ("next_pinned", "jump to next pinned tab"),
             ("next_host", "jump to next host (page the fleet by machine)"),
+            ("dnd", "toggle do-not-disturb (mute all OS notifications)"),
             ("reconnect", "force reconnect active tab (bypass backoff)"),
             ("destroy", "kill active tab's remote pane"),
             ("interrupt", "send Ctrl-C to active tab (stop the run)"),
@@ -2904,6 +2935,7 @@ impl Application {
             NextPinned => self.next_pinned(),
             NextDown => self.next_down(),
             NextHost => self.next_host(),
+            Dnd => self.toggle_dnd(),
             Reconnect => self.reconnect_active(),
             Destroy => self.destroy_active(),
             Interrupt => self.interrupt_active(),
@@ -3210,6 +3242,7 @@ impl Application {
                 Some("next_quiet") => self.next_quiet(),
                 Some("next_down") => self.next_down(),
                 Some("next_host") => self.next_host(),
+                Some("dnd") => self.toggle_dnd(),
                 Some("mute") => self.toggle_mute_active(),
                 Some("interrupt") => self.interrupt_active(),
                 Some("pin") => self.toggle_pin_active(),

@@ -14,6 +14,10 @@ entries record user-visible and architectural changes since the last tagged mile
   in tiled panes that update each frame, so a diver sees what all agents are doing at once instead
   of hopping tab to tab. Up/Down/1-9 focus a tile, Enter dives into it; per-tile `@host` headers
   and the active tile's white border keep orientation. Also reachable from the command palette.
+- **Do-Not-Disturb (`prefix+M`)** — flip a fleet-wide switch that swallows every OS notification
+  (backgrounded-busy nag and terminal-bell popup) at the source. In-bar `!N`/🔔 badges still render,
+  so a diver who mutes popups can see later that something rang; a `🔕` chip shows in the triage while
+  on. Complements per-tab `mute`, which silences one pane.
 - **Next-host jump (`prefix+H`)** — page the fleet by machine: jump to the first tab of the next
   distinct host after the active one, wrapping, instead of stepping through every pane. For a fleet
   spread across several boxes this turns N panes into N hosts of stops. Also in the command palette.
