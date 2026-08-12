@@ -55,6 +55,7 @@ enum PaletteAction {
     CopyScrollback,
     ExportLog,
     CopyIdentity,
+    CopyFleet,
     Broadcast,
     Peek,
     UndoClose,
@@ -83,6 +84,7 @@ impl PaletteAction {
             ("copy whole scrollback", CopyScrollback),
             ("export scrollback to .log file", ExportLog),
             ("copy session identity (engine@host)", CopyIdentity),
+            ("copy whole fleet summary (all tabs)", CopyFleet),
             ("broadcast a line to all sessions", Broadcast),
             ("peek at all session tails", Peek),
             ("undo close (reopen last)", UndoClose),
@@ -614,6 +616,57 @@ impl Application {
             format!("copied {}@{}", head, s.meta.host),
             std::time::Instant::now(),
         ));
+    }
+
+    /// `prefix+E`: copy a one-line summary of every open tab to the clipboard — the "what's my
+    /// fleet doing right now" gesture. Each row is `●/○ state · engine@host · name · live title`,
+    /// so the clipboard reads as a grep-friendly status dump (ready to paste into a chat or notes).
+    fn copy_fleet(&mut self) {
+        if self.app.tabs.is_empty() {
+            self.flash = Some((
+                "no sessions to summarize".to_string(),
+                std::time::Instant::now(),
+            ));
+            return;
+        }
+        let text = self.fleet_summary_text();
+        if let Ok(mut cb) = arboard::Clipboard::new() {
+            let _ = cb.set_text(text);
+        }
+        self.flash = Some((
+            format!("copied {} sessions to clipboard", self.app.tabs.len()),
+            std::time::Instant::now(),
+        ));
+    }
+
+    /// One line per open tab for the fleet-summary copy: `●/○ engine (N)@host · name · live · ⏳`.
+    fn fleet_summary_text(&self) -> String {
+        let mut lines: Vec<String> = Vec::new();
+        for (i, s) in self.app.tabs.iter().enumerate() {
+            let head = s.meta.name.clone().unwrap_or_else(|| s.meta.engine.clone());
+            let state = if s.alive() { "●" } else { "○" };
+            let live = s
+                .live_title()
+                .map(|t| format!(" · {t}"))
+                .unwrap_or_default();
+            let where_s = if s.kind() == "pty" {
+                String::new()
+            } else {
+                format!("@{}", s.meta.host)
+            };
+            let queued = s.pending_bytes();
+            let queued_s = if queued > 0 {
+                format!(" · ⏳{}B queued", queued)
+            } else {
+                String::new()
+            };
+            lines.push(format!(
+                "{state} {} ({}){where_s} · {head}{live}{queued_s}",
+                s.meta.engine,
+                i + 1
+            ));
+        }
+        lines.join("\n")
     }
 
     /// `prefix+w`: write the active session's whole scrollback to a timestamped text file in the
@@ -1814,6 +1867,7 @@ impl Application {
                 "copy_identity",
                 "copy session identity (engine@host) to clipboard",
             ),
+            ("copy_fleet", "copy whole fleet summary (all tabs)"),
             ("peek", "peek tails of all sessions"),
             ("session_info", "show this tab's info (kind/host/task)"),
             ("toggle_focus", "focus mode (hide tab bar + status)"),
@@ -2500,6 +2554,7 @@ impl Application {
             CopyScrollback => self.copy_whole_scrollback(),
             ExportLog => self.export_scrollback(),
             CopyIdentity => self.copy_identity(),
+            CopyFleet => self.copy_fleet(),
             Broadcast => {
                 // Pre-fill the last-sent line so a repeat command to every host survives; Backspace
                 // clears it if a fresh one is wanted. Targets still reset all-on (safety).
@@ -2854,6 +2909,7 @@ impl Application {
                 Some("copy_scrollback") => self.copy_whole_scrollback(),
                 Some("export_scrollback") => self.export_scrollback(),
                 Some("copy_identity") => self.copy_identity(),
+                Some("copy_fleet") => self.copy_fleet(),
                 Some("peek") => {
                     self.app.overlay = Overlay::Peek;
                     self.peek_sel = 0;

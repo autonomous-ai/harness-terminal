@@ -26,6 +26,7 @@ pub const ACTIONS: &[(&str, &str)] = &[
     ("copy_scrollback", "d"),
     ("export_scrollback", "w"),
     ("copy_identity", "j"),
+    ("copy_fleet", "E"),
     ("peek", "y"),
     ("undo_close", "u"),
     ("duplicate", "k"),
