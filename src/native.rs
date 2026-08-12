@@ -627,6 +627,19 @@ impl Application {
         }
     }
 
+    /// Fork the active tab, preserving its pin state: a pinned clone (prefix+k / palette
+    /// Duplicate) protects the same agent run the original was protecting. No-op for local PTYs.
+    fn duplicate_active_preserving_pin(&mut self) {
+        let was_pinned = self.pinned.get(self.app.active).copied().unwrap_or(false);
+        let before = self.app.tabs.len();
+        self.app.duplicate_active();
+        if was_pinned && self.app.tabs.len() > before {
+            self.pinned.resize(self.app.tabs.len(), false);
+            self.pinned[self.app.tabs.len() - 1] = true;
+            self.save_pin_state();
+        }
+    }
+
     /// `prefix+a` (default key `A`): toggle pin on the active tab. A pinned tab is protected from
     /// accidental close (`x` / prefix+close_tab refuse it with a flash), so a long-running agent a
     /// diver cares about stays until deliberately unpinned. Persists across restarts like mute.
@@ -2172,7 +2185,7 @@ impl Application {
             }
             UndoClose => self.app.reopen_last_closed(),
             Duplicate => {
-                self.app.duplicate_active();
+                self.duplicate_active_preserving_pin();
                 self.flash = Some(("duplicated".to_string(), std::time::Instant::now()));
             }
             SessionInfo => {
@@ -2511,16 +2524,7 @@ impl Application {
                 }
                 Some("undo_close") => self.app.reopen_last_closed(),
                 Some("duplicate") => {
-                    // Forking a pinned session should yield a pinned clone — the new tab protects
-                    // the same agent run the original was protecting.
-                    let was_pinned = self.pinned.get(self.app.active).copied().unwrap_or(false);
-                    let before = self.app.tabs.len();
-                    self.app.duplicate_active();
-                    if was_pinned && self.app.tabs.len() > before {
-                        self.pinned.resize(self.app.tabs.len(), false);
-                        self.pinned[self.app.tabs.len() - 1] = true;
-                        self.save_pin_state();
-                    }
+                    self.duplicate_active_preserving_pin();
                     self.flash = Some(("duplicated".to_string(), std::time::Instant::now()));
                 }
                 Some("page_up") => {
