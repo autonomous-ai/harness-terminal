@@ -203,6 +203,7 @@ fn handle_key_tui(app: &mut App, key: crossterm::event::KeyEvent, in_command: &m
         Overlay::Rename => {}
         Overlay::Broadcast => {} // native-only feature; the TUI fallback ignores it.
         Overlay::Peek => {}      // native-only feature; the TUI fallback ignores it.
+        Overlay::FleetGrid => {} // native-only feature; the TUI fallback ignores it.
         Overlay::CommandPalette => {} // native-only feature; the TUI fallback ignores it.
         Overlay::Info => {}      // native-only feature; the TUI fallback ignores it.
 

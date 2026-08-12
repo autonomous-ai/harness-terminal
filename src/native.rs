@@ -58,6 +58,7 @@ enum PaletteAction {
     CopyFleet,
     Broadcast,
     Peek,
+    FleetGrid,
     UndoClose,
     Duplicate,
     SessionInfo,
@@ -87,6 +88,7 @@ impl PaletteAction {
             ("copy whole fleet summary (all tabs)", CopyFleet),
             ("broadcast a line to all sessions", Broadcast),
             ("peek at all session tails", Peek),
+            ("fleet grid: live tails of every session", FleetGrid),
             ("undo close (reopen last)", UndoClose),
             ("duplicate active tab (fork same engine@host)", Duplicate),
             ("show session info (kind/host/task)", SessionInfo),
@@ -260,6 +262,8 @@ struct Application {
     /// this is Some, drags reorder the tab bar instead of growing a text selection, and release
     /// lands the dragged tab. Clicking a tab (press→release without moving) still switches to it.
     drag_tab: Option<usize>,
+    /// The focused tile in the fleet-grid overlay (prefix+e); Enter dives into this session.
+    grid_sel: usize,
 }
 
 impl Application {
@@ -375,6 +379,7 @@ impl Application {
             bell_until: vec![None; tab_count],
             hover_tab: None,
             drag_tab: None,
+            grid_sel: 0,
         }
     }
 
@@ -1480,6 +1485,7 @@ impl Application {
             Overlay::Rename => self.render_rename(fb),
             Overlay::Broadcast => self.render_broadcast(fb),
             Overlay::Peek => self.render_peek(fb),
+            Overlay::FleetGrid => self.render_fleet_grid(fb),
             Overlay::CommandPalette => self.render_command_palette(fb),
             Overlay::Info => self.render_info(fb),
             Overlay::None => {}
@@ -1964,6 +1970,7 @@ impl Application {
             ),
             ("copy_fleet", "copy whole fleet summary (all tabs)"),
             ("peek", "peek tails of all sessions"),
+            ("fleet_grid", "fleet grid: live tails of every session"),
             ("session_info", "show this tab's info (kind/host/task)"),
             ("toggle_focus", "focus mode (hide tab bar + status)"),
             ("help", "this help"),
@@ -2493,6 +2500,105 @@ impl Application {
     /// Render the peek overlay: a header, then one compact row per session with either the dimmed
     /// tail of every other session folded in and the highlighted row expanded to a ~4-line preview
     /// of its last scrollback lines (WHITE). The selection index is `self.peek_sel`.
+    fn render_fleet_grid(&mut self, fb: &mut Framebuffer) {
+        let (_, line_px) = self.overlay_base_y();
+        let n = self.app.tabs.len();
+        draw_text(
+            fb,
+            &mut self.cache,
+            &format!(
+                "  fleet grid · {} session{} · ↑/↓/1-9 select · Enter dive · Esc close  ",
+                n,
+                if n == 1 { "" } else { "s" }
+            ),
+            32,
+            self.cell_h as usize + 2,
+            self.font_px,
+            WHITE,
+        );
+        if n == 0 {
+            return;
+        }
+        // Clamp the selected tile into range (tabs can close underneath the overlay).
+        self.grid_sel = self.grid_sel.min(n - 1);
+        // Layout the grid. Tile geometry is a full text cell (the grid rows draw just below the
+        // header). Fit as many columns as the window width allows at the active cell width.
+        let gcol = self.cell_w as usize;
+        let grow = self.cell_h as usize;
+        let x0 = 8usize;
+        let y0 = (self.cell_h as usize + 2) + line_px;
+        let inner_w = fb.width.saturating_sub(x0 + 8);
+        // Tile geometry is a full text cell (header + up to 3 tail lines). Fit as many columns as
+        // the window allows; deeper rows simply clip at the window bottom.
+        let cols = (inner_w / (gcol * 12)).max(1).min(n.max(1));
+        let tw = inner_w / cols;
+        let th = grow * 4;
+
+        // We draw the tail with the session's own colors so the overview reads like the real panes.
+        for (idx, s) in self.app.tabs.iter().enumerate() {
+            let (c, r) = (idx % cols, idx / cols);
+            let (tx, ty) = (x0 + c * (tw + 8), y0 + r * (th + 8));
+            if ty + th > fb.height {
+                break;
+            }
+            // A thin highlight border for the focused tile.
+            let selected = idx == self.grid_sel;
+            let border = if selected { WHITE } else { CHROME_DIM };
+            for (bord_x, color) in [(tx, border), (tx + tw.saturating_sub(1), border)] {
+                for yy in ty..ty + th {
+                    fb.set(bord_x, yy, argb(0xff, color.0, color.1, color.2));
+                }
+            }
+            for yy in [ty, ty + th.saturating_sub(1)] {
+                for xx in tx..tx + tw {
+                    fb.set(xx, yy, argb(0xff, border.0, border.1, border.2));
+                }
+            }
+            let head = s.meta.name.clone().unwrap_or_else(|| s.meta.engine.clone());
+            let host = if s.kind() == "pty" {
+                String::new()
+            } else {
+                format!("@{}", s.meta.host)
+            };
+            let header = format!(
+                "  {}{}  {head}{}",
+                idx + 1,
+                host,
+                if selected { " ◄" } else { "" }
+            );
+            draw_text(
+                fb,
+                &mut self.cache,
+                &header,
+                tx + 2,
+                ty + grow,
+                self.font_px,
+                if selected { WHITE } else { CHROME_DIM },
+            );
+            // Live near-tail lines, reversed (tail() is newest-first) so the tile reads top-to-bottom
+            // as a terminal would — newest sits on the bottom row. Uses the grid's own foreground.
+            let mut tail = s.tail(3);
+            tail.reverse();
+            for (k, tl) in tail.iter().enumerate().take(3) {
+                let t = if tl.chars().count() > (tw / gcol).saturating_sub(2) {
+                    let cut: String = tl.chars().take((tw / gcol).saturating_sub(2)).collect();
+                    format!("{cut}…")
+                } else {
+                    tl.clone()
+                };
+                draw_text(
+                    fb,
+                    &mut self.cache,
+                    &t,
+                    tx + 2,
+                    ty + (k + 2) * grow,
+                    self.font_px,
+                    self.colors.fg,
+                );
+            }
+        }
+    }
+
     fn render_peek(&mut self, fb: &mut Framebuffer) {
         let (base_y, line_px) = self.overlay_base_y();
         draw_text(
@@ -2674,6 +2780,10 @@ impl Application {
                 self.app.overlay = Overlay::Peek;
                 self.peek_sel = 0;
                 self.peek_scroll = 0;
+            }
+            FleetGrid => {
+                self.grid_sel = 0;
+                self.app.overlay = Overlay::FleetGrid;
             }
             UndoClose => self.app.reopen_last_closed(),
             Duplicate => {
@@ -2978,6 +3088,10 @@ impl Application {
                         self.app.fleet = st;
                     }
                     self.app.overlay = Overlay::Fleet;
+                }
+                Some("fleet_grid") => {
+                    self.grid_sel = 0;
+                    self.app.overlay = Overlay::FleetGrid;
                 }
                 Some("goto_tab0") => {
                     if !self.app.tabs.is_empty() {
@@ -3464,6 +3578,52 @@ impl Application {
                         }
                         _ => {}
                     },
+                    _ => {}
+                }
+                return;
+            }
+            Overlay::FleetGrid => {
+                match key {
+                    Key::Named(n) => match n {
+                        // A re-computed layout isn't needed per keypress: the first three/down/right
+                        // edges are enough to clamp the selection without a full re-layout.
+                        winit::keyboard::NamedKey::ArrowDown | winit::keyboard::NamedKey::Tab
+                            if !mods.shift_key() =>
+                        {
+                            self.grid_sel =
+                                (self.grid_sel + 1).min(self.app.tabs.len().saturating_sub(1));
+                        }
+                        winit::keyboard::NamedKey::Tab => {
+                            self.grid_sel = self.grid_sel.saturating_sub(1);
+                        }
+                        winit::keyboard::NamedKey::ArrowUp => {
+                            self.grid_sel = self.grid_sel.saturating_sub(1);
+                        }
+                        winit::keyboard::NamedKey::Enter => {
+                            if !self.app.tabs.is_empty() {
+                                self.app.active = self.grid_sel.min(self.app.tabs.len() - 1);
+                                crate::restore::save_active(self.app.active);
+                                self.app.overlay = Overlay::None;
+                            }
+                        }
+                        winit::keyboard::NamedKey::Escape => {
+                            self.app.overlay = Overlay::None;
+                        }
+                        _ => {}
+                    },
+                    // 1-9 jump straight to a tile by session number; a character that maps to a
+                    // session index (1..=9) does the same. Everything else is ignored — it's a
+                    // viewer, not a prompt.
+                    Key::Character(c) => {
+                        if let Some(d) = c.chars().next().and_then(|ch| ch.to_digit(10)) {
+                            if d >= 1 && d <= 9 {
+                                let i = (d - 1) as usize;
+                                if i < self.app.tabs.len() {
+                                    self.grid_sel = i;
+                                }
+                            }
+                        }
+                    }
                     _ => {}
                 }
                 return;

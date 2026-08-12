@@ -51,6 +51,7 @@ The prefix is `Ctrl+Space` (tmux-style), then a command:
 | `Ctrl+Space` `,` | rename the active tab (persisted, shown in tab bar) |
 | `Ctrl+Space` `a` | broadcast a line (per-session checkboxes target it) |
 | `Ctrl+Space` `y` | peek the tail of every session, then jump |
+| `Ctrl+Space` `e` | fleet grid: live tails of every session at once (war-room view) |
 | `Ctrl+Space` `d` | copy the whole scrollback to the clipboard |
 | `Ctrl+Space` `j` | copy the session identity (`engine@host`) to the clipboard |
 | `Ctrl+Space` `E` | copy a one-line summary of every open tab (the fleet, grep-friendly) |
@@ -149,7 +150,7 @@ mute = "v"          # prefix+v toggles mute
 
 Action names: `palette`, `new_session`, `remote_attach`, `local_shell`, `quit`, `fleet`,
 `goto_tab0`, `next_busy`, `next_quiet`, `next_down`, `mute`, `last_window`, `paste`, `broadcast`, `close_tab`,
-`copy_scrollback`, `export_scrollback`, `copy_identity`, `copy_fleet`, `peek`, `undo_close`, `duplicate`, `page_up`, `scroll_bottom`,
+`copy_scrollback`, `export_scrollback`, `copy_identity`, `copy_fleet`, `peek`, `fleet_grid`, `undo_close`, `duplicate`, `page_up`, `scroll_bottom`,
 `search`, `search_all`, `move_left`, `move_right`, `copy_mode`, `help`, `command_palette`,
 `rename`, `session_info`, `toggle_focus`, `pin`, `next_pinned`, `reconnect`, `destroy`. The digit keys `1-9` / `0` (tab switching) and `Tab`
 are not remappable.

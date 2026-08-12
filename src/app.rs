@@ -31,6 +31,9 @@ pub enum Overlay {
     Broadcast,
     /// Peek: a picker of every session with a tail preview of its last lines; Enter jumps to it.
     Peek,
+    /// Fleet grid: a live multi-pane overview (Prefix+E) showing every session's live tail at once —
+    /// a war-room grid. Updates each frame; 1-9 / j / k navigate; Enter dives into the focused tab.
+    FleetGrid,
     /// Command palette: a typed list of named prefix-commands; Enter runs the selected action.
     CommandPalette,
     /// Session info: read-only details about the active tab (kind, host, engine, size, reconnect).

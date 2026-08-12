@@ -10,6 +10,7 @@ use std::collections::BTreeMap;
 /// table is checked, so later entries never shadow earlier ones (each action maps to one key).
 pub const ACTIONS: &[(&str, &str)] = &[
     ("palette", "/"),
+    ("fleet_grid", "e"),
     ("new_session", "n"),
     ("remote_attach", "r"),
     ("local_shell", "t"),

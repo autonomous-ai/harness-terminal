@@ -56,7 +56,7 @@ default_engine = "claude"
 # today's exact behaviour (a no-op).
 #
 # Action names (with their defaults):
-#   palette "/"  new_session "n"  remote_attach "r"  local_shell "t"
+#   palette "/"  new_session "n"  remote_attach "r"  fleet_grid "e"  local_shell "t"
 #   quit "q"  fleet "s"  goto_tab0 "c"  next_busy "o"  next_quiet "z"  mute "m"
 #   last_window "l"  paste "p"  broadcast "a"  close_tab "x"
 #   copy_scrollback "d"  export_scrollback "w"  copy_identity "j"  copy_fleet "E"  peek "y"  undo_close "u"

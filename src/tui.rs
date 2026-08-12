@@ -75,6 +75,7 @@ fn draw_frame(frame: &mut Frame, app: &mut App) {
         Overlay::Rename => {} // native-only overlay; the TUI fallback ignores it.
         Overlay::Broadcast => {} // native-only overlay; the TUI fallback ignores it.
         Overlay::Peek => {} // native-only overlay; the TUI fallback ignores it.
+        Overlay::FleetGrid => {} // native-only overlay; the TUI fallback ignores it.
         Overlay::CommandPalette => {} // native-only overlay; the TUI fallback ignores it.
         Overlay::Info => {} // native-only overlay; the TUI fallback ignores it.
         Overlay::None => {}
