@@ -58,14 +58,15 @@ The prefix is `Ctrl+Space` (tmux-style), then a command:
 | `Ctrl+Space` `?` | help (full keybinding reference) |
 | `Ctrl+Space` `o` | jump to the next busy (produced-output) tab |
 | `Ctrl+Space` `l` | flip back to the previous tab |
-| `1-9` / `Tab` | switch tab |
+| `Ctrl+Space` `i` | show the active tab's info (kind, host, task, size, state) |
+| `1-9` / `0` / `Tab` | switch tab (`0` = last) |
 | `Ctrl+Space` `{` / `}` | move the active tab left / right |
 | `x` / `c` | close tab / jump to tab 0 |
 | `g` / `b` | scroll up a page / jump to bottom |
 | `Ctrl+Enter` | toggle fullscreen |
 | `Ctrl+=` / `Ctrl+-` | font zoom (`Ctrl+0` resets) |
 | `PgUp` / `PgDn` | scrollback |
-| `Cmd`/`Ctrl`+click | open the URL / file path under the cursor |
+| `Cmd`/`Ctrl`+click | open the URL (web / `mailto:` / `tel:`), file path under the cursor |
 | `Alt`+click | move the shell cursor (click-to-move) |
 | `Cmd+C` | copy selection |
 | `Ctrl+Space` `p` | paste clipboard (bracketed) |
@@ -128,4 +129,4 @@ Action names: `palette`, `new_session`, `remote_attach`, `local_shell`, `quit`, 
 `goto_tab0`, `next_busy`, `mute`, `last_window`, `paste`, `broadcast`, `close_tab`,
 `copy_scrollback`, `export_scrollback`, `peek`, `undo_close`, `page_up`, `scroll_bottom`,
 `search`, `search_all`, `move_left`, `move_right`, `copy_mode`, `help`, `command_palette`,
-`rename`. The digit keys `1-9` (tab switching) and `Tab` are not remappable.
+`rename`, `session_info`. The digit keys `1-9` / `0` (tab switching) and `Tab` are not remappable.
