@@ -55,6 +55,7 @@ enum PaletteAction {
     Broadcast,
     Peek,
     UndoClose,
+    SessionInfo,
     Help,
     Quit,
 }
@@ -74,6 +75,7 @@ impl PaletteAction {
             ("broadcast a line to all sessions", Broadcast),
             ("peek at all session tails", Peek),
             ("undo close (reopen last)", UndoClose),
+            ("show session info (kind/host/task)", SessionInfo),
             ("show this help", Help),
             ("quit", Quit),
         ]
@@ -873,6 +875,7 @@ impl Application {
             Overlay::Broadcast => self.render_broadcast(fb),
             Overlay::Peek => self.render_peek(fb),
             Overlay::CommandPalette => self.render_command_palette(fb),
+            Overlay::Info => self.render_info(fb),
             Overlay::None => {}
         }
     }
@@ -1213,6 +1216,7 @@ impl Application {
             ("copy_scrollback", "copy whole scrollback to clipboard"),
             ("export_scrollback", "write scrollback to a .log file"),
             ("peek", "peek tails of all sessions"),
+            ("session_info", "show this tab's info (kind/host/task)"),
             ("help", "this help"),
             ("quit", "quit"),
         ] {
@@ -1243,6 +1247,66 @@ impl Application {
                 fb,
                 &mut self.cache,
                 &format!("  {:<16} {}", k, d),
+                32,
+                base_y + (row + 1) * line_px,
+                self.font_px,
+                CHROME_DIM,
+            );
+        }
+    }
+
+    fn render_info(&mut self, fb: &mut Framebuffer) {
+        let (base_y, line_px) = self.overlay_base_y();
+        let Some(s) = self.app.active_session() else {
+            return;
+        };
+        // Which line draws at which row. Title is the panel header; the rest are data rows.
+        let title = format!("  {} · {}  ", s.kind(), s.meta.engine);
+        draw_text(fb, &mut self.cache, &title, 32, base_y, self.font_px, WHITE);
+
+        let mut rows: Vec<String> = Vec::new();
+        let display = if let Some(n) = &s.meta.name {
+            n.clone()
+        } else {
+            s.meta.engine.clone()
+        };
+        rows.push(format!("  name       {}", display));
+        rows.push(format!("  host       {}", s.meta.host));
+        rows.push(format!("  engine     {}", s.meta.engine));
+        rows.push(format!("  transport  {}", s.kind()));
+        rows.push(format!(
+            "  state      {}",
+            match s.retry_info() {
+                Some(r) => format!("down · {r}"),
+                None => "live".to_string(),
+            }
+        ));
+        rows.push(format!(
+            "  view       {}",
+            if s.scrolled() {
+                "scrolled into history"
+            } else {
+                "live follow (bottom)"
+            }
+        ));
+        // The OSC task title, if the shell/agent has set one — the running task context.
+        if let Some(t) = s.live_title() {
+            rows.push(format!("  task       {t}"));
+        }
+
+        // Terminal grid size = what the session actually render (its own lines × cols), read from
+        // the emulator's current size without disturbing it.
+        let size = {
+            let term = s.term.lock();
+            format!("  size       {}×{}", term.screen_lines(), term.columns())
+        };
+        rows.push(size);
+
+        for (row, line) in rows.iter().enumerate() {
+            draw_text(
+                fb,
+                &mut self.cache,
+                line,
                 32,
                 base_y + (row + 1) * line_px,
                 self.font_px,
@@ -1806,6 +1870,9 @@ impl Application {
                 self.peek_sel = 0;
             }
             UndoClose => self.app.reopen_last_closed(),
+            SessionInfo => {
+                self.app.overlay = Overlay::Info;
+            }
             Help => {
                 self.app.overlay = Overlay::Help;
             }
@@ -2138,6 +2205,9 @@ impl Application {
                     self.palette_rows = PaletteAction::all_rows();
                     self.app.overlay = Overlay::CommandPalette;
                 }
+                Some("session_info") => {
+                    self.app.overlay = Overlay::Info;
+                }
                 Some("rename") => {
                     // Rename the active tab. Pre-fill with the current custom name (if any) so
                     // editing doesn't start from scratch.
@@ -2374,6 +2444,10 @@ impl Application {
                 return;
             }
             Overlay::Help => {
+                self.app.overlay = Overlay::None;
+                return;
+            }
+            Overlay::Info => {
                 self.app.overlay = Overlay::None;
                 return;
             }

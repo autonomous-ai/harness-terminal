@@ -36,6 +36,7 @@ pub const ACTIONS: &[(&str, &str)] = &[
     ("help", "?"),
     ("command_palette", ";"),
     ("rename", ","),
+    ("session_info", "i"),
 ];
 
 /// The built-in full keybinding table. `(action, key)` in ACTIONS order.

@@ -33,6 +33,8 @@ pub enum Overlay {
     Peek,
     /// Command palette: a typed list of named prefix-commands; Enter runs the selected action.
     CommandPalette,
+    /// Session info: read-only details about the active tab (kind, host, engine, size, reconnect).
+    Info,
 }
 
 pub struct App {
