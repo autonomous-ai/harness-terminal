@@ -86,7 +86,11 @@ impl App {
     pub fn spawn_local(&mut self, host: &str, engine_id: &str, cwd: Option<String>) {
         let program = engine_cmd(engine_id).unwrap_or("bash");
         let meta = self.meta_for(host, engine_id);
-        self.push_ok(Session::local(meta, program, Vec::new(), self.size, cwd), engine_id, host);
+        self.push_ok(
+            Session::local(meta, program, Vec::new(), self.size, cwd),
+            engine_id,
+            host,
+        );
     }
 
     /// Create a new session tab running the engine inside a real local tmux pane, and focus it.
@@ -111,7 +115,8 @@ impl App {
         let meta = self.meta_for(host, engine_id);
         self.push_ok(
             Session::tunnel(meta, host, port, program, self.size),
-            engine_id, host,
+            engine_id,
+            host,
         );
     }
 
@@ -175,7 +180,11 @@ impl App {
             .filter(|&i| {
                 let s = &self.tabs[i];
                 let name = s.meta.name.clone().unwrap_or_default();
-                let hay = format!("{} {} {} {}", s.meta.host, s.meta.engine, name, s.meta.title).to_lowercase();
+                let hay = format!(
+                    "{} {} {} {}",
+                    s.meta.host, s.meta.engine, name, s.meta.title
+                )
+                .to_lowercase();
                 q.is_empty() || hay.contains(&q)
             })
             .collect();
@@ -246,7 +255,13 @@ impl App {
         let res = match spec.kind.as_str() {
             "tmux" => Session::tmux(meta, program, self.size),
             "ssh" => Session::remote(meta, program, self.size),
-            "tunnel" => Session::tunnel(meta, &spec.host, spec.port.unwrap_or(crate::harness::HARNESS_PORT_DEFAULT), program, self.size),
+            "tunnel" => Session::tunnel(
+                meta,
+                &spec.host,
+                spec.port.unwrap_or(crate::harness::HARNESS_PORT_DEFAULT),
+                program,
+                self.size,
+            ),
             _ => Session::local(meta, program, Vec::new(), self.size, None),
         };
         if let Ok(mut session) = res {
@@ -267,7 +282,9 @@ impl App {
 impl App {
     /// The engine id selected in the new-session picker.
     pub fn selected_engine(&self) -> Option<&'static str> {
-        ENGINES.get(self.selected.min(ENGINES.len() - 1)).map(|e| e.id)
+        ENGINES
+            .get(self.selected.min(ENGINES.len() - 1))
+            .map(|e| e.id)
     }
 
     /// Set the picker selection to the configured default engine (case-insensitive), falling back
@@ -289,4 +306,3 @@ fn engine_cmd(id: &str) -> Option<&'static str> {
     }
     ENGINES.iter().find(|e| e.id == id).map(|e| e.cmd)
 }
-

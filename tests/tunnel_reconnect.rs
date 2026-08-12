@@ -13,7 +13,8 @@ use harness_terminal::transport::{Transport, TunnelTransport};
 #[test]
 fn tunnel_reconnects_after_pane_is_killed() {
     let port: u16 = std::env::var("HARNESS_PROBE_PORT")
-        .ok().and_then(|v| v.parse().ok())
+        .ok()
+        .and_then(|v| v.parse().ok())
         .unwrap_or(18500);
     if !daemon_up(port) {
         eprintln!("skipping: no harness pane-relay daemon on :{port}");
@@ -25,30 +26,52 @@ fn tunnel_reconnects_after_pane_is_killed() {
     // bash echoes input, which is all this test needs.
     let program = "bash";
     let sname = format!("auton-{}", program.replace('/', "-"));
-    let size = TermSize { lines: 20, cols: 60 };
-    let term: Arc<FairMutex<Term<Listener>>> =
-        Arc::new(FairMutex::new(Term::new(Config::default(), &size, Listener::default())));
+    let size = TermSize {
+        lines: 20,
+        cols: 60,
+    };
+    let term: Arc<FairMutex<Term<Listener>>> = Arc::new(FairMutex::new(Term::new(
+        Config::default(),
+        &size,
+        Listener::default(),
+    )));
     let echo = harness_terminal::session::EchoCanceller::default();
-    let mut tx = TunnelTransport::spawn("127.0.0.1", port, program, size, Arc::clone(&term), Arc::new(echo))
-        .expect("tunnel spawn against live daemon");
+    let mut tx = TunnelTransport::spawn(
+        "127.0.0.1",
+        port,
+        program,
+        size,
+        Arc::clone(&term),
+        Arc::new(echo),
+    )
+    .expect("tunnel spawn against live daemon");
 
     // 1. First pane round-trips a marker (baseline — the pane echoes what we type).
     tx.write(b"echo RECONNECT_M1\r");
-    assert!(grid_has(&term, "RECONNECT_M1"), "baseline marker did not land before kill");
+    assert!(
+        grid_has(&term, "RECONNECT_M1"),
+        "baseline marker did not land before kill"
+    );
 
     // 2. Kill the pane out from under the client. tmux emits %exit, the daemon relay tears down,
     //    and the client's connection thread flips alive() to false.
     let _ = std::process::Command::new("tmux")
-        .args(["kill-session", "-t", &sname]).status();
+        .args(["kill-session", "-t", &sname])
+        .status();
     wait_for_dead(&tx);
 
     // 3. Reconnect re-attaches a fresh pane with the same identity.
     tx.reconnect().expect("reconnect should re-attach");
     tx.write(b"echo RECONNECT_M2\r");
-    assert!(grid_has(&term, "RECONNECT_M2"), "post-reconnect marker did not round-trip");
+    assert!(
+        grid_has(&term, "RECONNECT_M2"),
+        "post-reconnect marker did not round-trip"
+    );
 
     // Cleanup.
-    let _ = std::process::Command::new("tmux").args(["kill-session", "-t", &sname]).status();
+    let _ = std::process::Command::new("tmux")
+        .args(["kill-session", "-t", &sname])
+        .status();
 }
 
 /// Wait (bounded) until the transport reports itself dead.

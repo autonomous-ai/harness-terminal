@@ -38,7 +38,10 @@ fn map_color(c: &alacritty_terminal::vte::ansi::Color) -> Color {
 }
 
 /// Render the whole interface.
-pub fn draw(term: &mut ratatui::Terminal<ratatui::backend::CrosstermBackend<Stdout>>, app: &mut App) {
+pub fn draw(
+    term: &mut ratatui::Terminal<ratatui::backend::CrosstermBackend<Stdout>>,
+    app: &mut App,
+) {
     let _ = term.draw(|frame| draw_frame(frame, app));
 }
 
@@ -84,7 +87,10 @@ fn draw_tab_bar(frame: &mut Frame, area: Rect, app: &App) {
         let active = i == app.active;
         let label = format!(" {} ", s.meta.title);
         let style = if active {
-            Style::default().fg(Color::Black).bg(Color::Cyan).add_modifier(Modifier::BOLD)
+            Style::default()
+                .fg(Color::Black)
+                .bg(Color::Cyan)
+                .add_modifier(Modifier::BOLD)
         } else {
             Style::default().fg(Color::White).bg(Color::DarkGray)
         };
@@ -92,7 +98,10 @@ fn draw_tab_bar(frame: &mut Frame, area: Rect, app: &App) {
         spans.push(Span::raw(" "));
     }
     if spans.is_empty() {
-        spans.push(Span::styled(" (no sessions) ", Style::default().fg(Color::DarkGray)));
+        spans.push(Span::styled(
+            " (no sessions) ",
+            Style::default().fg(Color::DarkGray),
+        ));
     }
     frame.render_widget(Paragraph::new(Line::from(spans)), area);
 }
@@ -145,7 +154,10 @@ fn draw_terminal(frame: &mut Frame, area: Rect, app: &App) {
                         // still render as blank to keep geometry
                         Some(Span::styled(" ", Style::default()))
                     } else {
-                        Some(Span::styled(c.to_string(), Style::default().fg(*fg).bg(*bg)))
+                        Some(Span::styled(
+                            c.to_string(),
+                            Style::default().fg(*fg).bg(*bg),
+                        ))
                     }
                 })
                 .collect::<Vec<_>>(),
@@ -161,7 +173,11 @@ fn draw_terminal(frame: &mut Frame, area: Rect, app: &App) {
 }
 
 /// Fetch the cell at visible row/col (no scrollback offset yet).
-fn cell_at(g: &alacritty_terminal::term::Term<Listener>, row: usize, col: usize) -> Option<&alacritty_terminal::term::cell::Cell> {
+fn cell_at(
+    g: &alacritty_terminal::term::Term<Listener>,
+    row: usize,
+    col: usize,
+) -> Option<&alacritty_terminal::term::cell::Cell> {
     use alacritty_terminal::grid::Dimensions;
     use alacritty_terminal::index::Column;
     if row >= g.screen_lines() {
@@ -174,8 +190,19 @@ fn cell_at(g: &alacritty_terminal::term::Term<Listener>, row: usize, col: usize)
 fn draw_status(frame: &mut Frame, area: Rect, app: &App) {
     let mut text = String::new();
     if let Some(s) = app.active_session() {
-        let link = if s.alive() { "●".to_string() } else { "○ reconnecting".to_string() };
-        text = format!(" {} · {} · {} · [{}{}]", s.meta.host, s.meta.engine, s.meta.title, s.kind(), link);
+        let link = if s.alive() {
+            "●".to_string()
+        } else {
+            "○ reconnecting".to_string()
+        };
+        text = format!(
+            " {} · {} · {} · [{}{}]",
+            s.meta.host,
+            s.meta.engine,
+            s.meta.title,
+            s.kind(),
+            link
+        );
     }
     let hints = "  [prefix+/] palette  [prefix+n] new  [prefix+r] remote  [prefix+q] quit";
     let line = Line::from(vec![
@@ -222,7 +249,10 @@ fn draw_palette(frame: &mut Frame, area: Rect, app: &mut App) {
         .title(" sessions ")
         .borders(Borders::ALL)
         .style(Style::default().fg(Color::Cyan).bg(Color::Black));
-    frame.render_widget(Paragraph::new(body).block(block).wrap(Wrap { trim: false }), pop);
+    frame.render_widget(
+        Paragraph::new(body).block(block).wrap(Wrap { trim: false }),
+        pop,
+    );
 }
 
 /// New-session picker: choose a host + engine, then create a tab.
@@ -236,7 +266,9 @@ fn draw_picker(frame: &mut Frame, area: Rect, app: &mut App) {
     );
     let mut lines: Vec<Line> = vec![Line::from(Span::styled(
         "  new session ",
-        Style::default().fg(Color::White).add_modifier(Modifier::BOLD),
+        Style::default()
+            .fg(Color::White)
+            .add_modifier(Modifier::BOLD),
     ))];
     for (i, e) in ENGINES.iter().enumerate() {
         let sel = i == app.selected;
@@ -267,7 +299,9 @@ fn draw_remote_attach(frame: &mut Frame, area: Rect, app: &mut App) {
     );
     let mut lines: Vec<Line> = vec![Line::from(Span::styled(
         "  attach to pane@host ",
-        Style::default().fg(Color::White).add_modifier(Modifier::BOLD),
+        Style::default()
+            .fg(Color::White)
+            .add_modifier(Modifier::BOLD),
     ))];
     lines.push(Line::from(vec![
         Span::styled("  host: ", Style::default().fg(Color::Cyan)),

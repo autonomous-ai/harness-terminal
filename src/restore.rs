@@ -70,7 +70,10 @@ pub fn save(specs: &[TabSpec]) {
             return;
         }
     }
-    let _ = std::fs::write(&path, serde_json::to_string_pretty(specs).unwrap_or_default());
+    let _ = std::fs::write(
+        &path,
+        serde_json::to_string_pretty(specs).unwrap_or_default(),
+    );
 }
 
 /// Load previously-saved tab specs. Empty vec on any error (missing file, bad JSON).
@@ -95,7 +98,9 @@ pub fn save_active(idx: usize) {
 
 /// Load the last-focused tab index (0 on error/missing). Caller clamps to the tab count.
 pub fn load_active() -> usize {
-    let Ok(raw) = std::fs::read_to_string(active_path()) else { return 0 };
+    let Ok(raw) = std::fs::read_to_string(active_path()) else {
+        return 0;
+    };
     raw.trim().parse::<usize>().unwrap_or(0)
 }
 
@@ -115,7 +120,9 @@ pub fn save_zoom(zoom: f32) {
 
 /// Load the persisted font-zoom factor. 1.0 on error (missing/corrupt file), clamped to range.
 pub fn load_zoom() -> f32 {
-    let Ok(raw) = std::fs::read_to_string(zoom_path()) else { return 1.0 };
+    let Ok(raw) = std::fs::read_to_string(zoom_path()) else {
+        return 1.0;
+    };
     raw.trim().parse::<f32>().unwrap_or(1.0).clamp(0.5, 3.0)
 }
 
@@ -194,7 +201,13 @@ fn scrollback_file(kind: &str, host: &str, engine: &str) -> std::path::PathBuf {
     // Bullet-proof file name: only alnum/`_`/`-` survive, host may be an IP or machine id.
     let k: String = (kind.to_owned() + host + engine)
         .chars()
-        .map(|c| if c.is_ascii_alphanumeric() || c == '-' || c == '_' { c } else { '_' })
+        .map(|c| {
+            if c.is_ascii_alphanumeric() || c == '-' || c == '_' {
+                c
+            } else {
+                '_'
+            }
+        })
         .collect();
     scrollback_path().join(format!("{}.txt", k))
 }
@@ -245,12 +258,17 @@ pub fn save_muted(kinds_engines: &[(&str, &str, &str)]) {
         .map(|(k, h, e)| format!("{k}:{h}:{e}"))
         .collect();
     let _ = std::fs::create_dir_all(config_dir());
-    let _ = std::fs::write(muted_path(), serde_json::to_string(&payload).unwrap_or_default());
+    let _ = std::fs::write(
+        muted_path(),
+        serde_json::to_string(&payload).unwrap_or_default(),
+    );
 }
 
 /// Load the set of muted identity keys, each "kind:host:engine". Empty set on error/missing.
 pub fn load_muted() -> Vec<String> {
-    let Ok(raw) = std::fs::read_to_string(muted_path()) else { return Vec::new() };
+    let Ok(raw) = std::fs::read_to_string(muted_path()) else {
+        return Vec::new();
+    };
     serde_json::from_str(&raw).unwrap_or_default()
 }
 
@@ -266,7 +284,11 @@ mod tests {
         static LOCK: OnceLock<Mutex<()>> = OnceLock::new();
         let _guard = LOCK.get_or_init(|| Mutex::new(())).lock().unwrap();
         static SEQ: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
-        let dir = std::env::temp_dir().join(format!("ht-test-{}-{}", std::process::id(), SEQ.fetch_add(1, std::sync::atomic::Ordering::Relaxed)));
+        let dir = std::env::temp_dir().join(format!(
+            "ht-test-{}-{}",
+            std::process::id(),
+            SEQ.fetch_add(1, std::sync::atomic::Ordering::Relaxed)
+        ));
         let _ = std::fs::remove_dir_all(&dir);
         std::env::set_var("HARNESS_CONFIG_DIR", &dir);
         let r = std::panic::catch_unwind(|| f(&dir));
@@ -279,8 +301,20 @@ mod tests {
     #[test]
     fn tab_spec_roundtrips_through_json() {
         let specs = vec![
-            TabSpec { kind: "pty".into(), host: "this-host".into(), engine: "shell".into(), port: None, name: None },
-            TabSpec { kind: "tunnel".into(), host: "10.0.0.4".into(), engine: "codex".into(), port: Some(4321), name: Some("db-migrate".into()) },
+            TabSpec {
+                kind: "pty".into(),
+                host: "this-host".into(),
+                engine: "shell".into(),
+                port: None,
+                name: None,
+            },
+            TabSpec {
+                kind: "tunnel".into(),
+                host: "10.0.0.4".into(),
+                engine: "codex".into(),
+                port: Some(4321),
+                name: Some("db-migrate".into()),
+            },
         ];
         let json = serde_json::to_string(&specs).unwrap();
         let back: Vec<TabSpec> = serde_json::from_str(&json).unwrap();
@@ -343,8 +377,20 @@ mod tests {
     fn tab_name_roundtrips_through_specs() {
         with_isolated_dir(|_| {
             let specs = vec![
-                TabSpec { kind: "ssh".into(), host: "build-host".into(), engine: "claude".into(), port: None, name: None },
-                TabSpec { kind: "tunnel".into(), host: "10.0.0.9".into(), engine: "opencode".into(), port: Some(7000), name: Some("staging-deploy".into()) },
+                TabSpec {
+                    kind: "ssh".into(),
+                    host: "build-host".into(),
+                    engine: "claude".into(),
+                    port: None,
+                    name: None,
+                },
+                TabSpec {
+                    kind: "tunnel".into(),
+                    host: "10.0.0.9".into(),
+                    engine: "opencode".into(),
+                    port: Some(7000),
+                    name: Some("staging-deploy".into()),
+                },
             ];
             save(&specs);
             let back = load();
@@ -377,7 +423,10 @@ mod tests {
             save_scrollback("tunnel", "10.0.0.7", "claude", &hugo);
             let loaded = load_scrollback("tunnel", "10.0.0.7", "claude");
             assert!(loaded.len() <= MAX_SCROLLBACK_BYTES);
-            assert!(loaded.ends_with("TAIL"), "cap must keep the tail, not the head");
+            assert!(
+                loaded.ends_with("TAIL"),
+                "cap must keep the tail, not the head"
+            );
         });
     }
 
@@ -399,7 +448,10 @@ mod tests {
     fn muted_roundtrips_through_file() {
         with_isolated_dir(|_| {
             assert!(load_muted().is_empty());
-            let keys = vec![("tmux", "build-host", "claude"), ("tunnel", "10.0.0.7", "codex")];
+            let keys = vec![
+                ("tmux", "build-host", "claude"),
+                ("tunnel", "10.0.0.7", "codex"),
+            ];
             save_muted(&keys);
             let back = load_muted();
             assert_eq!(back.len(), 2);

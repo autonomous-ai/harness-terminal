@@ -25,7 +25,10 @@ fn main() -> io::Result<()> {
 
 /// Standalone native window (default shell).
 fn run_native() -> Result<(), Box<dyn std::error::Error>> {
-    let mut app = App::new(TermSize { lines: 24, cols: 80 });
+    let mut app = App::new(TermSize {
+        lines: 24,
+        cols: 80,
+    });
     // Reopen the tabs that were open last time (best-effort; failures drop silently).
     for spec in harness_terminal::restore::load() {
         app.restore_tab(&spec);
@@ -51,7 +54,10 @@ fn run_tui() -> io::Result<()> {
     let backend = CrosstermBackend::new(stdout);
     let mut term = Terminal::new(backend)?;
 
-    let mut app = App::new(TermSize { lines: 24, cols: 80 });
+    let mut app = App::new(TermSize {
+        lines: 24,
+        cols: 80,
+    });
     app.spawn_local("this-host", "shell", None);
 
     let mut in_command = false;
@@ -68,7 +74,10 @@ fn run_tui() -> io::Result<()> {
     }
 
     crossterm::terminal::disable_raw_mode()?;
-    execute!(term.backend_mut(), crossterm::terminal::LeaveAlternateScreen)?;
+    execute!(
+        term.backend_mut(),
+        crossterm::terminal::LeaveAlternateScreen
+    )?;
     Ok(())
 }
 
@@ -89,15 +98,25 @@ fn handle_key_tui(app: &mut App, key: crossterm::event::KeyEvent, in_command: &m
                 KeyCode::Esc => app.overlay = Overlay::None,
                 KeyCode::Enter => {
                     if let Some(eng) = app.selected_engine() {
-                        let host = if app.remote_host.trim().is_empty() { "127.0.0.1".to_string() } else { app.remote_host.trim().to_string() };
-                        app.spawn_tunnel(&host, harness_terminal::harness::HARNESS_PORT_DEFAULT, eng);
+                        let host = if app.remote_host.trim().is_empty() {
+                            "127.0.0.1".to_string()
+                        } else {
+                            app.remote_host.trim().to_string()
+                        };
+                        app.spawn_tunnel(
+                            &host,
+                            harness_terminal::harness::HARNESS_PORT_DEFAULT,
+                            eng,
+                        );
                         app.overlay = Overlay::None;
                     }
                 }
                 KeyCode::Down => app.selected = (app.selected + 1).min(ENGINES.len() - 1),
                 KeyCode::Up => app.selected = app.selected.saturating_sub(1),
                 KeyCode::Char(c) => app.remote_host.push(c),
-                KeyCode::Backspace => { app.remote_host.pop(); }
+                KeyCode::Backspace => {
+                    app.remote_host.pop();
+                }
                 _ => {}
             }
             return false;
@@ -106,10 +125,21 @@ fn handle_key_tui(app: &mut App, key: crossterm::event::KeyEvent, in_command: &m
             match key.code {
                 KeyCode::Esc => app.overlay = Overlay::None,
                 KeyCode::Enter => app.jump_to_selection(),
-                KeyCode::Down => app.selected = app.selected.saturating_add(1).min(app.filtered.len().saturating_sub(1)),
+                KeyCode::Down => {
+                    app.selected = app
+                        .selected
+                        .saturating_add(1)
+                        .min(app.filtered.len().saturating_sub(1))
+                }
                 KeyCode::Up => app.selected = app.selected.saturating_sub(1),
-                KeyCode::Char(c) => { app.query.push(c); app.refresh_filter(); }
-                KeyCode::Backspace => { app.query.pop(); app.refresh_filter(); }
+                KeyCode::Char(c) => {
+                    app.query.push(c);
+                    app.refresh_filter();
+                }
+                KeyCode::Backspace => {
+                    app.query.pop();
+                    app.refresh_filter();
+                }
                 _ => {}
             }
             return false;
@@ -135,7 +165,7 @@ fn handle_key_tui(app: &mut App, key: crossterm::event::KeyEvent, in_command: &m
         Overlay::Help => {}
         Overlay::Rename => {}
         Overlay::Broadcast => {} // native-only feature; the TUI fallback ignores it.
-        Overlay::Peek => {} // native-only feature; the TUI fallback ignores it.
+        Overlay::Peek => {}      // native-only feature; the TUI fallback ignores it.
         Overlay::CommandPalette => {} // native-only feature; the TUI fallback ignores it.
 
         Overlay::None => {}
@@ -144,9 +174,21 @@ fn handle_key_tui(app: &mut App, key: crossterm::event::KeyEvent, in_command: &m
     if *in_command {
         *in_command = false;
         match key.code {
-            KeyCode::Char('/') => { app.overlay = Overlay::Palette; app.query.clear(); app.selected = 0; app.refresh_filter(); }
-            KeyCode::Char('n') => { app.overlay = Overlay::NewSession; app.selected = 0; }
-            KeyCode::Char('r') => { app.overlay = Overlay::RemoteAttach; app.remote_host.clear(); app.selected = 0; }
+            KeyCode::Char('/') => {
+                app.overlay = Overlay::Palette;
+                app.query.clear();
+                app.selected = 0;
+                app.refresh_filter();
+            }
+            KeyCode::Char('n') => {
+                app.overlay = Overlay::NewSession;
+                app.selected = 0;
+            }
+            KeyCode::Char('r') => {
+                app.overlay = Overlay::RemoteAttach;
+                app.remote_host.clear();
+                app.selected = 0;
+            }
             KeyCode::Char('t') => app.spawn_tmux("this-host", "shell"),
             KeyCode::Char('q') => return true,
             KeyCode::Char('s') => {
@@ -154,7 +196,9 @@ fn handle_key_tui(app: &mut App, key: crossterm::event::KeyEvent, in_command: &m
                     Ok(st) => {
                         app.fleet = st;
                         let line = format!("\r\n[fleet] {}\r\n", app.fleet.summary());
-                        if let Some(s) = app.active_session_mut() { s.write(line.as_bytes()); }
+                        if let Some(s) = app.active_session_mut() {
+                            s.write(line.as_bytes());
+                        }
                     }
                     Err(_) => {
                         if let Some(s) = app.active_session_mut() {
@@ -163,13 +207,30 @@ fn handle_key_tui(app: &mut App, key: crossterm::event::KeyEvent, in_command: &m
                     }
                 }
             }
-            KeyCode::Char('c') => { if !app.tabs.is_empty() { app.active = 0; } }
-            KeyCode::Tab => { if !app.tabs.is_empty() { app.active = (app.active + 1) % app.tabs.len(); } }
+            KeyCode::Char('c') => {
+                if !app.tabs.is_empty() {
+                    app.active = 0;
+                }
+            }
+            KeyCode::Tab => {
+                if !app.tabs.is_empty() {
+                    app.active = (app.active + 1) % app.tabs.len();
+                }
+            }
             KeyCode::Char(c @ '1'..='9') => {
                 let idx = (c as usize) - ('1' as usize);
-                if idx < app.tabs.len() { app.active = idx; }
+                if idx < app.tabs.len() {
+                    app.active = idx;
+                }
             }
-            KeyCode::Char('x') => { if !app.tabs.is_empty() { app.tabs.remove(app.active); if app.active >= app.tabs.len() { app.active = app.tabs.len().saturating_sub(1); } } }
+            KeyCode::Char('x') => {
+                if !app.tabs.is_empty() {
+                    app.tabs.remove(app.active);
+                    if app.active >= app.tabs.len() {
+                        app.active = app.tabs.len().saturating_sub(1);
+                    }
+                }
+            }
             _ => {}
         }
         return false;

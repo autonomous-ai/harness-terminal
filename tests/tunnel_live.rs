@@ -12,7 +12,8 @@ use harness_terminal::transport::{Transport, TunnelTransport};
 #[test]
 fn tunnel_relays_pane_bytes_into_grid() {
     let port: u16 = std::env::var("HARNESS_PROBE_PORT")
-        .ok().and_then(|v| v.parse().ok())
+        .ok()
+        .and_then(|v| v.parse().ok())
         .unwrap_or(18500);
     // Refuse to run if the daemon isn't up, so this never fails CI on unprovisioned machines.
     if !daemon_up(port) {
@@ -20,11 +21,25 @@ fn tunnel_relays_pane_bytes_into_grid() {
         return;
     }
 
-    let size = TermSize { lines: 20, cols: 60 };
-    let term: Arc<FairMutex<Term<Listener>>> = Arc::new(FairMutex::new(Term::new(Config::default(), &size, Listener::default())));
+    let size = TermSize {
+        lines: 20,
+        cols: 60,
+    };
+    let term: Arc<FairMutex<Term<Listener>>> = Arc::new(FairMutex::new(Term::new(
+        Config::default(),
+        &size,
+        Listener::default(),
+    )));
     let echo = harness_terminal::session::EchoCanceller::default();
-    let tx = TunnelTransport::spawn("127.0.0.1", port, "\\$SHELL", size, Arc::clone(&term), Arc::new(echo))
-        .expect("tunnel spawn against live daemon");
+    let tx = TunnelTransport::spawn(
+        "127.0.0.1",
+        port,
+        "\\$SHELL",
+        size,
+        Arc::clone(&term),
+        Arc::new(echo),
+    )
+    .expect("tunnel spawn against live daemon");
 
     // Type a command that echoes a unique marker, then Enter.
     let marker = "TUNNEL_E2E_MARKER";
@@ -55,12 +70,17 @@ fn tunnel_relays_pane_bytes_into_grid() {
         std::thread::sleep(Duration::from_millis(100));
     }
     // Cleanup: kill the pane we spawned.
-    let _ = std::process::Command::new("tmux").args(["kill-session", "-t", "auton-\\$SHELL"]).status();
+    let _ = std::process::Command::new("tmux")
+        .args(["kill-session", "-t", "auton-\\$SHELL"])
+        .status();
     panic!("marker never appeared in the grid — tunnel did not relay pane bytes");
 }
 
 fn daemon_up(port: u16) -> bool {
     std::net::TcpStream::connect(("127.0.0.1", port))
-        .and_then(|s| { let _ = s; Ok(()) })
+        .and_then(|s| {
+            let _ = s;
+            Ok(())
+        })
         .is_ok()
 }

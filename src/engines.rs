@@ -5,8 +5,18 @@
 
 /// Canonical engine identifiers — must match `automous-harness` `ENGINES`.
 pub const ENGINE_IDS: &[&str] = &[
-    "claude", "codex", "cursor", "opencode", "pi", "hermes",
-    "commandcode", "devin", "muse", "amp", "kilo", "grok",
+    "claude",
+    "codex",
+    "cursor",
+    "opencode",
+    "pi",
+    "hermes",
+    "commandcode",
+    "devin",
+    "muse",
+    "amp",
+    "kilo",
+    "grok",
 ];
 
 /// A single agent framework definition.
@@ -21,18 +31,78 @@ pub struct Engine {
 }
 
 pub const ENGINES: &[Engine] = &[
-    Engine { id: "claude", label: "Claude Code", cmd: "claude", color: 0xff_9a4dff },
-    Engine { id: "codex", label: "Codex", cmd: "codex", color: 0xff_22c55e },
-    Engine { id: "cursor", label: "Cursor", cmd: "agent", color: 0xff_38bdf8 },
-    Engine { id: "opencode", label: "OpenCode", cmd: "opencode", color: 0xff_0ea5e9 },
-    Engine { id: "pi", label: "PI", cmd: "pi", color: 0xff_a3e635 },
-    Engine { id: "hermes", label: "Hermes", cmd: "hermes", color: 0xff_a78bfa },
-    Engine { id: "commandcode", label: "Command Code", cmd: "cmd", color: 0xff_f472b6 },
-    Engine { id: "devin", label: "Devin", cmd: "devin", color: 0xff_818cf8 },
-    Engine { id: "muse", label: "Muse", cmd: "muse", color: 0xff_fbbf24 },
-    Engine { id: "amp", label: "AMP", cmd: "amp", color: 0xff_34d399 },
-    Engine { id: "kilo", label: "Kilo", cmd: "kilo", color: 0xff_2dd4bf },
-    Engine { id: "grok", label: "Grok", cmd: "grok", color: 0xff_ef4444 },
+    Engine {
+        id: "claude",
+        label: "Claude Code",
+        cmd: "claude",
+        color: 0xff_9a4dff,
+    },
+    Engine {
+        id: "codex",
+        label: "Codex",
+        cmd: "codex",
+        color: 0xff_22c55e,
+    },
+    Engine {
+        id: "cursor",
+        label: "Cursor",
+        cmd: "agent",
+        color: 0xff_38bdf8,
+    },
+    Engine {
+        id: "opencode",
+        label: "OpenCode",
+        cmd: "opencode",
+        color: 0xff_0ea5e9,
+    },
+    Engine {
+        id: "pi",
+        label: "PI",
+        cmd: "pi",
+        color: 0xff_a3e635,
+    },
+    Engine {
+        id: "hermes",
+        label: "Hermes",
+        cmd: "hermes",
+        color: 0xff_a78bfa,
+    },
+    Engine {
+        id: "commandcode",
+        label: "Command Code",
+        cmd: "cmd",
+        color: 0xff_f472b6,
+    },
+    Engine {
+        id: "devin",
+        label: "Devin",
+        cmd: "devin",
+        color: 0xff_818cf8,
+    },
+    Engine {
+        id: "muse",
+        label: "Muse",
+        cmd: "muse",
+        color: 0xff_fbbf24,
+    },
+    Engine {
+        id: "amp",
+        label: "AMP",
+        cmd: "amp",
+        color: 0xff_34d399,
+    },
+    Engine {
+        id: "kilo",
+        label: "Kilo",
+        cmd: "kilo",
+        color: 0xff_2dd4bf,
+    },
+    Engine {
+        id: "grok",
+        label: "Grok",
+        cmd: "grok",
+        color: 0xff_ef4444,
+    },
 ];
 
 impl Engine {

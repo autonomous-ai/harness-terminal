@@ -9,9 +9,9 @@ use std::collections::HashMap;
 
 use ab_glyph::{Font as _, FontArc, Glyph as AbsGlyph, PxScale, ScaleFont as _};
 use alacritty_terminal::grid::Dimensions;
+use alacritty_terminal::index::{Column, Line};
 use alacritty_terminal::term::cell::Flags;
 use alacritty_terminal::term::Term;
-use alacritty_terminal::index::{Column, Line};
 use alacritty_terminal::vte::ansi::{self, CursorShape};
 
 use crate::session::Listener;
@@ -53,10 +53,17 @@ impl Framebuffer {
 /// data); the instability is in some *flags* we never touch. We only pull `r/g/b` and `index`.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum PaletteColor {
-    Spec { r: u8, g: u8, b: u8 },
+    Spec {
+        r: u8,
+        g: u8,
+        b: u8,
+    },
     Indexed(u8),
     /// Named 16 colors: `(bright, index0..=15)`.
-    Named { bright: bool, index: u8 },
+    Named {
+        bright: bool,
+        index: u8,
+    },
 }
 
 impl Default for PaletteColor {
@@ -77,28 +84,32 @@ impl PaletteColor {
         // Classic 16-color ANSI palette. Matches the terminal's default Config::default() colors
         // so we stay consistent with the local PTY tabs.
         const ANSI: [(u8, u8, u8); 16] = [
-            (0, 0, 0),          // black
-            (205, 49, 49),      // red
-            (13, 188, 121),     // green
-            (229, 229, 16),     // yellow
-            (36, 114, 200),     // blue
-            (188, 63, 188),     // magenta
-            (17, 168, 205),     // cyan
-            (229, 229, 229),    // white
-            (102, 102, 102),    // bright black
-            (241, 76, 76),      // bright red
-            (35, 209, 139),     // bright green
-            (245, 245, 67),     // bright yellow
-            (59, 142, 234),     // bright blue
-            (214, 112, 214),    // bright magenta
-            (41, 184, 219),     // bright cyan
-            (255, 255, 255),    // bright white
+            (0, 0, 0),       // black
+            (205, 49, 49),   // red
+            (13, 188, 121),  // green
+            (229, 229, 16),  // yellow
+            (36, 114, 200),  // blue
+            (188, 63, 188),  // magenta
+            (17, 168, 205),  // cyan
+            (229, 229, 229), // white
+            (102, 102, 102), // bright black
+            (241, 76, 76),   // bright red
+            (35, 209, 139),  // bright green
+            (245, 245, 67),  // bright yellow
+            (59, 142, 234),  // bright blue
+            (214, 112, 214), // bright magenta
+            (41, 184, 219),  // bright cyan
+            (255, 255, 255), // bright white
         ];
         match *self {
             PaletteColor::Spec { r, g, b } => (r, g, b),
             PaletteColor::Indexed(i) => color256(i),
             PaletteColor::Named { bright, index } => {
-                let i = if bright { (index as usize) + 8 } else { index as usize };
+                let i = if bright {
+                    (index as usize) + 8
+                } else {
+                    index as usize
+                };
                 ANSI[i.min(15)]
             }
         }
@@ -114,22 +125,70 @@ pub fn cell_color(c: &ansi::Color) -> PaletteColor {
         ansi::Color::Named(n) => {
             use ansi::NamedColor as N;
             match n {
-                N::Black => PaletteColor::Named { bright: false, index: 0 },
-                N::Red => PaletteColor::Named { bright: false, index: 1 },
-                N::Green => PaletteColor::Named { bright: false, index: 2 },
-                N::Yellow => PaletteColor::Named { bright: false, index: 3 },
-                N::Blue => PaletteColor::Named { bright: false, index: 4 },
-                N::Magenta => PaletteColor::Named { bright: false, index: 5 },
-                N::Cyan => PaletteColor::Named { bright: false, index: 6 },
-                N::White => PaletteColor::Named { bright: false, index: 7 },
-                N::BrightBlack => PaletteColor::Named { bright: true, index: 0 },
-                N::BrightRed => PaletteColor::Named { bright: true, index: 1 },
-                N::BrightGreen => PaletteColor::Named { bright: true, index: 2 },
-                N::BrightYellow => PaletteColor::Named { bright: true, index: 3 },
-                N::BrightBlue => PaletteColor::Named { bright: true, index: 4 },
-                N::BrightMagenta => PaletteColor::Named { bright: true, index: 5 },
-                N::BrightCyan => PaletteColor::Named { bright: true, index: 6 },
-                N::BrightWhite => PaletteColor::Named { bright: true, index: 7 },
+                N::Black => PaletteColor::Named {
+                    bright: false,
+                    index: 0,
+                },
+                N::Red => PaletteColor::Named {
+                    bright: false,
+                    index: 1,
+                },
+                N::Green => PaletteColor::Named {
+                    bright: false,
+                    index: 2,
+                },
+                N::Yellow => PaletteColor::Named {
+                    bright: false,
+                    index: 3,
+                },
+                N::Blue => PaletteColor::Named {
+                    bright: false,
+                    index: 4,
+                },
+                N::Magenta => PaletteColor::Named {
+                    bright: false,
+                    index: 5,
+                },
+                N::Cyan => PaletteColor::Named {
+                    bright: false,
+                    index: 6,
+                },
+                N::White => PaletteColor::Named {
+                    bright: false,
+                    index: 7,
+                },
+                N::BrightBlack => PaletteColor::Named {
+                    bright: true,
+                    index: 0,
+                },
+                N::BrightRed => PaletteColor::Named {
+                    bright: true,
+                    index: 1,
+                },
+                N::BrightGreen => PaletteColor::Named {
+                    bright: true,
+                    index: 2,
+                },
+                N::BrightYellow => PaletteColor::Named {
+                    bright: true,
+                    index: 3,
+                },
+                N::BrightBlue => PaletteColor::Named {
+                    bright: true,
+                    index: 4,
+                },
+                N::BrightMagenta => PaletteColor::Named {
+                    bright: true,
+                    index: 5,
+                },
+                N::BrightCyan => PaletteColor::Named {
+                    bright: true,
+                    index: 6,
+                },
+                N::BrightWhite => PaletteColor::Named {
+                    bright: true,
+                    index: 7,
+                },
                 // Dim colors: fold to the theme foreground/background (dim nuance is lost in the
                 // framebuffer for now — a future glyph/alpha pass can honor it).
                 N::DimBlack
@@ -139,14 +198,30 @@ pub fn cell_color(c: &ansi::Color) -> PaletteColor {
                 | N::DimBlue
                 | N::DimMagenta
                 | N::DimCyan
-                | N::DimWhite => PaletteColor::Spec { r: DEFAULT_FG.0, g: DEFAULT_FG.1, b: DEFAULT_FG.2 },
-                N::Background => PaletteColor::Spec { r: DEFAULT_BG.0, g: DEFAULT_BG.1, b: DEFAULT_BG.2 },
+                | N::DimWhite => PaletteColor::Spec {
+                    r: DEFAULT_FG.0,
+                    g: DEFAULT_FG.1,
+                    b: DEFAULT_FG.2,
+                },
+                N::Background => PaletteColor::Spec {
+                    r: DEFAULT_BG.0,
+                    g: DEFAULT_BG.1,
+                    b: DEFAULT_BG.2,
+                },
                 // Foreground and anything unknown → default foreground.
-                _ => PaletteColor::Spec { r: DEFAULT_FG.0, g: DEFAULT_FG.1, b: DEFAULT_FG.2 },
+                _ => PaletteColor::Spec {
+                    r: DEFAULT_FG.0,
+                    g: DEFAULT_FG.1,
+                    b: DEFAULT_FG.2,
+                },
             }
         }
         ansi::Color::Indexed(i) => PaletteColor::Indexed(*i),
-        ansi::Color::Spec(rgb) => PaletteColor::Spec { r: rgb.r, g: rgb.g, b: rgb.b },
+        ansi::Color::Spec(rgb) => PaletteColor::Spec {
+            r: rgb.r,
+            g: rgb.g,
+            b: rgb.b,
+        },
     }
 }
 
@@ -208,7 +283,10 @@ impl GlyphCache {
         if let Some(og) = outline {
             let bounds = og.px_bounds();
             let (bw, bh) = (bounds.width() as usize, bounds.height() as usize);
-            let (bx, by) = (bounds.min.x.max(0.0) as usize, bounds.min.y.max(0.0) as usize);
+            let (bx, by) = (
+                bounds.min.x.max(0.0) as usize,
+                bounds.min.y.max(0.0) as usize,
+            );
             og.draw(|x, y, cov| {
                 let gx = x as usize + bx;
                 let gy = y as usize + by;
@@ -288,7 +366,10 @@ pub fn draw_grid(
             .unwrap_or(false);
         // Is this cell part of any (other) search match? Every occurrence gets highlighted while
         // the overlay is open so the user sees all landing spots at once.
-        let in_match = !in_focus && matches.iter().any(|&(l, c, w)| row == l && col >= c && col < c + w);
+        let in_match = !in_focus
+            && matches
+                .iter()
+                .any(|&(l, c, w)| row == l && col >= c && col < c + w);
         let in_sel = sel.map(|s| s.contains(idx.point)).unwrap_or(false);
         // Is this the copy-mode read cursor? (line, col) grid coords, drawn as a green block below.
         let is_copy_cursor = copy.is_some_and(|(l, c)| row == l && col == c);
@@ -307,34 +388,73 @@ pub fn draw_grid(
         };
         // Text selection: soft blue background, keep the foreground for the glyph text.
         if in_sel {
-            bgc = PaletteColor::Spec { r: SEL_BG.0, g: SEL_BG.1, b: SEL_BG.2 };
+            bgc = PaletteColor::Spec {
+                r: SEL_BG.0,
+                g: SEL_BG.1,
+                b: SEL_BG.2,
+            };
         }
         // Search matches: force the yellow highlight regardless of inverse/selection. The focused
         // match is drawn orange so it reads as "you are here" among the others.
         if in_focus {
-            fg = PaletteColor::Spec { r: HIT_FG.0, g: HIT_FG.1, b: HIT_FG.2 };
-            bgc = PaletteColor::Spec { r: FOCUS_BG.0, g: FOCUS_BG.1, b: FOCUS_BG.2 };
+            fg = PaletteColor::Spec {
+                r: HIT_FG.0,
+                g: HIT_FG.1,
+                b: HIT_FG.2,
+            };
+            bgc = PaletteColor::Spec {
+                r: FOCUS_BG.0,
+                g: FOCUS_BG.1,
+                b: FOCUS_BG.2,
+            };
         } else if in_match {
-            fg = PaletteColor::Spec { r: HIT_FG.0, g: HIT_FG.1, b: HIT_FG.2 };
-            bgc = PaletteColor::Spec { r: HIT_BG.0, g: HIT_BG.1, b: HIT_BG.2 };
+            fg = PaletteColor::Spec {
+                r: HIT_FG.0,
+                g: HIT_FG.1,
+                b: HIT_FG.2,
+            };
+            bgc = PaletteColor::Spec {
+                r: HIT_BG.0,
+                g: HIT_BG.1,
+                b: HIT_BG.2,
+            };
         }
-        let cursor_shape = if is_cursor { term.cursor_style().shape } else { CursorShape::Hidden };
+        let cursor_shape = if is_cursor {
+            term.cursor_style().shape
+        } else {
+            CursorShape::Hidden
+        };
         // Block cursor (and its hollow/hidden variants) fills the whole cell; underline/beam draw
         // a thinner bar and leave the cell background intact, colored by the cursor color.
         let is_bar = matches!(cursor_shape, CursorShape::Underline | CursorShape::Beam);
         if is_cursor && matches!(cursor_shape, CursorShape::Block | CursorShape::HollowBlock) {
             // Block cursor: fill with the effective foreground, draw the glyph in the bg color.
             bgc = fg;
-            fg = PaletteColor::Spec { r: DEFAULT_BG.0, g: DEFAULT_BG.1, b: DEFAULT_BG.2 };
+            fg = PaletteColor::Spec {
+                r: DEFAULT_BG.0,
+                g: DEFAULT_BG.1,
+                b: DEFAULT_BG.2,
+            };
         }
         // Copy-mode cursor: fill the cell with the bright green read cursor and draw the glyph in
         // black so it's always legible, regardless of scroll/selection state.
         if is_copy_cursor {
-            bgc = PaletteColor::Spec { r: COPY_CURSOR.0, g: COPY_CURSOR.1, b: COPY_CURSOR.2 };
+            bgc = PaletteColor::Spec {
+                r: COPY_CURSOR.0,
+                g: COPY_CURSOR.1,
+                b: COPY_CURSOR.2,
+            };
             fg = PaletteColor::Spec { r: 0, g: 0, b: 0 };
         }
         // Paint the background (uses the resolved bgc).
-        paint_bg(buf, x0 as usize, y0 as usize, cell_w as usize, cell_h as usize, bgc);
+        paint_bg(
+            buf,
+            x0 as usize,
+            y0 as usize,
+            cell_w as usize,
+            cell_h as usize,
+            bgc,
+        );
         if cell.c == ' ' {
             continue;
         }
@@ -377,11 +497,12 @@ pub fn draw_grid(
         let line_px = (cell_h as usize / 10).max(1);
         let underline_y = y0 as usize + cell_h as usize - line_px - (cell_h as usize / 12);
         let strike_y = y0 as usize + (cell_h as usize * 5) / 12;
-        let rule_color = if cell.flags.contains(Flags::UNDERLINE) || cell.flags.contains(Flags::STRIKEOUT) {
-            Some((r, g, b))
-        } else {
-            None
-        };
+        let rule_color =
+            if cell.flags.contains(Flags::UNDERLINE) || cell.flags.contains(Flags::STRIKEOUT) {
+                Some((r, g, b))
+            } else {
+                None
+            };
         if let Some((rr, gg, bb)) = rule_color {
             let x0u = x0 as usize;
             let mut draw_rule = |yb: usize| {
@@ -486,7 +607,11 @@ pub fn all_matches(term: &Term<Listener>, query: &str) -> Vec<Find> {
             out.push((line, col + ci, match_width(query)));
             let advance = ci + q.len();
             col += advance;
-            rest = if advance < rest.len() { &rest[advance..] } else { "" };
+            rest = if advance < rest.len() {
+                &rest[advance..]
+            } else {
+                ""
+            };
         }
         line += 1;
     }
@@ -563,14 +688,24 @@ pub fn font_path() -> String {
 /// 256-color palette lookup (standard xterm cube/greyscale).
 fn color256(i: u8) -> (u8, u8, u8) {
     if i < 16 {
-        return PaletteColor::Named { bright: i > 7, index: i & 7 }.to_rgb();
+        return PaletteColor::Named {
+            bright: i > 7,
+            index: i & 7,
+        }
+        .to_rgb();
     }
     if i < 232 {
         let n = i - 16;
         let r = n / 36;
         let g = (n / 6) % 6;
         let b = n % 6;
-        let ramp = |v: u8| -> u8 { if v == 0 { 0 } else { (55 + v * 40) as u8 } };
+        let ramp = |v: u8| -> u8 {
+            if v == 0 {
+                0
+            } else {
+                (55 + v * 40) as u8
+            }
+        };
         (ramp(r), ramp(g), ramp(b))
     } else {
         let g = 8 + (i - 232) * 10;
@@ -615,7 +750,10 @@ mod tests {
         use crate::session::Listener;
 
         // Build the grid at 80x24 and feed it two colored lines.
-        let size = crate::session::TermSize { lines: 24, cols: 80 };
+        let size = crate::session::TermSize {
+            lines: 24,
+            cols: 80,
+        };
         let term = FairMutex::new(Term::new(Config::default(), &size, Listener::default()));
         let bytes = b"\x1b[32mAAA\x1b[0m\r\n\x1b[31mMMM\x1b[0m";
         {
@@ -671,13 +809,22 @@ mod tests {
             let mut g = term.lock();
             p.advance(&mut *g, &buf);
             // At live position the first line is scrolled off into history.
-            assert!(g.grid().display_offset() == 0, "live view should be at bottom");
-            assert!(g.grid().history_size() > 0, "expected history to accumulate");
+            assert!(
+                g.grid().display_offset() == 0,
+                "live view should be at bottom"
+            );
+            assert!(
+                g.grid().history_size() > 0,
+                "expected history to accumulate"
+            );
 
             // Scroll up one page; the display offset becomes non-zero.
             use alacritty_terminal::grid::Dimensions;
             g.grid_mut().scroll_display(Scroll::Delta(4));
-            assert!(g.grid().display_offset() > 0, "display_offset should rise after scroll");
+            assert!(
+                g.grid().display_offset() > 0,
+                "display_offset should rise after scroll"
+            );
         }
 
         // Rendering at the scrolled position must produce glyph pixels (the scrolled-into-view rows).
@@ -688,7 +835,10 @@ mod tests {
             draw_grid(&mut fb, &g, 9, 18, 12, &mut cache, None, &[], None, None);
         }
         let non_blank = fb.pixels.iter().filter(|&&p| p != 0x0000_0000).count();
-        assert!(non_blank > 20, "expected scrollback glyphs when scrolled, got {non_blank}");
+        assert!(
+            non_blank > 20,
+            "expected scrollback glyphs when scrolled, got {non_blank}"
+        );
     }
 
     /// Search: find a query string across history, case-insensitively, and report its line+col.
@@ -714,7 +864,11 @@ mod tests {
         // needle appears on every line; starting from the top of history the first hit is the
         // topmost history line (a negative absolute line, since history sits above line 0).
         let hit = find(&g, "NEEDLE", g.grid().topmost_line().0).expect("should find a match");
-        assert!(hit.0 < 0, "first hit should be in history (negative line), got {}", hit.0);
+        assert!(
+            hit.0 < 0,
+            "first hit should be in history (negative line), got {}",
+            hit.0
+        );
         assert!(hit.2 > 0, "match should have a column and width");
     }
 
@@ -749,7 +903,10 @@ mod tests {
         let r = (cell0 >> 16) & 0xff;
         let g = (cell0 >> 8) & 0xff;
         let b = cell0 & 0xff;
-        assert!(g > 100 && r < 100 && b < 160, "inverse cell bg should be green, got rgb({r},{g},{b})");
+        assert!(
+            g > 100 && r < 100 && b < 160,
+            "inverse cell bg should be green, got rgb({r},{g},{b})"
+        );
     }
 
     /// Cursor shapes: force the emulator to a beam cursor and assert the glyph cell is drawn plus a
@@ -783,11 +940,17 @@ mod tests {
         let cell_x = 0;
         // Left-edge column (x=0) of the cursor cell should be non-black (beam top-to-bottom).
         let left_edge_filled = (0..18).any(|py| fb.pixels[py * fb.width + cell_x] != 0);
-        assert!(left_edge_filled, "beam cursor should draw a vertical bar at cell's left edge");
+        assert!(
+            left_edge_filled,
+            "beam cursor should draw a vertical bar at cell's left edge"
+        );
         // The bottom-right corner must be background — a block cursor would fill it with the cursor
         // fg (white) color. Compare RGB only (alpha is always 255 in the framebuffer).
         let corner = fb.pixels[17 * fb.width + (9 - 1)] & 0x00ff_ffff;
-        assert_eq!(corner, 0, "beam cursor must not fill the cell to its bottom-right corner");
+        assert_eq!(
+            corner, 0,
+            "beam cursor must not fill the cell to its bottom-right corner"
+        );
     }
 
     /// Copy-mode read cursor: drawing with a `copy` point fills exactly that cell with the bright
@@ -808,12 +971,26 @@ mod tests {
         let mut cache = GlyphCache::load();
         let g = term.lock();
         // Copy cursor at grid (line 0, col 1) = the "b" cell.
-        draw_grid(&mut fb, &g, 9, 18, 12, &mut cache, None, &[], None, Some((0, 1)));
+        draw_grid(
+            &mut fb,
+            &g,
+            9,
+            18,
+            12,
+            &mut cache,
+            None,
+            &[],
+            None,
+            Some((0, 1)),
+        );
         drop(g);
         // Center pixel of cell (line 0, col 1) should be green (0x1eff8a).
         let px = fb.pixels[0 * 18 * fb.width + 1 * 9 + 4];
         let (r, gg, b) = ((px >> 16) & 0xff, (px >> 8) & 0xff, px & 0xff);
-        assert!(gg > 200 && r < 100, "copy cursor should paint the target cell green, got rgb({r},{gg},{b})");
+        assert!(
+            gg > 200 && r < 100,
+            "copy cursor should paint the target cell green, got rgb({r},{gg},{b})"
+        );
     }
 
     /// Match counting: a query present multiple times across history counts all non-overlapping
@@ -835,7 +1012,11 @@ mod tests {
             p.advance(&mut *term.lock(), bytes);
         }
         let g = term.lock();
-        assert_eq!(count_matches(&g, "fix"), 3, "expected 3 total non-overlapping matches");
+        assert_eq!(
+            count_matches(&g, "fix"),
+            3,
+            "expected 3 total non-overlapping matches"
+        );
         assert_eq!(count_matches(&g, "zzz"), 0);
         assert_eq!(count_matches(&g, ""), 0);
     }

@@ -43,8 +43,8 @@ pub trait Transport: Send {
 
 // ── local PTY (alacritty event loop) ────────────────────────────────────────────────────────────
 
-use alacritty_terminal::event_loop::{EventLoop, EventLoopSender, Msg};
 use alacritty_terminal::event::WindowSize;
+use alacritty_terminal::event_loop::{EventLoop, EventLoopSender, Msg};
 use alacritty_terminal::tty;
 
 /// A real local PTY running a shell or engine CLI. Backed by alacritty's own event-loop thread,
@@ -129,9 +129,15 @@ pub struct TmuxTransport {
 impl TmuxTransport {
     /// Spawn a control-mode tmux pane running `program` in a fresh, uniquely-named LOCAL session.
     /// Spawn a local pane. No echo cancellation — a local link has no round-trip latency to smooth.
-    pub fn spawn(program: &str, size: TermSize, term: Arc<FairMutex<Term<Listener>>>) -> io::Result<TmuxTransport> {
+    pub fn spawn(
+        program: &str,
+        size: TermSize,
+        term: Arc<FairMutex<Term<Listener>>>,
+    ) -> io::Result<TmuxTransport> {
         let name = format!("auton-{}", program.replace('/', "-"));
-        let _ = Command::new("tmux").args(["kill-session", "-t", &name]).status();
+        let _ = Command::new("tmux")
+            .args(["kill-session", "-t", &name])
+            .status();
         let pipe = ControlPipe::spawn(
             "tmux".to_string(),
             vec!["-C".to_string()],
@@ -181,7 +187,8 @@ impl ControlPipe {
         term: Arc<FairMutex<Term<Listener>>>,
         echo: Option<Arc<EchoCanceller>>,
     ) -> io::Result<ControlPipe> {
-        let (child, tx, alive) = ControlPipe::build(&argv0, &argv, session, program, size, &term, echo.as_ref())?;
+        let (child, tx, alive) =
+            ControlPipe::build(&argv0, &argv, session, program, size, &term, echo.as_ref())?;
         Ok(ControlPipe {
             argv0,
             argv,
@@ -206,7 +213,11 @@ impl ControlPipe {
         size: TermSize,
         term: &Arc<FairMutex<Term<Listener>>>,
         echo: Option<&Arc<EchoCanceller>>,
-    ) -> io::Result<(Child, mpsc::Sender<Vec<u8>>, Arc<std::sync::atomic::AtomicBool>)> {
+    ) -> io::Result<(
+        Child,
+        mpsc::Sender<Vec<u8>>,
+        Arc<std::sync::atomic::AtomicBool>,
+    )> {
         let mut cmd = Command::new(argv0);
         cmd.args(argv)
             .stdin(Stdio::piped())
@@ -221,11 +232,16 @@ impl ControlPipe {
         // Create the session + pane on the control client's own stdin (no separate pre-spawn,
         // so a remote hop doesn't need a second RTT). Kill any stale session of the same name first
         // (ignoring failure) so a reconnect can't trip tmux's "duplicate session".
-        tx.send(format!("kill-session -t {session}\n").into_bytes()).ok();
-        tx.send(format!(
-            "new-session -s {} -x {} -y {} {}\n",
-            session, size.cols, size.lines, program
-        ).into_bytes()).ok();
+        tx.send(format!("kill-session -t {session}\n").into_bytes())
+            .ok();
+        tx.send(
+            format!(
+                "new-session -s {} -x {} -y {} {}\n",
+                session, size.cols, size.lines, program
+            )
+            .into_bytes(),
+        )
+        .ok();
 
         // Reader: parse control-mode notification lines; %output carries the pane's byte payload.
         // When the transport is remote, filter the returned bytes through echo cancellation before
@@ -387,7 +403,8 @@ impl RemoteTransport {
             "ssh".to_string(),
             vec![
                 "-tt".to_string(), // force a tty so the remote tmux runs as an attached client
-                "-o".to_string(), "StrictHostKeyChecking=accept-new".to_string(),
+                "-o".to_string(),
+                "StrictHostKeyChecking=accept-new".to_string(),
                 host.to_string(),
                 "tmux".to_string(),
                 "-C".to_string(),
@@ -458,7 +475,8 @@ impl TunnelTransport {
         term: Arc<FairMutex<Term<Listener>>>,
         echo: Arc<EchoCanceller>,
     ) -> io::Result<TunnelTransport> {
-        let (tx, alive) = TunnelTransport::build_connection(host, port, program, size, &term, &echo)?;
+        let (tx, alive) =
+            TunnelTransport::build_connection(host, port, program, size, &term, &echo)?;
         Ok(TunnelTransport {
             host: host.to_string(),
             port,
@@ -488,8 +506,9 @@ impl TunnelTransport {
         // Build the connection by hand so the underlying socket can be set nonblocking before the
         // upgrade (tungstenite's `connect` owns the socket and gives no way in).
         let addr = format!("{host}:{port}");
-        let tcp = std::net::TcpStream::connect(&addr)
-            .map_err(|e| io::Error::new(io::ErrorKind::Other, format!("tunnel connect {addr}: {e}")))?;
+        let tcp = std::net::TcpStream::connect(&addr).map_err(|e| {
+            io::Error::new(io::ErrorKind::Other, format!("tunnel connect {addr}: {e}"))
+        })?;
         let url = format!("ws://{host}:{port}/api/pane-ws");
         let request = tungstenite::client::IntoClientRequest::into_client_request(url)
             .map_err(|e| io::Error::new(io::ErrorKind::Other, e.to_string()))?;
@@ -502,10 +521,13 @@ impl TunnelTransport {
         let _ = ws.get_ref().set_nonblocking(true);
         // Create the pane + start the program, mirroring ControlPipe's first on-stdin command. Kill
         // any stale session of the same name first so a reconnect can't trip "duplicate session".
-        ws.send(tungstenite::Message::Text(format!("kill-session -t {name}\n")))
-            .ok();
         ws.send(tungstenite::Message::Text(format!(
-            "new-session -s {} -x {} -y {} {}\n", name, size.cols, size.lines, program,
+            "kill-session -t {name}\n"
+        )))
+        .ok();
+        ws.send(tungstenite::Message::Text(format!(
+            "new-session -s {} -x {} -y {} {}\n",
+            name, size.cols, size.lines, program,
         )))
         .map_err(|e| io::Error::new(io::ErrorKind::Other, e.to_string()))?;
 
@@ -514,42 +536,45 @@ impl TunnelTransport {
         let a = Arc::clone(&alive);
         let t = Arc::clone(term);
         let e = Arc::clone(echo);
-        thread::Builder::new().name("tunnel".into()).spawn(move || {
-            let mut parser: Processor<StdSyncHandler> = Processor::default();
-            loop {
-                match ws.read() {
-                    Ok(tungstenite::Message::Text(s)) => {
-                        for line in s.lines() {
-                            if let Some(payload) = parse_output(line) {
-                                let mut term = t.lock();
-                                parser.advance(&mut *term, &e.filter_echo(&payload));
+        thread::Builder::new()
+            .name("tunnel".into())
+            .spawn(move || {
+                let mut parser: Processor<StdSyncHandler> = Processor::default();
+                loop {
+                    match ws.read() {
+                        Ok(tungstenite::Message::Text(s)) => {
+                            for line in s.lines() {
+                                if let Some(payload) = parse_output(line) {
+                                    let mut term = t.lock();
+                                    parser.advance(&mut *term, &e.filter_echo(&payload));
+                                }
                             }
                         }
-                    }
-                    Ok(tungstenite::Message::Binary(b)) => {
-                        for line in String::from_utf8_lossy(&b).lines() {
-                            if let Some(payload) = parse_output(line) {
-                                let mut term = t.lock();
-                                parser.advance(&mut *term, &e.filter_echo(&payload));
+                        Ok(tungstenite::Message::Binary(b)) => {
+                            for line in String::from_utf8_lossy(&b).lines() {
+                                if let Some(payload) = parse_output(line) {
+                                    let mut term = t.lock();
+                                    parser.advance(&mut *term, &e.filter_echo(&payload));
+                                }
                             }
                         }
+                        Ok(_) => {}
+                        // Nonblocking: nothing to read yet is not an error — keep draining keystrokes.
+                        Err(tungstenite::Error::Io(ref e))
+                            if e.kind() == io::ErrorKind::WouldBlock => {}
+                        Err(_) => {
+                            a.store(false, std::sync::atomic::Ordering::Relaxed);
+                            break; // closed
+                        }
                     }
-                    Ok(_) => {}
-                    // Nonblocking: nothing to read yet is not an error — keep draining keystrokes.
-                    Err(tungstenite::Error::Io(ref e)) if e.kind() == io::ErrorKind::WouldBlock => {}
-                    Err(_) => {
-                        a.store(false, std::sync::atomic::Ordering::Relaxed);
-                        break; // closed
+                    while let Ok(bytes) = rx.try_recv() {
+                        if let Ok(text) = String::from_utf8(bytes) {
+                            let _ = ws.send(tungstenite::Message::Text(text));
+                        }
                     }
+                    thread::sleep(std::time::Duration::from_millis(2));
                 }
-                while let Ok(bytes) = rx.try_recv() {
-                    if let Ok(text) = String::from_utf8(bytes) {
-                        let _ = ws.send(tungstenite::Message::Text(text));
-                    }
-                }
-                thread::sleep(std::time::Duration::from_millis(2));
-            }
-        })?;
+            })?;
 
         Ok((tx, alive))
     }
@@ -584,7 +609,9 @@ impl Transport for TunnelTransport {
     }
 
     fn resize(&self, size: TermSize) {
-        let _ = self.tx.send(format!("resize-window -x {} -y {}\n", size.cols, size.lines).into_bytes());
+        let _ = self
+            .tx
+            .send(format!("resize-window -x {} -y {}\n", size.cols, size.lines).into_bytes());
     }
 
     fn alive(&self) -> bool {
@@ -680,4 +707,3 @@ fn parse_escapes(s: &str) -> Option<Vec<u8>> {
     }
     Some(out)
 }
-

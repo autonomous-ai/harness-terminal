@@ -49,7 +49,9 @@ impl Config {
     /// errors) — a broken config must not stop the terminal from opening.
     pub fn load() -> Config {
         let path = crate::restore::config_dir().join("config.toml");
-        let Ok(raw) = std::fs::read_to_string(path) else { return Config::default() };
+        let Ok(raw) = std::fs::read_to_string(path) else {
+            return Config::default();
+        };
         toml::from_str(&raw).unwrap_or_default()
     }
 }
@@ -61,9 +63,12 @@ mod tests {
     /// A fully-specified config round-trips, and absent keys fall back to defaults.
     #[test]
     fn parses_and_defaults_fields() {
-        let c: Config = toml::from_str(r#"
+        let c: Config = toml::from_str(
+            r#"
             font_px = 18
-        "#).unwrap();
+        "#,
+        )
+        .unwrap();
         assert_eq!(c.font_px, 18);
         assert_eq!(c.default_engine, "claude"); // absent key -> default
         assert_eq!(c.font_path, None); // absent -> None (platform default)
@@ -72,10 +77,16 @@ mod tests {
     /// A custom font path is honoured and round-trips.
     #[test]
     fn custom_font_path_roundtrips() {
-        let c: Config = toml::from_str(r#"
+        let c: Config = toml::from_str(
+            r#"
             font_path = "/Users/d/.fonts/JetBrainsMono-Nerd-Font.ttf"
-        "#).unwrap();
-        assert_eq!(c.font_path.as_deref(), Some("/Users/d/.fonts/JetBrainsMono-Nerd-Font.ttf"));
+        "#,
+        )
+        .unwrap();
+        assert_eq!(
+            c.font_path.as_deref(),
+            Some("/Users/d/.fonts/JetBrainsMono-Nerd-Font.ttf")
+        );
     }
 
     /// An explicit scrollback cap round-trips; absent falls back to None (built-in default).
@@ -91,7 +102,10 @@ mod tests {
     #[test]
     fn start_cwd_roundtrips() {
         let c: Config = toml::from_str(r#"start_cwd = "/Users/d/dev/harness-terminal""#).unwrap();
-        assert_eq!(c.start_cwd.as_deref(), Some("/Users/d/dev/harness-terminal"));
+        assert_eq!(
+            c.start_cwd.as_deref(),
+            Some("/Users/d/dev/harness-terminal")
+        );
         let d: Config = toml::from_str("font_px = 14").unwrap();
         assert_eq!(d.start_cwd, None);
     }

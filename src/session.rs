@@ -26,9 +26,15 @@ pub struct TermSize {
 }
 
 impl Dimensions for TermSize {
-    fn total_lines(&self) -> usize { self.lines }
-    fn screen_lines(&self) -> usize { self.lines }
-    fn columns(&self) -> usize { self.cols }
+    fn total_lines(&self) -> usize {
+        self.lines
+    }
+    fn screen_lines(&self) -> usize {
+        self.lines
+    }
+    fn columns(&self) -> usize {
+        self.cols
+    }
 }
 
 /// Sink for terminal render events. Rendering is drawn synchronously from the grid, so wakeups
@@ -102,7 +108,10 @@ impl Default for EchoCanceller {
         // Typical human idle between keystrokes is far larger than this; an RTT is far smaller. Long
         // enough to carry the optimistic echo across the link, short enough that a pane that never
         // echoes (password prompt, fullscreen app) doesn't poison later genuine output.
-        EchoCanceller { pending: Mutex::new(VecDeque::new()), window: Duration::from_millis(1500) }
+        EchoCanceller {
+            pending: Mutex::new(VecDeque::new()),
+            window: Duration::from_millis(1500),
+        }
     }
 }
 
@@ -184,7 +193,10 @@ struct RetryState {
 
 impl RetryState {
     fn new() -> Self {
-        RetryState { attempts: 0, next_attempt: Instant::now() }
+        RetryState {
+            attempts: 0,
+            next_attempt: Instant::now(),
+        }
     }
     /// Exponential backoff seconds for the *next* retry, capped: 5s, 10s, 20s, … 60s.
     fn backoff_seconds(attempts: u32) -> u64 {
@@ -218,21 +230,42 @@ impl Session {
         working_dir: Option<String>,
     ) -> io::Result<Session> {
         let title = Arc::new(Mutex::new(None));
-        let term = Arc::new(FairMutex::new(Term::new(Config::default(), &size, Listener::with_title(Arc::clone(&title)))));
-        let transport = LocalPtyTransport::spawn(program, args, size, working_dir, Arc::clone(&term))?;
-        Ok(Session { meta, term, transport: Box::new(transport), echo: None, title, retry: Mutex::new(RetryState::new()), scrolled: Arc::new(std::sync::atomic::AtomicBool::new(false)) })
+        let term = Arc::new(FairMutex::new(Term::new(
+            Config::default(),
+            &size,
+            Listener::with_title(Arc::clone(&title)),
+        )));
+        let transport =
+            LocalPtyTransport::spawn(program, args, size, working_dir, Arc::clone(&term))?;
+        Ok(Session {
+            meta,
+            term,
+            transport: Box::new(transport),
+            echo: None,
+            title,
+            retry: Mutex::new(RetryState::new()),
+            scrolled: Arc::new(std::sync::atomic::AtomicBool::new(false)),
+        })
     }
 
     /// Create a session backed by a real tmux pane (control mode).
-    pub fn tmux(
-        meta: SessionMeta,
-        program: &str,
-        size: TermSize,
-    ) -> io::Result<Session> {
+    pub fn tmux(meta: SessionMeta, program: &str, size: TermSize) -> io::Result<Session> {
         let title = Arc::new(Mutex::new(None));
-        let term = Arc::new(FairMutex::new(Term::new(Config::default(), &size, Listener::with_title(Arc::clone(&title)))));
+        let term = Arc::new(FairMutex::new(Term::new(
+            Config::default(),
+            &size,
+            Listener::with_title(Arc::clone(&title)),
+        )));
         let transport = crate::transport::TmuxTransport::spawn(program, size, Arc::clone(&term))?;
-        Ok(Session { meta, term, transport: Box::new(transport), echo: None, title, retry: Mutex::new(RetryState::new()), scrolled: Arc::new(std::sync::atomic::AtomicBool::new(false)) })
+        Ok(Session {
+            meta,
+            term,
+            transport: Box::new(transport),
+            echo: None,
+            title,
+            retry: Mutex::new(RetryState::new()),
+            scrolled: Arc::new(std::sync::atomic::AtomicBool::new(false)),
+        })
     }
 
     /// Create a session whose pane is reached through the harness pane-relay tunnel at `host:port`.
@@ -245,31 +278,60 @@ impl Session {
         size: TermSize,
     ) -> io::Result<Session> {
         let title = Arc::new(Mutex::new(None));
-        let term = Arc::new(FairMutex::new(Term::new(Config::default(), &size, Listener::with_title(Arc::clone(&title)))));
+        let term = Arc::new(FairMutex::new(Term::new(
+            Config::default(),
+            &size,
+            Listener::with_title(Arc::clone(&title)),
+        )));
         // The tunnel crosses a latency link, so the session owns an echo canceller (Session::write
         // notes keystrokes; the transport's reader thread cancels the returned copy).
         let echo = Arc::new(EchoCanceller::default());
         let transport = crate::transport::TunnelTransport::spawn(
-            host, port, program, size, Arc::clone(&term), Arc::clone(&echo),
+            host,
+            port,
+            program,
+            size,
+            Arc::clone(&term),
+            Arc::clone(&echo),
         )?;
-        Ok(Session { meta, term, transport: Box::new(transport), echo: Some(echo), title, retry: Mutex::new(RetryState::new()), scrolled: Arc::new(std::sync::atomic::AtomicBool::new(false)) })
+        Ok(Session {
+            meta,
+            term,
+            transport: Box::new(transport),
+            echo: Some(echo),
+            title,
+            retry: Mutex::new(RetryState::new()),
+            scrolled: Arc::new(std::sync::atomic::AtomicBool::new(false)),
+        })
     }
 
     /// Create a session whose pane lives on REMOTE host `host` (via ssh + tmux control mode).
     /// `meta.host` carries the `@host` half of `pane@host`.
-    pub fn remote(
-        meta: SessionMeta,
-        program: &str,
-        size: TermSize,
-    ) -> io::Result<Session> {
+    pub fn remote(meta: SessionMeta, program: &str, size: TermSize) -> io::Result<Session> {
         let title = Arc::new(Mutex::new(None));
-        let term = Arc::new(FairMutex::new(Term::new(Config::default(), &size, Listener::with_title(Arc::clone(&title)))));
+        let term = Arc::new(FairMutex::new(Term::new(
+            Config::default(),
+            &size,
+            Listener::with_title(Arc::clone(&title)),
+        )));
         // Remote ssh crosses a latency link — same echo-cancellation setup as the tunnel.
         let echo = Arc::new(EchoCanceller::default());
         let transport = crate::transport::RemoteTransport::spawn(
-            &meta.host, program, size, Arc::clone(&term), Arc::clone(&echo),
+            &meta.host,
+            program,
+            size,
+            Arc::clone(&term),
+            Arc::clone(&echo),
         )?;
-        Ok(Session { meta, term, transport: Box::new(transport), echo: Some(echo), title, retry: Mutex::new(RetryState::new()), scrolled: Arc::new(std::sync::atomic::AtomicBool::new(false)) })
+        Ok(Session {
+            meta,
+            term,
+            transport: Box::new(transport),
+            echo: Some(echo),
+            title,
+            retry: Mutex::new(RetryState::new()),
+            scrolled: Arc::new(std::sync::atomic::AtomicBool::new(false)),
+        })
     }
 
     /// Transport kind: "pty" / "tmux" / "ssh" / "tunnel" (shown in the status line).
@@ -410,7 +472,9 @@ fn capture_grid_to_string(grid: &Grid<alacritty_terminal::term::cell::Cell>) -> 
         // WRAPLINE on a row means THIS row continues onto the next one (auto-wrapped): suppress the
         // newline after it so both rows rejoin into one logical line. A row without WRAPLINE ends a
         // logical line, so emit a hard newline after it (harmless even for the final row).
-        let wrapped = grid[GridLine(line)][Column(cols.saturating_sub(1))].flags.contains(Flags::WRAPLINE);
+        let wrapped = grid[GridLine(line)][Column(cols.saturating_sub(1))]
+            .flags
+            .contains(Flags::WRAPLINE);
         let text = row_text(grid, line, cols);
         out.push_str(&text);
         if !wrapped {
@@ -475,7 +539,10 @@ mod tests {
         std::thread::sleep(Duration::from_millis(2));
         // The very same bytes returning now are no longer "expected echo" — they're real output.
         let out = c.filter_echo(b"xxxxx");
-        assert_eq!(out, b"xxxxx", "expired pending echo must pass through as real output");
+        assert_eq!(
+            out, b"xxxxx",
+            "expired pending echo must pass through as real output"
+        );
     }
 
     /// OSC window titles are captured into the shared slot and exposed via live_title; ResetTitle
@@ -489,7 +556,10 @@ mod tests {
         listener.send_event(AEvent::Title("fixing auth".to_string()));
         assert_eq!(*title.lock().unwrap(), Some("fixing auth".to_string()));
         listener.send_event(AEvent::ResetTitle);
-        assert!(title.lock().unwrap().is_none(), "ResetTitle should clear the slot");
+        assert!(
+            title.lock().unwrap().is_none(),
+            "ResetTitle should clear the slot"
+        );
     }
 
     /// Scrollback capture returns the emulated lines in order, hard-wrapping preserved, so a
@@ -498,7 +568,10 @@ mod tests {
     fn capture_returns_scrollback_text_in_order() {
         use alacritty_terminal::grid::Dimensions;
 
-        let size = TermSize { lines: 24, cols: 40 };
+        let size = TermSize {
+            lines: 24,
+            cols: 40,
+        };
         let term = FairMutex::new(Term::new(Config::default(), &size, Listener::default()));
         {
             let mut p: Processor<StdSyncHandler> = Processor::default();
@@ -511,16 +584,30 @@ mod tests {
         let captured = capture_grid_to_string(term.lock().grid());
         // The middle logical line (wrapped across two + rows) reappears as a single line.
         let lines: Vec<&str> = captured.lines().collect();
-        assert!(lines.iter().any(|l| *l == "alpha"), "alpha present: {captured:?}");
-        assert!(lines.iter().any(|l| l.starts_with("beta-") && l.contains("gamma")), "wrapped beta+gamma merged: {captured:?}");
-        assert!(lines.iter().any(|l| *l == "omega"), "trailing line omega present: {captured:?}");
+        assert!(
+            lines.iter().any(|l| *l == "alpha"),
+            "alpha present: {captured:?}"
+        );
+        assert!(
+            lines
+                .iter()
+                .any(|l| l.starts_with("beta-") && l.contains("gamma")),
+            "wrapped beta+gamma merged: {captured:?}"
+        );
+        assert!(
+            lines.iter().any(|l| *l == "omega"),
+            "trailing line omega present: {captured:?}"
+        );
     }
 
     /// Capture→restore round-trip: text captured from one emulator, replayed into a fresh one,
     /// yields the same visible text — proving a persisted snapshot re-hydrates history intact.
     #[test]
     fn captured_scrollback_restores_into_fresh_term() {
-        let size = TermSize { lines: 24, cols: 40 };
+        let size = TermSize {
+            lines: 24,
+            cols: 40,
+        };
         let make = || Term::new(Config::default(), &size, Listener::default());
         let t1 = FairMutex::new(make());
         {
@@ -548,7 +635,10 @@ mod tests {
         let ls: Vec<&str> = recaptured.lines().collect();
         assert!(ls.iter().any(|l| *l == "line one"), "restored line one");
         assert!(ls.iter().any(|l| *l == "line two"), "restored line two");
-        assert!(ls.iter().any(|l| l.starts_with("line three")), "restored line three: {recaptured:?}");
+        assert!(
+            ls.iter().any(|l| l.starts_with("line three")),
+            "restored line three: {recaptured:?}"
+        );
     }
 
     /// The retry backoff ladder grows exponentially and caps at 60s, so a dead daemon is probed on

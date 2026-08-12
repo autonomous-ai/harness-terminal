@@ -5,12 +5,12 @@
 //! AMP, Kilo, Grok — or a plain shell).
 
 pub mod app;
+pub mod config;
 pub mod engines;
-pub mod native;
 pub mod harness;
-pub mod session;
-pub mod transport;
+pub mod native;
 pub mod render;
 pub mod restore;
-pub mod config;
+pub mod session;
+pub mod transport;
 pub mod tui;

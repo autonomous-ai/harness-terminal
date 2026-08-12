@@ -61,7 +61,9 @@ pub struct HarnessClient {
 impl HarnessClient {
     /// Point at a local (or, for a remote-attach loopback, any reachable) harness control port.
     pub fn on_port(port: u16) -> HarnessClient {
-        HarnessClient { base: format!("http://127.0.0.1:{port}") }
+        HarnessClient {
+            base: format!("http://127.0.0.1:{port}"),
+        }
     }
 
     /// On the default loopback port — the common case.
@@ -104,14 +106,20 @@ impl FleetStatus {
     pub fn engine_is_live(&self, engine: &str) -> bool {
         let now_ms = now_unix_ms();
         self.fleet.iter().any(|s| {
-            s.engine == engine && s.updated_at > 0 && now_ms.saturating_sub(s.updated_at) < IDLE_AFTER_MS
+            s.engine == engine
+                && s.updated_at > 0
+                && now_ms.saturating_sub(s.updated_at) < IDLE_AFTER_MS
         })
     }
 
     /// Short one-real-word summary for the status line, e.g. "3 agents / tunnel up".
     pub fn summary(&self) -> String {
         let n = self.fleet.len();
-        let tunnel = if self.connected { "tunnel up" } else { "tunnel down" };
+        let tunnel = if self.connected {
+            "tunnel up"
+        } else {
+            "tunnel down"
+        };
         format!("{n} agent{} · {tunnel}", if n == 1 { "" } else { "s" })
     }
 }
@@ -133,7 +141,8 @@ mod tests {
     fn parses_live_status_and_busy() {
         // updatedAt is unix ms measured NOW, so a "live" row is ~2s ago and "stale"/"never" are far back.
         let now = super::now_unix_ms();
-        let raw = format!(r#"{{
+        let raw = format!(
+            r#"{{
             "machineId": "49130ea7541488a778132ed7476dbbc0",
             "connected": true,
             "deviceTransportConnected": true,
@@ -141,7 +150,9 @@ mod tests {
                 {{ "id": "x", "sessionId": "y", "engine": "claude", "tmuxPane": "%7", "updatedAt": {} }},
                 {{ "id": "z", "sessionId": "w", "engine": "codex", "tmuxPane": "%8", "updatedAt": 0 }}
             ]
-        }}"#, now - 2000);
+        }}"#,
+            now - 2000
+        );
         let st: FleetStatus = serde_json::from_str(&raw).expect("wire JSON parses");
         assert_eq!(st.machine_id, "49130ea7541488a778132ed7476dbbc0");
         assert!(st.connected);
@@ -159,15 +170,24 @@ mod tests {
     fn session_live_requires_identity_and_heartbeat() {
         let now = super::now_unix_ms();
         let live = FleetSession {
-            session_id: "abc".into(), engine: "claude".into(), tmux_pane: "%7".into(), updated_at: now - 1000, ..Default::default()
+            session_id: "abc".into(),
+            engine: "claude".into(),
+            tmux_pane: "%7".into(),
+            updated_at: now - 1000,
+            ..Default::default()
         };
         assert!(live.is_live());
         // Stale (older than the idle window).
-        let stale = FleetSession { updated_at: now - 10 * 60 * 1000, ..live.clone() };
+        let stale = FleetSession {
+            updated_at: now - 10 * 60 * 1000,
+            ..live.clone()
+        };
         assert!(!stale.is_live());
         // No session id — nothing to attach to even if recently updated.
-        let no_id = FleetSession { session_id: String::new(), ..live.clone() };
+        let no_id = FleetSession {
+            session_id: String::new(),
+            ..live.clone()
+        };
         assert!(!no_id.is_live());
     }
 }
-

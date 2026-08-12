@@ -345,7 +345,9 @@ impl Application {
     /// sequence. Works uniformly for local and remote/tunnel sessions, so it's the reliable paste
     /// when Ctrl+V is taken by a window manager.
     fn paste_clipboard(&mut self) {
-        let Some(s) = self.app.active_session() else { return };
+        let Some(s) = self.app.active_session() else {
+            return;
+        };
         if let Ok(mut cb) = arboard::Clipboard::new() {
             if let Ok(text) = cb.get_text() {
                 let seq = format!("\x1b[200~{}\x1b[201~", text);
@@ -358,7 +360,9 @@ impl Application {
     /// clipboard as plain text. Handy for dumping an agent's whole log for pasting into an issue or
     /// a summary. Builds the text with the same capture path used for restart persistence.
     fn copy_whole_scrollback(&mut self) {
-        let Some(s) = self.app.active_session() else { return };
+        let Some(s) = self.app.active_session() else {
+            return;
+        };
         let text = s.capture_scrollback();
         if text.trim().is_empty() {
             return;
@@ -373,20 +377,37 @@ impl Application {
     /// artifact — a diver can dump a long agent log to disk to grep, diff, or share. Shows the path
     /// in the OSC title slot so the user sees where it landed.
     fn export_scrollback(&mut self) {
-        let Some(s) = self.app.active_session() else { return };
+        let Some(s) = self.app.active_session() else {
+            return;
+        };
         let text = s.capture_scrollback();
         if text.trim().is_empty() {
             return;
         }
         let slug = s.meta.name.clone().unwrap_or_else(|| s.meta.engine.clone());
-        let slug: String = slug.chars().map(|c| if c.is_ascii_alphanumeric() || c == '-' || c == '_' { c } else { '_' }).collect();
+        let slug: String = slug
+            .chars()
+            .map(|c| {
+                if c.is_ascii_alphanumeric() || c == '-' || c == '_' {
+                    c
+                } else {
+                    '_'
+                }
+            })
+            .collect();
         let base = std::env::current_dir().unwrap_or_else(|_| std::env::temp_dir());
         // The timestamp needs to be readable but collision-safe; epoch-ms keeps it unique.
-        let stamp = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map(|d| d.as_millis()).unwrap_or(0);
+        let stamp = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|d| d.as_millis())
+            .unwrap_or(0);
         let path = base.join(format!("{}-{}.log", slug, stamp));
         if std::fs::write(&path, &text).is_ok() {
             let shown = path.to_string_lossy();
-            self.flash = Some((format!("wrote {} bytes → {}", text.len(), shown), std::time::Instant::now()));
+            self.flash = Some((
+                format!("wrote {} bytes → {}", text.len(), shown),
+                std::time::Instant::now(),
+            ));
         }
     }
 
@@ -419,7 +440,11 @@ impl Application {
 
     fn fleet_attach_selected(&mut self) {
         // `selected` is an index into `fleet_filtered`; resolve it back to the real session.
-        let real = self.fleet_filtered.get(self.app.selected).copied().unwrap_or(self.app.selected);
+        let real = self
+            .fleet_filtered
+            .get(self.app.selected)
+            .copied()
+            .unwrap_or(self.app.selected);
         let Some(fs) = self.app.fleet.fleet.get(real) else {
             self.app.overlay = Overlay::None;
             return;
@@ -470,7 +495,10 @@ impl Application {
     }
 
     fn redraw(&mut self) {
-        let (Some(w), Some(h)) = (NonZeroU32::new(self.size.width), NonZeroU32::new(self.size.height)) else {
+        let (Some(w), Some(h)) = (
+            NonZeroU32::new(self.size.width),
+            NonZeroU32::new(self.size.height),
+        ) else {
             return;
         };
         let (width, height) = (w.get() as usize, h.get() as usize);
@@ -499,8 +527,12 @@ impl Application {
         }
 
         // Then present it via the softbuffer surface.
-        let Some(surface) = &mut self.surface else { return };
-        let Ok(mut buffer) = surface.buffer_mut() else { return };
+        let Some(surface) = &mut self.surface else {
+            return;
+        };
+        let Ok(mut buffer) = surface.buffer_mut() else {
+            return;
+        };
         for (dst, src) in buffer.iter_mut().zip(fb.pixels.iter()) {
             *dst = *src;
         }
@@ -523,7 +555,10 @@ impl Application {
             let (gl, gc) = (g.screen_lines(), g.columns());
             drop(g);
             if gl != grid_lines || gc != grid_cols {
-                let size = TermSize { lines: grid_lines.max(1), cols: grid_cols.max(1) };
+                let size = TermSize {
+                    lines: grid_lines.max(1),
+                    cols: grid_cols.max(1),
+                };
                 active.resize(size);
             }
         }
@@ -542,8 +577,23 @@ impl Application {
             }
             // Compute the current text-selection range (if any) so draw_grid can highlight it.
             let sel = g.selection.as_ref().and_then(|s| s.to_range(&g));
-            let copy = if self.copy_mode { Some(self.copy_pos) } else { None };
-            draw_grid(fb, &g, self.cell_w, self.cell_h, self.font_px, &mut self.cache, self.find_hit, &self.find_all, sel.as_ref(), copy);
+            let copy = if self.copy_mode {
+                Some(self.copy_pos)
+            } else {
+                None
+            };
+            draw_grid(
+                fb,
+                &g,
+                self.cell_w,
+                self.cell_h,
+                self.font_px,
+                &mut self.cache,
+                self.find_hit,
+                &self.find_all,
+                sel.as_ref(),
+                copy,
+            );
         } else {
             // No sessions open — draw a short 'how to start' hint so the window isn't a blank void.
             let cy = term_top + (grid_lines / 2) * gline_px;
@@ -582,15 +632,35 @@ impl Application {
             // (rooted at 1 so one line displays as "!1", capped so it doesn't eat the bar); a muted
             // tab is dimmed and shows M instead so its silence is read at a glance.
             let delta = self.grew_delta.get(i).copied().unwrap_or(0);
-            let flag = if activity[i] { format!("!{}", delta.min(999)) } else { String::new() };
-            let mute = if self.muted.get(i).copied().unwrap_or(false) { " M " } else { " " };
+            let flag = if activity[i] {
+                format!("!{}", delta.min(999))
+            } else {
+                String::new()
+            };
+            let mute = if self.muted.get(i).copied().unwrap_or(false) {
+                " M "
+            } else {
+                " "
+            };
             // Show the user's rename if set; otherwise the plain engine id.
             let head = s.meta.name.clone().unwrap_or_else(|| s.meta.engine.clone());
             let label = format!(" {}{} {} {}{} ", flag, head, live, mute, dot);
             // Active tab: tinted by a stable hash of its host (dive context). Inactive tabs fall back
             // to the engine's own accent color so you can spot the "claude" tab from across the bar.
-            let color = if active { host_color(&s.meta.host) } else { engine_accent(&s.meta.engine) };
-            x += draw_text(fb, &mut self.cache, &label, x, tab_base, self.font_px, color) + 12;
+            let color = if active {
+                host_color(&s.meta.host)
+            } else {
+                engine_accent(&s.meta.engine)
+            };
+            x += draw_text(
+                fb,
+                &mut self.cache,
+                &label,
+                x,
+                tab_base,
+                self.font_px,
+                color,
+            ) + 12;
             if x > fb.width.saturating_sub(20) {
                 break;
             }
@@ -605,23 +675,42 @@ impl Application {
             } else {
                 // Show the live retry state (attempts + backoff seconds) so a dropped tunnel is
                 // visibly healing itself rather than silently sitting on a dead pane.
-                format!("○ {}", s.retry_info().unwrap_or_else(|| "reconnecting…".to_string()))
+                format!(
+                    "○ {}",
+                    s.retry_info()
+                        .unwrap_or_else(|| "reconnecting…".to_string())
+                )
             };
             let live = s.live_title().unwrap_or_else(|| s.meta.title.clone());
             let head = s.meta.name.clone().unwrap_or_else(|| s.meta.engine.clone());
-            info = format!(" {} · {} · {} · [{} {}]", s.meta.host, head, live, s.kind(), link);
+            info = format!(
+                " {} · {} · {} · [{} {}]",
+                s.meta.host,
+                head,
+                live,
+                s.kind(),
+                link
+            );
             // Show how many scrollback lines this session has accumulated, so a diver monitoring a
             // long agent run sees growth at a glance without entering the tab.
             info += &format!(" · {} ln", s.history_len());
         }
         // Link-health badge for the whole fleet (refreshed on the throttled reconnect sweep): a
         // diver wants to know the e2ee tunnel to the harness daemon is up without opening the panel.
-        let tunnel = if self.app.fleet.connected { "● tunnel up" } else { "○ tunnel down" };
+        let tunnel = if self.app.fleet.connected {
+            "● tunnel up"
+        } else {
+            "○ tunnel down"
+        };
         info = format!("  {} · {}", tunnel, info);
         // When the viewport is scrolled back from the live bottom, say so — a dead giveaway that
         // keys won't take you to fresh output until you press Escape (or the b key). Also show how
         // far back we are as a percentage so a long agent log stays navigable.
-        let scrolled_now = self.app.active_session().map(|s| s.scrolled()).unwrap_or(false);
+        let scrolled_now = self
+            .app
+            .active_session()
+            .map(|s| s.scrolled())
+            .unwrap_or(false);
         if scrolled_now {
             let pct = self
                 .app
@@ -651,37 +740,83 @@ impl Application {
                 self.flash = None;
             }
         }
-        draw_text(fb, &mut self.cache, &info, 6, status_base, self.font_px, CHROME_FG);
+        draw_text(
+            fb,
+            &mut self.cache,
+            &info,
+            6,
+            status_base,
+            self.font_px,
+            CHROME_FG,
+        );
         let hints = " prefix+/ palette  prefix+a broadcast  prefix+h search all  prefix+n new  prefix+r remote  prefix+s fleet  prefix+o busy  prefix+[ copy  prefix+p paste  prefix+l last  prefix+? help  prefix+q quit ";
-        let hw = draw_text(fb, &mut self.cache, hints, 6, status_base, self.font_px, CHROME_DIM);
+        let hw = draw_text(
+            fb,
+            &mut self.cache,
+            hints,
+            6,
+            status_base,
+            self.font_px,
+            CHROME_DIM,
+        );
         // Move the hint to the right edge by re-drawing after clearing a wide column is complex;
         // simplest right-align: draw hints over the info end offset. We draw at the right edge:
         let hx = fb.width.saturating_sub(hw + 6);
         // Overwrite: clear the column first via black, then draw.
-        for py in status_base.saturating_sub(self.font_px as usize)..(status_base + self.font_px as usize) {
+        for py in
+            status_base.saturating_sub(self.font_px as usize)..(status_base + self.font_px as usize)
+        {
             for px in hx.min(fb.width)..fb.width {
                 if py < fb.height {
                     fb.pixels[py * fb.width + px] = 0;
                 }
             }
         }
-        draw_text(fb, &mut self.cache, hints, hx, status_base, self.font_px, CHROME_DIM);
+        draw_text(
+            fb,
+            &mut self.cache,
+            hints,
+            hx,
+            status_base,
+            self.font_px,
+            CHROME_DIM,
+        );
 
         // Copy mode banner: a prominent green status bar so the user knows keystrokes are captured
         // for navigation, with the current motion hints.
         if self.copy_mode {
-            let selecting = if self.copy_anchor.is_some() { "[selecting]" } else { "[v=select]" };
+            let selecting = if self.copy_anchor.is_some() {
+                "[selecting]"
+            } else {
+                "[v=select]"
+            };
             let msg = if self.copy_searching {
-                format!(" COPY SEARCH /{} · Enter jump · Esc cancel ", self.copy_query)
+                format!(
+                    " COPY SEARCH /{} · Enter jump · Esc cancel ",
+                    self.copy_query
+                )
             } else if !self.copy_query.is_empty() {
                 format!(" COPY MODE · h/j/k/l/w/b move {} · n/N search /{} · Enter copy · / search · Esc quit ", selecting, self.copy_query)
             } else {
-                format!(" COPY MODE · h/j/k/l/w/b move {} · / search · Enter copy · Esc quit ", selecting)
+                format!(
+                    " COPY MODE · h/j/k/l/w/b move {} · / search · Enter copy · Esc quit ",
+                    selecting
+                )
             };
-            let cw = draw_text(fb, &mut self.cache, &msg, 6, status_base, self.font_px, (0x00, 0x00, 0x00));
+            let cw = draw_text(
+                fb,
+                &mut self.cache,
+                &msg,
+                6,
+                status_base,
+                self.font_px,
+                (0x00, 0x00, 0x00),
+            );
             // Clear the region background to green behind the message for contrast.
             let green = argb(255, 0x18, 0xe0, 0x8a);
-            for py in status_base.saturating_sub(self.font_px as usize)..(status_base + self.font_px as usize) {
+            for py in status_base.saturating_sub(self.font_px as usize)
+                ..(status_base + self.font_px as usize)
+            {
                 for px in 0..cw.min(fb.width) {
                     if py < fb.height {
                         fb.pixels[py * fb.width + px] = green;
@@ -689,7 +824,15 @@ impl Application {
                 }
             }
             // Re-draw the message in black on green.
-            draw_text(fb, &mut self.cache, &msg, 6, status_base, self.font_px, (0x00, 0x00, 0x00));
+            draw_text(
+                fb,
+                &mut self.cache,
+                &msg,
+                6,
+                status_base,
+                self.font_px,
+                (0x00, 0x00, 0x00),
+            );
         }
 
         // Overlays.
@@ -718,14 +861,36 @@ impl Application {
         // Recompute the filter (mirrors tui::refresh_filter).
         self.app.refresh_filter();
         let (base_y, line_px) = self.overlay_base_y();
-        draw_text(fb, &mut self.cache, &format!("🔍 {}", self.app.query), 32, base_y, self.font_px, WHITE);
+        draw_text(
+            fb,
+            &mut self.cache,
+            &format!("🔍 {}", self.app.query),
+            32,
+            base_y,
+            self.font_px,
+            WHITE,
+        );
         for (row, &i) in self.app.filtered.iter().enumerate().take(12) {
             let s = &self.app.tabs[i];
             let sel = row == self.app.selected;
             let color = if sel { WHITE } else { CHROME_DIM };
             let name = s.meta.name.clone().unwrap_or_else(|| s.meta.engine.clone());
-            let line = format!("  {} · {} · {}  {}", s.meta.host, name, s.meta.title, if sel { "◄" } else { "" });
-            draw_text(fb, &mut self.cache, &line, 32, base_y + (row + 1) * line_px, self.font_px, color);
+            let line = format!(
+                "  {} · {} · {}  {}",
+                s.meta.host,
+                name,
+                s.meta.title,
+                if sel { "◄" } else { "" }
+            );
+            draw_text(
+                fb,
+                &mut self.cache,
+                &line,
+                32,
+                base_y + (row + 1) * line_px,
+                self.font_px,
+                color,
+            );
         }
     }
 
@@ -733,18 +898,50 @@ impl Application {
     /// (Up/Down selects the engine, typing edits the directory). Mirrors the RemoteAttach overlay.
     fn render_new_session(&mut self, fb: &mut Framebuffer) {
         let (base_y, line_px) = self.overlay_base_y();
-        draw_text(fb, &mut self.cache, "  new session  ", 32, base_y, self.font_px, WHITE);
+        draw_text(
+            fb,
+            &mut self.cache,
+            "  new session  ",
+            32,
+            base_y,
+            self.font_px,
+            WHITE,
+        );
         // Reuse `app.selected` as-is; the engine list offset accounts for the extra dir row.
         if self.new_cwd.is_empty() {
-            draw_text(fb, &mut self.cache, "  dir:  (blank = config start_cwd)  ", 32, base_y + line_px, self.font_px, CHROME_FG);
+            draw_text(
+                fb,
+                &mut self.cache,
+                "  dir:  (blank = config start_cwd)  ",
+                32,
+                base_y + line_px,
+                self.font_px,
+                CHROME_FG,
+            );
         } else {
-            draw_text(fb, &mut self.cache, &format!("  dir: {}", self.new_cwd), 32, base_y + line_px, self.font_px, CHROME_FG);
+            draw_text(
+                fb,
+                &mut self.cache,
+                &format!("  dir: {}", self.new_cwd),
+                32,
+                base_y + line_px,
+                self.font_px,
+                CHROME_FG,
+            );
         }
         for (i, e) in ENGINES.iter().enumerate() {
             let sel = i == self.app.selected;
             let color = if sel { WHITE } else { CHROME_DIM };
             let line = format!("  {}  {}  {}", e.id, e.label, if sel { "◄" } else { "" });
-            draw_text(fb, &mut self.cache, &line, 32, base_y + (i + 2) * line_px, self.font_px, color);
+            draw_text(
+                fb,
+                &mut self.cache,
+                &line,
+                32,
+                base_y + (i + 2) * line_px,
+                self.font_px,
+                color,
+            );
         }
     }
 
@@ -755,18 +952,61 @@ impl Application {
         // Recompute the filter each frame so typing filters live (mirrors the palette overlay).
         self.fleet_refresh_filter();
         let f = &self.app.fleet;
-        let mid = if f.machine_id.is_empty() { "unknown".to_string() } else { f.machine_id.chars().take(6).collect() };
-        let tunnel = if f.connected { "tunnel up" } else { "tunnel down" };
+        let mid = if f.machine_id.is_empty() {
+            "unknown".to_string()
+        } else {
+            f.machine_id.chars().take(6).collect()
+        };
+        let tunnel = if f.connected {
+            "tunnel up"
+        } else {
+            "tunnel down"
+        };
         let n = f.fleet.len();
         let shown = self.fleet_filtered.len();
-        let q = if self.fleet_query.is_empty() { String::new() } else { format!("/{} ", self.fleet_query) };
-        draw_text(fb, &mut self.cache, &format!("  fleet · {} · {} · {} session{} · {}type to filter · Up/Down+Enter to dive  ", mid, tunnel, n, if n == 1 { "" } else { "s" }, q), 32, base_y, self.font_px, WHITE);
+        let q = if self.fleet_query.is_empty() {
+            String::new()
+        } else {
+            format!("/{} ", self.fleet_query)
+        };
+        draw_text(
+            fb,
+            &mut self.cache,
+            &format!(
+                "  fleet · {} · {} · {} session{} · {}type to filter · Up/Down+Enter to dive  ",
+                mid,
+                tunnel,
+                n,
+                if n == 1 { "" } else { "s" },
+                q
+            ),
+            32,
+            base_y,
+            self.font_px,
+            WHITE,
+        );
         if n == 0 {
-            draw_text(fb, &mut self.cache, "  no harness sessions (daemon unreachable or nothing joined)  ", 32, base_y + line_px, self.font_px, CHROME_DIM);
+            draw_text(
+                fb,
+                &mut self.cache,
+                "  no harness sessions (daemon unreachable or nothing joined)  ",
+                32,
+                base_y + line_px,
+                self.font_px,
+                CHROME_DIM,
+            );
             return;
         }
         if shown == 0 && !self.fleet_query.is_empty() {
-            draw_text(fb, &mut self.cache, "  no sessions match  ", 32, base_y + line_px, self.font_px, CHROME_DIM);
+            draw_text(
+                fb,
+                &mut self.cache,
+                "  no sessions match  ",
+                32,
+                base_y + line_px,
+                self.font_px,
+                CHROME_DIM,
+            );
             return;
         }
         for (row, &real) in self.fleet_filtered.iter().enumerate().take(20) {
@@ -774,11 +1014,40 @@ impl Application {
             let live = s.is_live();
             let sel = row == self.app.selected;
             let mark = if live { "●" } else { "○" };
-            let color = if sel { WHITE } else if live { (0x4a, 0xe0, 0x8a) } else { CHROME_DIM };
-            let eng = if s.engine.is_empty() { "?" } else { s.engine.as_str() };
-            let id = if s.session_id.is_empty() { s.tmux_pane.clone() } else { s.session_id.chars().take(8).collect() };
-            let line = format!("  {} {}  {:<9} {}{}", mark, eng, "", id, if sel { "  ◄" } else { "" });
-            draw_text(fb, &mut self.cache, &line, 32, base_y + (row + 1) * line_px, self.font_px, color);
+            let color = if sel {
+                WHITE
+            } else if live {
+                (0x4a, 0xe0, 0x8a)
+            } else {
+                CHROME_DIM
+            };
+            let eng = if s.engine.is_empty() {
+                "?"
+            } else {
+                s.engine.as_str()
+            };
+            let id = if s.session_id.is_empty() {
+                s.tmux_pane.clone()
+            } else {
+                s.session_id.chars().take(8).collect()
+            };
+            let line = format!(
+                "  {} {}  {:<9} {}{}",
+                mark,
+                eng,
+                "",
+                id,
+                if sel { "  ◄" } else { "" }
+            );
+            draw_text(
+                fb,
+                &mut self.cache,
+                &line,
+                32,
+                base_y + (row + 1) * line_px,
+                self.font_px,
+                color,
+            );
         }
     }
 
@@ -790,9 +1059,15 @@ impl Application {
         let n = self.fleet_matches.len();
         // Header row: query, live match count, and "no matches" when the query misses everywhere.
         let (hdr, hdr_color) = if self.fleet_q.is_empty() {
-            ("  search all sessions: (type to match every tab)  ".to_string(), CHROME_DIM)
+            (
+                "  search all sessions: (type to match every tab)  ".to_string(),
+                CHROME_DIM,
+            )
         } else if n == 0 {
-            (format!("  search all sessions: {}  (no matches)", self.fleet_q), CHROME_DIM)
+            (
+                format!("  search all sessions: {}  (no matches)", self.fleet_q),
+                CHROME_DIM,
+            )
         } else {
             let here = (self.fleet_sel % n) + 1;
             let totals = format!(
@@ -807,7 +1082,15 @@ impl Application {
             );
             (totals, WHITE)
         };
-        draw_text(fb, &mut self.cache, &hdr, 32, base_y, self.font_px, hdr_color);
+        draw_text(
+            fb,
+            &mut self.cache,
+            &hdr,
+            32,
+            base_y,
+            self.font_px,
+            hdr_color,
+        );
 
         // The list of matches: up to 8 rows, each prefixed with its tab's engine/host label.
         let list_rows = if self.fleet_q.is_empty() || n == 0 {
@@ -828,22 +1111,46 @@ impl Application {
                 let g = s.term.lock();
                 let cols = g.columns();
                 use alacritty_terminal::index::{Column, Line};
-                g.grid()[Line(m.line)][Column(0)..Column(cols)].iter().map(|c| c.c).collect()
+                g.grid()[Line(m.line)][Column(0)..Column(cols)]
+                    .iter()
+                    .map(|c| c.c)
+                    .collect()
             };
             let text = if raw.trim().is_empty() {
                 "(blank line)".to_string()
             } else {
                 raw.trim_end().to_string()
             };
-            let line = format!("  [{}] {}  {}", label, if selected { "◄" } else { " " }, text);
-            draw_text(fb, &mut self.cache, &line, 32, base_y + (row + 1) * line_px, self.font_px, color);
+            let line = format!(
+                "  [{}] {}  {}",
+                label,
+                if selected { "◄" } else { " " },
+                text
+            );
+            draw_text(
+                fb,
+                &mut self.cache,
+                &line,
+                32,
+                base_y + (row + 1) * line_px,
+                self.font_px,
+                color,
+            );
         }
     }
 
     /// Keybinding reference overlay. Static list; dismiss on any key.
     fn render_help(&mut self, fb: &mut Framebuffer) {
         let (base_y, line_px) = self.overlay_base_y();
-        draw_text(fb, &mut self.cache, "  harness-terminal keys  ", 32, base_y, self.font_px, WHITE);
+        draw_text(
+            fb,
+            &mut self.cache,
+            "  harness-terminal keys  ",
+            32,
+            base_y,
+            self.font_px,
+            WHITE,
+        );
         let bindings: [(&str, &str); 29] = [
             ("Ctrl+Space", "prefix (then a command)"),
             ("prefix /", "palette: jump to any session"),
@@ -876,36 +1183,78 @@ impl Application {
             ("prefix q", "quit"),
         ];
         for (row, (k, d)) in bindings.iter().enumerate() {
-            draw_text(fb, &mut self.cache, &format!("  {:<14} {}", k, d), 32, base_y + (row + 1) * line_px, self.font_px, CHROME_DIM);
+            draw_text(
+                fb,
+                &mut self.cache,
+                &format!("  {:<14} {}", k, d),
+                32,
+                base_y + (row + 1) * line_px,
+                self.font_px,
+                CHROME_DIM,
+            );
         }
     }
 
     fn render_remote(&mut self, fb: &mut Framebuffer) {
         let (base_y, line_px) = self.overlay_base_y();
-        draw_text(fb, &mut self.cache, "  attach to pane@host  ", 32, base_y, self.font_px, WHITE);
-        draw_text(fb, &mut self.cache, &format!("  host: {}", self.app.remote_host), 32, base_y + line_px, self.font_px, CHROME_FG);
+        draw_text(
+            fb,
+            &mut self.cache,
+            "  attach to pane@host  ",
+            32,
+            base_y,
+            self.font_px,
+            WHITE,
+        );
+        draw_text(
+            fb,
+            &mut self.cache,
+            &format!("  host: {}", self.app.remote_host),
+            32,
+            base_y + line_px,
+            self.font_px,
+            CHROME_FG,
+        );
         for (i, e) in ENGINES.iter().enumerate() {
             let sel = i == self.app.selected;
             let color = if sel { WHITE } else { CHROME_DIM };
             let line = format!("  {}  {}  {}", e.id, e.label, if sel { "◄" } else { "" });
-            draw_text(fb, &mut self.cache, &line, 32, base_y + (i + 3) * line_px, self.font_px, color);
+            draw_text(
+                fb,
+                &mut self.cache,
+                &line,
+                32,
+                base_y + (i + 3) * line_px,
+                self.font_px,
+                color,
+            );
         }
     }
 
     /// Recompute the focused search match (from the top if none, else continue from it) and scroll
     /// the viewport so the match is visible at the top of the grid area.
     /// Scroll the viewport so the focused match's line is visible (at the top of the screen).
-    fn find_scroll_to(&self, g: &mut alacritty_terminal::term::Term<crate::session::Listener>, l: i32) {
+    fn find_scroll_to(
+        &self,
+        g: &mut alacritty_terminal::term::Term<crate::session::Listener>,
+        l: i32,
+    ) {
         use alacritty_terminal::grid::Scroll;
         let current = g.grid().display_offset() as i32;
         let desired = (-l as i32).clamp(0, g.grid().history_size() as i32);
-        g.grid_mut().scroll_display(Scroll::Delta(desired - current));
+        g.grid_mut()
+            .scroll_display(Scroll::Delta(desired - current));
     }
 
     /// Recompute the occurrence list after a query edit; focuses the first match (or the match
     /// nearest the previous focus) so the viewport tracks the user.
     fn find_recompute(&mut self, _start: Option<i32>) {
-        let Some(active) = self.app.active_session() else { self.find_hit = None; self.find_all = Vec::new(); self.find_index = 0; return };
+        let Some(active) = self.app.active_session() else {
+            self.find_hit = None;
+            self.find_all = Vec::new();
+            self.find_index = 0;
+            return;
+        };
         let mut g = active.term.lock();
         // Remember the previous focus position so edits keep roughly the same match in view.
         let prev_line = self.find_hit.map(|(l, _, _)| l);
@@ -971,7 +1320,8 @@ impl Application {
             use alacritty_terminal::grid::Scroll;
             let current = g.grid().display_offset() as i32;
             let desired = (-m.line as i32).clamp(0, g.grid().history_size() as i32);
-            g.grid_mut().scroll_display(Scroll::Delta(desired - current));
+            g.grid_mut()
+                .scroll_display(Scroll::Delta(desired - current));
             s.set_scrolled(true);
         }
         // Place the read cursor at the match start so it's clearly visible where the hit landed.
@@ -989,7 +1339,9 @@ impl Application {
         let next = (self.find_index as isize + delta).rem_euclid(m as isize) as usize;
         self.find_index = next;
         self.find_hit = self.find_all.get(next).copied();
-        let Some(active) = self.app.active_session() else { return false };
+        let Some(active) = self.app.active_session() else {
+            return false;
+        };
         if let Some((l, _, _)) = self.find_hit {
             let mut g = active.term.lock();
             self.find_scroll_to(&mut *g, l);
@@ -1001,7 +1353,9 @@ impl Application {
     /// Enter copy mode: anchor the read cursor at the top-left visible cell so the user starts
     /// where they can see, and keep the view scrolled (copy mode lives in the scrollback).
     fn start_copy_mode(&mut self) {
-        let Some(active) = self.app.active_session() else { return };
+        let Some(active) = self.app.active_session() else {
+            return;
+        };
         let g = active.term.lock();
         if g.grid().history_size() == 0 {
             return; // nothing to scroll/copy yet
@@ -1023,7 +1377,9 @@ impl Application {
             self.copy_mode = false;
             return;
         }
-        let Some(active) = self.app.active_session() else { return };
+        let Some(active) = self.app.active_session() else {
+            return;
+        };
         let mut g = active.term.lock();
         // Build a simple rectangular selection from the two grid points, install it as the live
         // selection, and read it via alacritty's range-to-string so line handling (wrap vs hard
@@ -1054,7 +1410,9 @@ impl Application {
     /// Move the copy-mode read cursor by a grid delta, keeping it in-bounds and extending the
     /// selection if one is active.
     fn copy_move(&mut self, dl: i32, dc: i32) {
-        let Some(active) = self.app.active_session() else { return };
+        let Some(active) = self.app.active_session() else {
+            return;
+        };
         let g = active.term.lock();
         let cols = g.columns() as i32;
         let max_line = g.grid().bottommost_line().0;
@@ -1070,7 +1428,9 @@ impl Application {
     /// cursor to the match's start column so the user can Inspect/select from it. Returns whether a
     /// match was found.
     fn copy_goto(&mut self, backwards: bool) {
-        let Some(active) = self.app.active_session() else { return };
+        let Some(active) = self.app.active_session() else {
+            return;
+        };
         if self.copy_query.is_empty() {
             return;
         }
@@ -1078,7 +1438,11 @@ impl Application {
         let (cur_line, _) = self.copy_pos;
         // Start the scan just past the cursor (forwards) or just before it (backwards) so `n`/`N`
         // walk distinct matches rather than re-selecting the current one.
-        let search_start = if backwards { cur_line - 1 } else { cur_line + 1 };
+        let search_start = if backwards {
+            cur_line - 1
+        } else {
+            cur_line + 1
+        };
         let g = active.term.lock();
         let full = crate::render::all_matches(&g, &query);
         drop(g);
@@ -1114,12 +1478,23 @@ impl Application {
             let n = self.find_all.len();
             if n > 0 {
                 let here = (self.find_index % n) + 1;
-                format!("  find: {}  (match {} of {} · Enter/Tab next, Shift+Enter prev)", self.find_query, here, n)
+                format!(
+                    "  find: {}  (match {} of {} · Enter/Tab next, Shift+Enter prev)",
+                    self.find_query, here, n
+                )
             } else {
                 format!("  find: {}  (no match)", self.find_query)
             }
         };
-        draw_text(fb, &mut self.cache, &line, 6, status_base, self.font_px, WHITE);
+        draw_text(
+            fb,
+            &mut self.cache,
+            &line,
+            6,
+            status_base,
+            self.font_px,
+            WHITE,
+        );
     }
 
     /// Render the rename overlay: show what the tab is currently called and the in-progress name.
@@ -1135,8 +1510,24 @@ impl Application {
         } else {
             format!("  rename tab: {} ▏", self.rename_query)
         };
-        draw_text(fb, &mut self.cache, &format!("  currently: {}  ", cur), 6, status_base - self.cell_h as usize, self.font_px, CHROME_DIM);
-        draw_text(fb, &mut self.cache, &prompt, 6, status_base, self.font_px, WHITE);
+        draw_text(
+            fb,
+            &mut self.cache,
+            &format!("  currently: {}  ", cur),
+            6,
+            status_base - self.cell_h as usize,
+            self.font_px,
+            CHROME_DIM,
+        );
+        draw_text(
+            fb,
+            &mut self.cache,
+            &prompt,
+            6,
+            status_base,
+            self.font_px,
+            WHITE,
+        );
     }
 
     /// Render the broadcast overlay: the in-progress line, then a checkbox list of every session
@@ -1148,16 +1539,40 @@ impl Application {
             format!("  send line to {n} of {} session{} (↑/↓ focus, Space=toggle, Enter=broadcast, Esc=cancel)  ",
                 self.app.tabs.len(), if n == 1 { "" } else { "s" })
         } else {
-            format!("  broadcast to {n} session{}: {} ▏", if n == 1 { "" } else { "s" }, self.broadcast_query)
+            format!(
+                "  broadcast to {n} session{}: {} ▏",
+                if n == 1 { "" } else { "s" },
+                self.broadcast_query
+            )
         };
-        draw_text(fb, &mut self.cache, &prompt, 32, base_y, self.font_px, WHITE);
+        draw_text(
+            fb,
+            &mut self.cache,
+            &prompt,
+            32,
+            base_y,
+            self.font_px,
+            WHITE,
+        );
         for (row, s) in self.app.tabs.iter().enumerate().take(20) {
             let on = self.broadcast_targets.get(row).copied().unwrap_or(false);
             let mark = if on { "☑" } else { "☐" };
             let name = s.meta.name.clone().unwrap_or_else(|| s.meta.engine.clone());
             let line = format!("  {} {} @ {}", mark, name, s.meta.host);
-            let color = if row == self.broadcast_sel { WHITE } else { CHROME_DIM };
-            draw_text(fb, &mut self.cache, &line, 32, base_y + (row + 2) * line_px, self.font_px, color);
+            let color = if row == self.broadcast_sel {
+                WHITE
+            } else {
+                CHROME_DIM
+            };
+            draw_text(
+                fb,
+                &mut self.cache,
+                &line,
+                32,
+                base_y + (row + 2) * line_px,
+                self.font_px,
+                color,
+            );
         }
     }
 
@@ -1166,7 +1581,15 @@ impl Application {
     /// of its last scrollback lines (WHITE). The selection index is `self.peek_sel`.
     fn render_peek(&mut self, fb: &mut Framebuffer) {
         let (base_y, line_px) = self.overlay_base_y();
-        draw_text(fb, &mut self.cache, "  peek · ↑/↓ preview  · Enter jump · Esc close  ", 32, base_y, self.font_px, WHITE);
+        draw_text(
+            fb,
+            &mut self.cache,
+            "  peek · ↑/↓ preview  · Enter jump · Esc close  ",
+            32,
+            base_y,
+            self.font_px,
+            WHITE,
+        );
         // Cap the list so the overlay stays on screen (~10 rows + preview lines below the selection).
         let rows = self.app.tabs.len().min(10);
         for row in 0..rows {
@@ -1175,8 +1598,17 @@ impl Application {
             let sel = i == self.peek_sel;
             let color = if sel { WHITE } else { CHROME_DIM };
             let name = s.meta.name.clone().unwrap_or_else(|| s.meta.engine.clone());
-            let live = s.live_title().unwrap_or_else(|| s.meta.title.clone()).replace('\n', " ");
-            let line = format!("  {} · {} · {}  {}", s.meta.host, name, live, if sel { "◄" } else { "" });
+            let live = s
+                .live_title()
+                .unwrap_or_else(|| s.meta.title.clone())
+                .replace('\n', " ");
+            let line = format!(
+                "  {} · {} · {}  {}",
+                s.meta.host,
+                name,
+                live,
+                if sel { "◄" } else { "" }
+            );
             let row_y = base_y + (row + 1) * line_px;
             draw_text(fb, &mut self.cache, &line, 32, row_y, self.font_px, color);
             // Expand the highlighted row: dim preview of the last ~4 scrollback lines underneath.
@@ -1189,8 +1621,20 @@ impl Application {
                     .collect();
                 let start = lines.len().saturating_sub(4);
                 for (k, tl) in lines[start..].iter().enumerate().take(4) {
-                    let t = if tl.chars().count() > 90 { tl.chars().take(90).collect::<String>() + "…" } else { tl.to_string() };
-                    draw_text(fb, &mut self.cache, &format!("      {}", t), 32, row_y + (k + 1) * line_px, self.font_px, CHROME_DIM);
+                    let t = if tl.chars().count() > 90 {
+                        tl.chars().take(90).collect::<String>() + "…"
+                    } else {
+                        tl.to_string()
+                    };
+                    draw_text(
+                        fb,
+                        &mut self.cache,
+                        &format!("      {}", t),
+                        32,
+                        row_y + (k + 1) * line_px,
+                        self.font_px,
+                        CHROME_DIM,
+                    );
                 }
             }
         }
@@ -1220,21 +1664,44 @@ impl Application {
         draw_text(
             fb,
             &mut self.cache,
-            &format!("  ⚡ [action] {}  · {} of {}  ", self.palette_q, shown, total),
+            &format!(
+                "  ⚡ [action] {}  · {} of {}  ",
+                self.palette_q, shown, total
+            ),
             32,
             base_y,
             self.font_px,
             WHITE,
         );
         if shown == 0 {
-            draw_text(fb, &mut self.cache, "  no actions match  ", 32, base_y + line_px, self.font_px, CHROME_DIM);
+            draw_text(
+                fb,
+                &mut self.cache,
+                "  no actions match  ",
+                32,
+                base_y + line_px,
+                self.font_px,
+                CHROME_DIM,
+            );
             return;
         }
         for (row, &i) in self.palette_filtered.iter().enumerate().take(12) {
             let sel = row == self.palette_sel;
             let color = if sel { WHITE } else { CHROME_DIM };
-            let line = format!("  {}  {}", self.palette_rows[i].0, if sel { "◄" } else { "" });
-            draw_text(fb, &mut self.cache, &line, 32, base_y + (row + 1) * line_px, self.font_px, color);
+            let line = format!(
+                "  {}  {}",
+                self.palette_rows[i].0,
+                if sel { "◄" } else { "" }
+            );
+            draw_text(
+                fb,
+                &mut self.cache,
+                &line,
+                32,
+                base_y + (row + 1) * line_px,
+                self.font_px,
+                color,
+            );
         }
     }
 
@@ -1302,33 +1769,42 @@ impl Application {
                     self.copy_query.push_str(c);
                     return;
                 }
-                Key::Named(n) => {
-                    match n {
-                        winit::keyboard::NamedKey::Backspace => {
-                            self.copy_query.pop();
-                            return;
-                        }
-                        winit::keyboard::NamedKey::Enter => {
-                            self.copy_searching = false;
-                            self.copy_goto(false);
-                            return;
-                        }
-                        winit::keyboard::NamedKey::Escape => {
-                            self.copy_query.clear();
-                            self.copy_searching = false;
-                            return;
-                        }
-                        _ => return,
+                Key::Named(n) => match n {
+                    winit::keyboard::NamedKey::Backspace => {
+                        self.copy_query.pop();
+                        return;
                     }
-                }
+                    winit::keyboard::NamedKey::Enter => {
+                        self.copy_searching = false;
+                        self.copy_goto(false);
+                        return;
+                    }
+                    winit::keyboard::NamedKey::Escape => {
+                        self.copy_query.clear();
+                        self.copy_searching = false;
+                        return;
+                    }
+                    _ => return,
+                },
                 _ => return,
             }
         }
         match key {
             Key::Character(c) => match c.as_str() {
-                "/" => { self.copy_query.clear(); self.copy_searching = true; }
-                "n" => { if !self.copy_query.is_empty() { self.copy_goto(false); } }
-                "N" => { if !self.copy_query.is_empty() { self.copy_goto(true); } }
+                "/" => {
+                    self.copy_query.clear();
+                    self.copy_searching = true;
+                }
+                "n" => {
+                    if !self.copy_query.is_empty() {
+                        self.copy_goto(false);
+                    }
+                }
+                "N" => {
+                    if !self.copy_query.is_empty() {
+                        self.copy_goto(true);
+                    }
+                }
                 // vim motions
                 "h" | "j" | "k" | "l" | "w" | "b" => {
                     let (dl, dc) = match c.as_str() {
@@ -1336,8 +1812,14 @@ impl Application {
                         "j" => (1, 0),
                         "k" => (-1, 0),
                         "l" | " " => (0, 1),
-                        "w" => { self.copy_word(true); (0, 0) }
-                        "b" => { self.copy_word(false); (0, 0) }
+                        "w" => {
+                            self.copy_word(true);
+                            (0, 0)
+                        }
+                        "b" => {
+                            self.copy_word(false);
+                            (0, 0)
+                        }
                         _ => (0, 0),
                     };
                     self.copy_move(dl, dc);
@@ -1347,16 +1829,25 @@ impl Application {
                     self.copy_anchor = Some(self.copy_pos);
                 }
                 "g" => {
-                    let Some(active) = self.app.active_session() else { return };
+                    let Some(active) = self.app.active_session() else {
+                        return;
+                    };
                     let g = active.term.lock();
                     self.copy_pos = (g.grid().topmost_line().0, 0);
                 }
                 "G" => {
-                    let Some(active) = self.app.active_session() else { return };
+                    let Some(active) = self.app.active_session() else {
+                        return;
+                    };
                     let g = active.term.lock();
                     self.copy_pos = (g.grid().bottommost_line().0, 0);
                 }
-                "q" => { self.copy_mode = false; self.copy_anchor = None; self.copy_query.clear(); self.copy_searching = false; }
+                "q" => {
+                    self.copy_mode = false;
+                    self.copy_anchor = None;
+                    self.copy_query.clear();
+                    self.copy_searching = false;
+                }
                 _ => {}
             },
             Key::Named(n) => match n {
@@ -1368,7 +1859,12 @@ impl Application {
                 winit::keyboard::NamedKey::ArrowRight => self.copy_move(0, 1),
                 winit::keyboard::NamedKey::PageUp => self.copy_move(-20, 0),
                 winit::keyboard::NamedKey::PageDown => self.copy_move(20, 0),
-                winit::keyboard::NamedKey::Escape => { self.copy_mode = false; self.copy_anchor = None; self.copy_query.clear(); self.copy_searching = false; }
+                winit::keyboard::NamedKey::Escape => {
+                    self.copy_mode = false;
+                    self.copy_anchor = None;
+                    self.copy_query.clear();
+                    self.copy_searching = false;
+                }
                 _ => {}
             },
             _ => {}
@@ -1378,14 +1874,19 @@ impl Application {
     /// Jump the copy cursor to the next/previous word boundary. `forward` moves right, otherwise
     /// left. Wraps selection extension implicitly because it just moves `copy_pos`.
     fn copy_word(&mut self, forward: bool) {
-        let Some(active) = self.app.active_session() else { return };
+        let Some(active) = self.app.active_session() else {
+            return;
+        };
         let g = active.term.lock();
         let cols = g.columns();
         let (mut l, mut cur) = self.copy_pos;
         let max_line = g.grid().bottommost_line().0;
         // Work on the current line's text; map from copy_pos col to a byte index.
         use alacritty_terminal::index::{Column, Line};
-        let line_text: String = g.grid()[Line(l)][Column(0)..Column(cols)].iter().map(|c| c.c).collect();
+        let line_text: String = g.grid()[Line(l)][Column(0)..Column(cols)]
+            .iter()
+            .map(|c| c.c)
+            .collect();
         let ci = cur.min(line_text.len().saturating_sub(1));
         let bytes = line_text.as_bytes();
         let is_space_at = |i: usize| bytes.get(i).map_or(true, |b| b.is_ascii_whitespace());
@@ -1477,9 +1978,22 @@ impl Application {
     fn command_key(&mut self, key: &Key) -> bool {
         match key {
             Key::Character(c) => match c.as_str() {
-                "/" => { self.app.overlay = Overlay::Palette; self.app.query.clear(); self.app.selected = 0; self.app.refresh_filter(); }
-                "n" => { self.app.overlay = Overlay::NewSession; self.app.select_default_engine(); self.new_cwd.clear(); }
-                "r" => { self.app.overlay = Overlay::RemoteAttach; self.app.remote_host.clear(); self.app.selected = 0; }
+                "/" => {
+                    self.app.overlay = Overlay::Palette;
+                    self.app.query.clear();
+                    self.app.selected = 0;
+                    self.app.refresh_filter();
+                }
+                "n" => {
+                    self.app.overlay = Overlay::NewSession;
+                    self.app.select_default_engine();
+                    self.new_cwd.clear();
+                }
+                "r" => {
+                    self.app.overlay = Overlay::RemoteAttach;
+                    self.app.remote_host.clear();
+                    self.app.selected = 0;
+                }
                 "t" => self.app.spawn_tmux("this-host", "shell"),
                 "q" => return true,
                 "s" => {
@@ -1493,7 +2007,11 @@ impl Application {
                     }
                     self.app.overlay = Overlay::Fleet;
                 }
-                "c" => { if !self.app.tabs.is_empty() { self.set_active(0); } }
+                "c" => {
+                    if !self.app.tabs.is_empty() {
+                        self.set_active(0);
+                    }
+                }
                 "o" => self.next_busy(),
                 "m" => self.toggle_mute_active(),
                 "l" => self.last_window(),
@@ -1508,19 +2026,41 @@ impl Application {
                     self.broadcast_sel = 0;
                     self.app.overlay = Overlay::Broadcast;
                 }
-                "x" => { close_tab(&mut self.app); }
+                "x" => {
+                    close_tab(&mut self.app);
+                }
                 "d" => self.copy_whole_scrollback(),
                 "w" => self.export_scrollback(),
-                "y" => { self.app.overlay = Overlay::Peek; self.peek_sel = 0; },
+                "y" => {
+                    self.app.overlay = Overlay::Peek;
+                    self.peek_sel = 0;
+                }
                 "u" => self.app.reopen_last_closed(),
-                "g" => { scroll_active(self, 20); if let Some(s) = self.app.active_session() { s.set_scrolled(true); } }
+                "g" => {
+                    scroll_active(self, 20);
+                    if let Some(s) = self.app.active_session() {
+                        s.set_scrolled(true);
+                    }
+                }
                 "b" => self.scroll_to_bottom(),
-                "f" => { self.app.overlay = Overlay::Find; self.find_query.clear(); self.find_hit = None; self.find_all = Vec::new(); },
-                "h" => { self.app.overlay = Overlay::FleetSearch; self.fleet_q.clear(); self.fleet_matches.clear(); self.fleet_sel = 0; },
+                "f" => {
+                    self.app.overlay = Overlay::Find;
+                    self.find_query.clear();
+                    self.find_hit = None;
+                    self.find_all = Vec::new();
+                }
+                "h" => {
+                    self.app.overlay = Overlay::FleetSearch;
+                    self.fleet_q.clear();
+                    self.fleet_matches.clear();
+                    self.fleet_sel = 0;
+                }
                 "{" => self.app.move_tab(-1),
                 "}" => self.app.move_tab(1),
                 "[" => self.start_copy_mode(),
-                "?" => { self.app.overlay = Overlay::Help; }
+                "?" => {
+                    self.app.overlay = Overlay::Help;
+                }
                 ";" => {
                     self.palette_q.clear();
                     self.palette_sel = 0;
@@ -1542,7 +2082,9 @@ impl Application {
                     let idx = c.chars().next().unwrap() as u8;
                     if (b'1'..=b'9').contains(&idx) {
                         let i = (idx - b'1') as usize;
-                        if i < self.app.tabs.len() { self.set_active(i); }
+                        if i < self.app.tabs.len() {
+                            self.set_active(i);
+                        }
                     }
                 }
                 _ => {}
@@ -1565,13 +2107,27 @@ impl Application {
         match self.app.overlay {
             Overlay::Palette => {
                 match key {
-                    Key::Character(c) => { self.app.query.push_str(c); self.app.refresh_filter(); }
+                    Key::Character(c) => {
+                        self.app.query.push_str(c);
+                        self.app.refresh_filter();
+                    }
                     Key::Named(n) => match n {
                         winit::keyboard::NamedKey::Enter => self.app.jump_to_selection(),
                         winit::keyboard::NamedKey::Escape => self.app.overlay = Overlay::None,
-                        winit::keyboard::NamedKey::ArrowDown => self.app.selected = self.app.selected.saturating_add(1).min(self.app.filtered.len().saturating_sub(1)),
-                        winit::keyboard::NamedKey::ArrowUp => self.app.selected = self.app.selected.saturating_sub(1),
-                        winit::keyboard::NamedKey::Backspace => { self.app.query.pop(); self.app.refresh_filter(); }
+                        winit::keyboard::NamedKey::ArrowDown => {
+                            self.app.selected = self
+                                .app
+                                .selected
+                                .saturating_add(1)
+                                .min(self.app.filtered.len().saturating_sub(1))
+                        }
+                        winit::keyboard::NamedKey::ArrowUp => {
+                            self.app.selected = self.app.selected.saturating_sub(1)
+                        }
+                        winit::keyboard::NamedKey::Backspace => {
+                            self.app.query.pop();
+                            self.app.refresh_filter();
+                        }
                         _ => {}
                     },
                     _ => {}
@@ -1584,14 +2140,27 @@ impl Application {
                     // engine; Backspace edits the directory.
                     Key::Character(c) => self.new_cwd.push_str(c),
                     Key::Named(n) => match n {
-                        winit::keyboard::NamedKey::Enter => if let Some(e) = self.app.selected_engine() {
-                            let cwd = if self.new_cwd.trim().is_empty() { None } else { Some(self.new_cwd.trim().to_string()) };
-                            self.app.spawn_local("this-host", e, cwd); self.app.overlay = Overlay::None;
-                        },
+                        winit::keyboard::NamedKey::Enter => {
+                            if let Some(e) = self.app.selected_engine() {
+                                let cwd = if self.new_cwd.trim().is_empty() {
+                                    None
+                                } else {
+                                    Some(self.new_cwd.trim().to_string())
+                                };
+                                self.app.spawn_local("this-host", e, cwd);
+                                self.app.overlay = Overlay::None;
+                            }
+                        }
                         winit::keyboard::NamedKey::Escape => self.app.overlay = Overlay::None,
-                        winit::keyboard::NamedKey::ArrowDown => self.app.selected = (self.app.selected + 1).min(ENGINES.len() - 1),
-                        winit::keyboard::NamedKey::ArrowUp => self.app.selected = self.app.selected.saturating_sub(1),
-                        winit::keyboard::NamedKey::Backspace => { self.new_cwd.pop(); }
+                        winit::keyboard::NamedKey::ArrowDown => {
+                            self.app.selected = (self.app.selected + 1).min(ENGINES.len() - 1)
+                        }
+                        winit::keyboard::NamedKey::ArrowUp => {
+                            self.app.selected = self.app.selected.saturating_sub(1)
+                        }
+                        winit::keyboard::NamedKey::Backspace => {
+                            self.new_cwd.pop();
+                        }
                         _ => {}
                     },
                     _ => {}
@@ -1602,15 +2171,31 @@ impl Application {
                 match key {
                     Key::Character(c) => self.app.remote_host.push_str(c),
                     Key::Named(n) => match n {
-                        winit::keyboard::NamedKey::Enter => if let Some(e) = self.app.selected_engine() {
-                            let host = if self.app.remote_host.trim().is_empty() { "127.0.0.1".to_string() } else { self.app.remote_host.trim().to_string() };
-                            self.app.spawn_tunnel(&host, crate::harness::HARNESS_PORT_DEFAULT, e);
-                            self.app.overlay = Overlay::None;
-                        },
+                        winit::keyboard::NamedKey::Enter => {
+                            if let Some(e) = self.app.selected_engine() {
+                                let host = if self.app.remote_host.trim().is_empty() {
+                                    "127.0.0.1".to_string()
+                                } else {
+                                    self.app.remote_host.trim().to_string()
+                                };
+                                self.app.spawn_tunnel(
+                                    &host,
+                                    crate::harness::HARNESS_PORT_DEFAULT,
+                                    e,
+                                );
+                                self.app.overlay = Overlay::None;
+                            }
+                        }
                         winit::keyboard::NamedKey::Escape => self.app.overlay = Overlay::None,
-                        winit::keyboard::NamedKey::ArrowDown => self.app.selected = (self.app.selected + 1).min(ENGINES.len() - 1),
-                        winit::keyboard::NamedKey::ArrowUp => self.app.selected = self.app.selected.saturating_sub(1),
-                        winit::keyboard::NamedKey::Backspace => { self.app.remote_host.pop(); }
+                        winit::keyboard::NamedKey::ArrowDown => {
+                            self.app.selected = (self.app.selected + 1).min(ENGINES.len() - 1)
+                        }
+                        winit::keyboard::NamedKey::ArrowUp => {
+                            self.app.selected = self.app.selected.saturating_sub(1)
+                        }
+                        winit::keyboard::NamedKey::Backspace => {
+                            self.app.remote_host.pop();
+                        }
                         _ => {}
                     },
                     _ => {}
@@ -1624,12 +2209,25 @@ impl Application {
                         self.find_recompute(None);
                     }
                     Key::Named(n) => match n {
-                        winit::keyboard::NamedKey::Enter if mods.shift_key() => { self.find_jump(-1); }
-                        winit::keyboard::NamedKey::Enter | winit::keyboard::NamedKey::Tab => { self.find_jump(1); }
-                        winit::keyboard::NamedKey::ArrowDown => { self.find_jump(1); }
-                        winit::keyboard::NamedKey::ArrowUp => { self.find_jump(-1); }
-                        winit::keyboard::NamedKey::Backspace => { self.find_query.pop(); self.find_recompute(None); }
-                        winit::keyboard::NamedKey::Escape => { self.app.overlay = Overlay::None; }
+                        winit::keyboard::NamedKey::Enter if mods.shift_key() => {
+                            self.find_jump(-1);
+                        }
+                        winit::keyboard::NamedKey::Enter | winit::keyboard::NamedKey::Tab => {
+                            self.find_jump(1);
+                        }
+                        winit::keyboard::NamedKey::ArrowDown => {
+                            self.find_jump(1);
+                        }
+                        winit::keyboard::NamedKey::ArrowUp => {
+                            self.find_jump(-1);
+                        }
+                        winit::keyboard::NamedKey::Backspace => {
+                            self.find_query.pop();
+                            self.find_recompute(None);
+                        }
+                        winit::keyboard::NamedKey::Escape => {
+                            self.app.overlay = Overlay::None;
+                        }
                         _ => {}
                     },
                     _ => {}
@@ -1646,12 +2244,25 @@ impl Application {
                         // Enter closes and jumps to the selected match across tables.
                         winit::keyboard::NamedKey::Enter => self.fleet_jump_to(),
                         // Tab moves the selection down (Shift+Tab up), wrapping.
-                        winit::keyboard::NamedKey::Tab if mods.shift_key() => { self.fleet_jump(-1); }
-                        winit::keyboard::NamedKey::Tab => { self.fleet_jump(1); }
-                        winit::keyboard::NamedKey::ArrowDown => { self.fleet_jump(1); }
-                        winit::keyboard::NamedKey::ArrowUp => { self.fleet_jump(-1); }
-                        winit::keyboard::NamedKey::Backspace => { self.fleet_q.pop(); self.fleet_recompute(); }
-                        winit::keyboard::NamedKey::Escape => { self.app.overlay = Overlay::None; }
+                        winit::keyboard::NamedKey::Tab if mods.shift_key() => {
+                            self.fleet_jump(-1);
+                        }
+                        winit::keyboard::NamedKey::Tab => {
+                            self.fleet_jump(1);
+                        }
+                        winit::keyboard::NamedKey::ArrowDown => {
+                            self.fleet_jump(1);
+                        }
+                        winit::keyboard::NamedKey::ArrowUp => {
+                            self.fleet_jump(-1);
+                        }
+                        winit::keyboard::NamedKey::Backspace => {
+                            self.fleet_q.pop();
+                            self.fleet_recompute();
+                        }
+                        winit::keyboard::NamedKey::Escape => {
+                            self.app.overlay = Overlay::None;
+                        }
                         _ => {}
                     },
                     _ => {}
@@ -1663,10 +2274,13 @@ impl Application {
                     Key::Named(n) => match n {
                         // Up/Down move the highlighted row; Enter attaches to it (jump to an open
                         // tab for that engine, else open a fresh local tmux pane). Esc dismisses.
-                        winit::keyboard::NamedKey::Escape => { self.app.overlay = Overlay::None; }
+                        winit::keyboard::NamedKey::Escape => {
+                            self.app.overlay = Overlay::None;
+                        }
                         winit::keyboard::NamedKey::ArrowDown => {
                             if !self.fleet_filtered.is_empty() {
-                                self.app.selected = (self.app.selected + 1).min(self.fleet_filtered.len() - 1);
+                                self.app.selected =
+                                    (self.app.selected + 1).min(self.fleet_filtered.len() - 1);
                             }
                         }
                         winit::keyboard::NamedKey::ArrowUp => {
@@ -1698,21 +2312,34 @@ impl Application {
                 }
                 return;
             }
-            Overlay::Help => { self.app.overlay = Overlay::None; return; }
+            Overlay::Help => {
+                self.app.overlay = Overlay::None;
+                return;
+            }
             Overlay::Rename => {
                 match key {
-                    Key::Character(c) => { self.rename_query.push_str(c); }
+                    Key::Character(c) => {
+                        self.rename_query.push_str(c);
+                    }
                     Key::Named(n) => match n {
                         winit::keyboard::NamedKey::Enter => {
                             // Commit the rename (empty = clear back to the default engine label).
-                            let name = if self.rename_query.trim().is_empty() { None } else { Some(self.rename_query.trim().to_string()) };
+                            let name = if self.rename_query.trim().is_empty() {
+                                None
+                            } else {
+                                Some(self.rename_query.trim().to_string())
+                            };
                             if let Some(s) = self.app.active_session_mut() {
                                 s.meta.name = name;
                             }
                             self.app.overlay = Overlay::None;
                         }
-                        winit::keyboard::NamedKey::Backspace => { self.rename_query.pop(); }
-                        winit::keyboard::NamedKey::Escape => { self.app.overlay = Overlay::None; }
+                        winit::keyboard::NamedKey::Backspace => {
+                            self.rename_query.pop();
+                        }
+                        winit::keyboard::NamedKey::Escape => {
+                            self.app.overlay = Overlay::None;
+                        }
                         _ => {}
                     },
                     _ => {}
@@ -1723,7 +2350,9 @@ impl Application {
                 // Keep the target list sized to the current tab set (a tab may have opened/closed).
                 if self.broadcast_targets.len() != self.app.tabs.len() {
                     self.broadcast_targets.resize(self.app.tabs.len(), true);
-                    self.broadcast_sel = self.broadcast_sel.min(self.app.tabs.len().saturating_sub(1));
+                    self.broadcast_sel = self
+                        .broadcast_sel
+                        .min(self.app.tabs.len().saturating_sub(1));
                 }
                 match key {
                     Key::Character(c) => {
@@ -1752,12 +2381,15 @@ impl Application {
                             self.app.overlay = Overlay::None;
                         }
                         winit::keyboard::NamedKey::ArrowDown => {
-                            self.broadcast_sel = (self.broadcast_sel + 1).min(self.app.tabs.len().saturating_sub(1));
+                            self.broadcast_sel =
+                                (self.broadcast_sel + 1).min(self.app.tabs.len().saturating_sub(1));
                         }
                         winit::keyboard::NamedKey::ArrowUp => {
                             self.broadcast_sel = self.broadcast_sel.saturating_sub(1);
                         }
-                        winit::keyboard::NamedKey::Backspace => { self.broadcast_query.pop(); }
+                        winit::keyboard::NamedKey::Backspace => {
+                            self.broadcast_query.pop();
+                        }
                         winit::keyboard::NamedKey::Escape => {
                             self.broadcast_query.clear();
                             self.app.overlay = Overlay::None;
@@ -1773,8 +2405,11 @@ impl Application {
                     // A picker, not a prompt: typing does nothing.
                     Key::Character(_) => {}
                     Key::Named(n) => match n {
-                        winit::keyboard::NamedKey::ArrowDown | winit::keyboard::NamedKey::Tab if !mods.shift_key() => {
-                            self.peek_sel = (self.peek_sel + 1).min(self.app.tabs.len().saturating_sub(1));
+                        winit::keyboard::NamedKey::ArrowDown | winit::keyboard::NamedKey::Tab
+                            if !mods.shift_key() =>
+                        {
+                            self.peek_sel =
+                                (self.peek_sel + 1).min(self.app.tabs.len().saturating_sub(1));
                         }
                         winit::keyboard::NamedKey::Tab => {
                             self.peek_sel = self.peek_sel.saturating_sub(1);
@@ -1789,7 +2424,9 @@ impl Application {
                                 self.app.overlay = Overlay::None;
                             }
                         }
-                        winit::keyboard::NamedKey::Escape => { self.app.overlay = Overlay::None; }
+                        winit::keyboard::NamedKey::Escape => {
+                            self.app.overlay = Overlay::None;
+                        }
                         _ => {}
                     },
                     _ => {}
@@ -1857,9 +2494,20 @@ impl Application {
             if mods.control_key() {
                 if let Key::Character(c) = key {
                     match c.as_str() {
-                        "=" | "+" => { self.zoom_font(1.1); return; }
-                        "-" => { self.zoom_font(1.0 / 1.1); return; }
-                        "0" => { self.zoom = 1.0; crate::restore::save_zoom(1.0); self.metrics_from_scale(); return; }
+                        "=" | "+" => {
+                            self.zoom_font(1.1);
+                            return;
+                        }
+                        "-" => {
+                            self.zoom_font(1.0 / 1.1);
+                            return;
+                        }
+                        "0" => {
+                            self.zoom = 1.0;
+                            crate::restore::save_zoom(1.0);
+                            self.metrics_from_scale();
+                            return;
+                        }
                         _ => {}
                     }
                 }
@@ -1870,8 +2518,15 @@ impl Application {
             if mods.control_key() && matches!(key, Key::Named(winit::keyboard::NamedKey::Enter)) {
                 if let Some(w) = &self.window {
                     let fs = w.fullscreen().is_some();
-                    w.set_fullscreen(if fs { None } else { Some(winit::window::Fullscreen::Borderless(None)) });
-                    self.flash = Some((if fs { "windowed" } else { "fullscreen" }.to_string(), std::time::Instant::now()));
+                    w.set_fullscreen(if fs {
+                        None
+                    } else {
+                        Some(winit::window::Fullscreen::Borderless(None))
+                    });
+                    self.flash = Some((
+                        if fs { "windowed" } else { "fullscreen" }.to_string(),
+                        std::time::Instant::now(),
+                    ));
                 }
                 return;
             }
@@ -1883,13 +2538,27 @@ impl Application {
             // Scrollback navigation takes precedence over forwarding to the shell. While scrolled,
             // page/arrow keys move the viewport; Esc returns to the live (bottom) view. PageUp from
             // the live view also enters scroll mode.
-            let scrolled_now = self.app.active_session().map(|s| s.scrolled()).unwrap_or(false);
+            let scrolled_now = self
+                .app
+                .active_session()
+                .map(|s| s.scrolled())
+                .unwrap_or(false);
             if scrolled_now || matches!(key, Key::Named(winit::keyboard::NamedKey::PageUp)) {
                 match key {
                     Key::Named(n) => match n {
-                        winit::keyboard::NamedKey::PageUp => { scroll_active(self, 20); if let Some(s) = self.app.active_session() { s.set_scrolled(true); } }
+                        winit::keyboard::NamedKey::PageUp => {
+                            scroll_active(self, 20);
+                            if let Some(s) = self.app.active_session() {
+                                s.set_scrolled(true);
+                            }
+                        }
                         winit::keyboard::NamedKey::PageDown => scroll_active(self, -20),
-                        winit::keyboard::NamedKey::ArrowUp => { scroll_active(self, 1); if let Some(s) = self.app.active_session() { s.set_scrolled(true); } }
+                        winit::keyboard::NamedKey::ArrowUp => {
+                            scroll_active(self, 1);
+                            if let Some(s) = self.app.active_session() {
+                                s.set_scrolled(true);
+                            }
+                        }
                         winit::keyboard::NamedKey::ArrowDown => scroll_active(self, -1),
                         winit::keyboard::NamedKey::Escape => self.scroll_to_bottom(),
                         _ => {}
@@ -1989,7 +2658,11 @@ fn broadcast_bytes(q: &str) -> Vec<u8> {
 /// sorted by tab then line. Used by fleet search. Shared free function so the cross-tab + sort
 /// behavior is unit-testable without building real `Session`s (tests pass raw lockable Terms).
 fn collect_fleet_matches(
-    terms: &[Arc<alacritty_terminal::sync::FairMutex<alacritty_terminal::term::Term<crate::session::Listener>>>],
+    terms: &[Arc<
+        alacritty_terminal::sync::FairMutex<
+            alacritty_terminal::term::Term<crate::session::Listener>,
+        >,
+    >],
     query_lower: &str,
 ) -> Vec<FleetMatch> {
     let mut out = Vec::new();
@@ -2063,7 +2736,10 @@ impl Application {
         if row < 0 || col < 0 {
             return None;
         }
-        Some(Point::new(Line((row as usize).try_into().unwrap()), Column(col as usize)))
+        Some(Point::new(
+            Line((row as usize).try_into().unwrap()),
+            Column(col as usize),
+        ))
     }
 
     /// Detect how many clicks this press represents. A press within ~250ms and ~4px of the previous
@@ -2093,9 +2769,17 @@ impl Application {
     /// position with the standard "active position report" sequence (`ESC [ row ; col R`), which
     /// line editors that support click-to-move (zsh, fish, and readline via inputrc) honor.
     fn mouse_alt_click(&mut self, x: f64, y: f64) {
-        let Some(pt) = self.mouse_to_cell(x, y) else { return };
+        let Some(pt) = self.mouse_to_cell(x, y) else {
+            return;
+        };
         // Only meaningful against live (unscrolled) screen coordinates; report 1-based.
-        if self.app.active_session().map(|s| s.scrolled()).unwrap_or(false) || pt.line.0 < 0 {
+        if self
+            .app
+            .active_session()
+            .map(|s| s.scrolled())
+            .unwrap_or(false)
+            || pt.line.0 < 0
+        {
             return;
         }
         let seq = format!("\x1b[{};{}R", pt.line.0 + 1, pt.column.0 + 1);
@@ -2109,11 +2793,21 @@ impl Application {
     /// clicked cell by expanding to the nearest whitespace/bracket boundaries on the grid row.
     /// Best-effort — a click on non-text just does nothing.
     fn mouse_open(&mut self, x: f64, y: f64) {
-        let Some(pt) = self.mouse_to_cell(x, y) else { return };
-        if self.app.active_session().map(|s| s.scrolled()).unwrap_or(false) || pt.line.0 < 0 {
+        let Some(pt) = self.mouse_to_cell(x, y) else {
+            return;
+        };
+        if self
+            .app
+            .active_session()
+            .map(|s| s.scrolled())
+            .unwrap_or(false)
+            || pt.line.0 < 0
+        {
             return;
         }
-        let Some(active) = self.app.active_session() else { return };
+        let Some(active) = self.app.active_session() else {
+            return;
+        };
         let g = active.term.lock();
         let row = pt.line.0 as usize;
         let cols = g.columns();
@@ -2123,7 +2817,9 @@ impl Application {
         let col = (pt.column.0 as usize).min(cols - 1);
         // Read the whole visible row and expand left/right from the click to word boundaries.
         let line_text: String = g.grid()[Line(row as i32)][Column(0)..Column(cols)]
-            .iter().map(|c| c.c).collect();
+            .iter()
+            .map(|c| c.c)
+            .collect();
         drop(g);
         let word = expand_click_word(&line_text, col);
         if word.is_empty() {
@@ -2168,7 +2864,9 @@ impl Application {
 
     /// Grow the drag selection to the cursor's current cell while the button is held.
     fn mouse_drag(&mut self, x: f64, y: f64) {
-        let Some(pt) = self.mouse_to_cell(x, y) else { return };
+        let Some(pt) = self.mouse_to_cell(x, y) else {
+            return;
+        };
         if let Some(active) = self.app.active_session() {
             let mut g = active.term.lock();
             if let Some(sel) = g.selection.as_mut() {
@@ -2189,9 +2887,13 @@ impl Application {
 
     /// Copy the active session's text selection to the system clipboard. No-op when empty.
     fn copy_selection(&mut self) {
-        let Some(active) = self.app.active_session() else { return };
+        let Some(active) = self.app.active_session() else {
+            return;
+        };
         let g = active.term.lock();
-        let Some(text) = g.selection_to_string() else { return };
+        let Some(text) = g.selection_to_string() else {
+            return;
+        };
         if text.is_empty() {
             return;
         }
@@ -2208,29 +2910,65 @@ impl Application {
 /// "which engine is this" signal (a brand color from the engine table), complementing `host_color`
 /// which tells you *which machine*. Unknown engines fall back to the neutral chrome dim.
 fn engine_accent(engine: &str) -> (u8, u8, u8) {
-    static CACHE: std::sync::OnceLock<std::collections::HashMap<&'static str, (u8, u8, u8)>> = std::sync::OnceLock::new();
-    let map = CACHE.get_or_init(|| ENGINES.iter().map(|e| (e.id, argb_to_rgb(e.color))).collect());
+    static CACHE: std::sync::OnceLock<std::collections::HashMap<&'static str, (u8, u8, u8)>> =
+        std::sync::OnceLock::new();
+    let map = CACHE.get_or_init(|| {
+        ENGINES
+            .iter()
+            .map(|e| (e.id, argb_to_rgb(e.color)))
+            .collect()
+    });
     map.get(engine).copied().unwrap_or(CHROME_DIM)
 }
 
 fn argb_to_rgb(argb: u32) -> (u8, u8, u8) {
-    (((argb >> 16) & 0xff) as u8, ((argb >> 8) & 0xff) as u8, (argb & 0xff) as u8)
+    (
+        ((argb >> 16) & 0xff) as u8,
+        ((argb >> 8) & 0xff) as u8,
+        (argb & 0xff) as u8,
+    )
 }
 
 fn host_color(host: &str) -> (u8, u8, u8) {
     // FNV-1a over the host; pick a hue from the warm-to-cool range and keep it readable on black.
-    let h = host.bytes().fold(0x811c_9dc5u32, |acc, b| (acc ^ b as u32).wrapping_mul(0x0100_0193));
+    let h = host.bytes().fold(0x811c_9dc5u32, |acc, b| {
+        (acc ^ b as u32).wrapping_mul(0x0100_0193)
+    });
     // 32 hues across the spectrum, OSV below is luminance-boosted so text reads on near-black.
     let hue = (h >> 4) % 32;
     const TABLE: [(u8, u8, u8); 32] = [
-        (0xe0, 0x5b, 0x5b), (0xe0, 0x8b, 0x5b), (0xe0, 0xb8, 0x5b), (0xbf, 0xe0, 0x5b),
-        (0x8b, 0xe0, 0x5b), (0x5b, 0xe0, 0x8b), (0x5b, 0xe0, 0xbf), (0x5b, 0xdd, 0xe0),
-        (0x5b, 0xa8, 0xe0), (0x5b, 0x74, 0xe0), (0x8b, 0x5b, 0xe0), (0xbf, 0x5b, 0xe0),
-        (0xe0, 0x5b, 0xd0), (0xe0, 0x5b, 0x9b), (0x9b, 0x7b, 0x5b), (0x9b, 0x9b, 0x5b),
-        (0x5b, 0x9b, 0x7b), (0x5b, 0x7b, 0x9b), (0x7b, 0x5b, 0x9b), (0x9b, 0x5b, 0x7b),
-        (0xf7, 0x9e, 0x8b), (0xf7, 0xbe, 0x8b), (0xd9, 0xf7, 0x8b), (0xa7, 0xf7, 0x8b),
-        (0x8b, 0xf7, 0xa7), (0x8b, 0xf7, 0xd9), (0x8b, 0xdd, 0xf7), (0x8b, 0xa7, 0xf7),
-        (0xa7, 0x8b, 0xf7), (0xd9, 0x8b, 0xf7), (0xf7, 0x8b, 0xd9), (0xf7, 0x8b, 0xa7),
+        (0xe0, 0x5b, 0x5b),
+        (0xe0, 0x8b, 0x5b),
+        (0xe0, 0xb8, 0x5b),
+        (0xbf, 0xe0, 0x5b),
+        (0x8b, 0xe0, 0x5b),
+        (0x5b, 0xe0, 0x8b),
+        (0x5b, 0xe0, 0xbf),
+        (0x5b, 0xdd, 0xe0),
+        (0x5b, 0xa8, 0xe0),
+        (0x5b, 0x74, 0xe0),
+        (0x8b, 0x5b, 0xe0),
+        (0xbf, 0x5b, 0xe0),
+        (0xe0, 0x5b, 0xd0),
+        (0xe0, 0x5b, 0x9b),
+        (0x9b, 0x7b, 0x5b),
+        (0x9b, 0x9b, 0x5b),
+        (0x5b, 0x9b, 0x7b),
+        (0x5b, 0x7b, 0x9b),
+        (0x7b, 0x5b, 0x9b),
+        (0x9b, 0x5b, 0x7b),
+        (0xf7, 0x9e, 0x8b),
+        (0xf7, 0xbe, 0x8b),
+        (0xd9, 0xf7, 0x8b),
+        (0xa7, 0xf7, 0x8b),
+        (0x8b, 0xf7, 0xa7),
+        (0x8b, 0xf7, 0xd9),
+        (0x8b, 0xdd, 0xf7),
+        (0x8b, 0xa7, 0xf7),
+        (0xa7, 0x8b, 0xf7),
+        (0xd9, 0x8b, 0xf7),
+        (0xf7, 0x8b, 0xd9),
+        (0xf7, 0x8b, 0xa7),
     ];
     TABLE[(hue % 32) as usize]
 }
@@ -2240,7 +2978,10 @@ fn host_color(host: &str) -> (u8, u8, u8) {
 fn expand_click_word(line: &str, col: usize) -> &str {
     let bytes = line.as_bytes();
     let col = col.min(bytes.len());
-    let is_boundary = |b: u8| b.is_ascii_whitespace() || matches!(b, b'(' | b')' | b'"' | b'\'' | b'<' | b'>' | b'[' | b']');
+    let is_boundary = |b: u8| {
+        b.is_ascii_whitespace()
+            || matches!(b, b'(' | b')' | b'"' | b'\'' | b'<' | b'>' | b'[' | b']')
+    };
     let mut start = col;
     while start > 0 && !is_boundary(bytes[start - 1]) {
         start -= 1;
@@ -2283,9 +3024,10 @@ impl ApplicationHandler for Application {
                 let w = Rc::new(w);
                 self.window = Some(Rc::clone(&w));
                 self.context = Context::new(Rc::clone(&w)).ok();
-                self.surface = self.context.as_ref().and_then(|c| {
-                    Surface::new(c, Rc::clone(&w)).ok()
-                });
+                self.surface = self
+                    .context
+                    .as_ref()
+                    .and_then(|c| Surface::new(c, Rc::clone(&w)).ok());
                 self.size = w.inner_size();
                 self.metrics_from_scale();
                 w.request_redraw();
@@ -2364,7 +3106,9 @@ impl ApplicationHandler for Application {
                 let lines = (mag * 3.0) as i32;
                 scroll_active(self, lines);
                 if lines > 0 {
-                    if let Some(s) = self.app.active_session() { s.set_scrolled(true); }
+                    if let Some(s) = self.app.active_session() {
+                        s.set_scrolled(true);
+                    }
                 }
                 if let Some(w) = &self.window {
                     w.request_redraw();
@@ -2427,9 +3171,7 @@ fn notify_busy(engine: &str, host: &str, name: &Option<String>) {
     let label = name.as_deref().unwrap_or(engine);
     let title = format!("{label} · {host} — busy");
     let body = format!("Session {engine}@{host} produced new output.");
-    let script = format!(
-        "display notification \"{body}\" with title \"{title}\""
-    );
+    let script = format!("display notification \"{body}\" with title \"{title}\"");
     let _ = std::process::Command::new("osascript")
         .arg("-e")
         .arg(script)
@@ -2448,7 +3190,10 @@ pub fn run(app: App) -> Result<(), Box<dyn std::error::Error>> {
 
 #[cfg(test)]
 mod tests {
-    use super::{argb_to_rgb, broadcast_bytes, collect_fleet_matches, engine_accent, expand_click_word, host_color, FleetMatch};
+    use super::{
+        argb_to_rgb, broadcast_bytes, collect_fleet_matches, engine_accent, expand_click_word,
+        host_color, FleetMatch,
+    };
 
     use std::sync::Arc;
 
@@ -2467,12 +3212,20 @@ mod tests {
         // line level so we can prove the primary sort is BY TAB.
         let size = TermSize { lines: 4, cols: 40 };
         let mut terms: Vec<Arc<FairMutex<Term<Listener>>>> = Vec::new();
-        let t0 = Arc::new(FairMutex::new(Term::new(Config::default(), &size, Listener::default())));
+        let t0 = Arc::new(FairMutex::new(Term::new(
+            Config::default(),
+            &size,
+            Listener::default(),
+        )));
         {
             let mut p: Processor<StdSyncHandler> = Processor::default();
             p.advance(&mut *t0.lock(), b"fix first\r\nno match\r\nfix third");
         }
-        let t1 = Arc::new(FairMutex::new(Term::new(Config::default(), &size, Listener::default())));
+        let t1 = Arc::new(FairMutex::new(Term::new(
+            Config::default(),
+            &size,
+            Listener::default(),
+        )));
         {
             let mut p: Processor<StdSyncHandler> = Processor::default();
             p.advance(&mut *t1.lock(), b"only fix here");
@@ -2484,16 +3237,35 @@ mod tests {
         // 2 (tab 0) + 1 (tab 1) = 3 matches.
         assert_eq!(hits.len(), 3);
         // Sorted by tab first: both tab-0 hits (lines 0, 2 in line order) then the tab-1 hit.
-        assert_eq!(hits[0], FleetMatch { tab: 0, line: 0, col: 0 });
-        assert_eq!(hits[1], FleetMatch { tab: 0, line: 2, col: 0 });
-        assert_eq!(hits[2], FleetMatch { tab: 1, line: 0, col: 5 });
+        assert_eq!(
+            hits[0],
+            FleetMatch {
+                tab: 0,
+                line: 0,
+                col: 0
+            }
+        );
+        assert_eq!(
+            hits[1],
+            FleetMatch {
+                tab: 0,
+                line: 2,
+                col: 0
+            }
+        );
+        assert_eq!(
+            hits[2],
+            FleetMatch {
+                tab: 1,
+                line: 0,
+                col: 5
+            }
+        );
         // Case-insensitive: uppercase query still matches lowercase text (recompute lowercases it).
         assert_eq!(collect_fleet_matches(&terms, "FIX").len(), 3);
         // A query in no tab matches nothing.
         assert!(collect_fleet_matches(&terms, "zzz").is_empty());
     }
-
-
 
     /// Every host gets a stable, in-table color; the same host never changes across calls, and two
     /// different hosts can share a color (fine) but the mapping is deterministic.
@@ -2515,7 +3287,11 @@ mod tests {
         let cl = engine_accent("claude");
         assert_eq!(cl, (0x9a, 0x4d, 0xff));
         let unknown = engine_accent("no-such-engine");
-        assert_ne!(unknown, (0, 0, 0), "unknown-engine fallback must still be visible");
+        assert_ne!(
+            unknown,
+            (0, 0, 0),
+            "unknown-engine fallback must still be visible"
+        );
     }
 
     /// Cmd+click word expansion picks the whole token, not the shell quoting around it.
@@ -2525,7 +3301,10 @@ mod tests {
         assert_eq!(expand_click_word(line, 25), "https://example.com/foo");
         // The substring is a byte index into the line; find it by locating the token start.
         let url_start = line.find("https").unwrap();
-        assert_eq!(expand_click_word(line, url_start + 5), "https://example.com/foo");
+        assert_eq!(
+            expand_click_word(line, url_start + 5),
+            "https://example.com/foo"
+        );
         // A path inside parens expands to the path, stopping at ')'.
         let p = line.find("src/main.rs").unwrap();
         assert_eq!(expand_click_word(line, p), "src/main.rs");
@@ -2544,7 +3323,14 @@ mod tests {
     #[test]
     fn broadcast_bytes_sends_line_but_not_blank() {
         assert_eq!(broadcast_bytes("git pull"), b"git pull\n");
-        assert_eq!(broadcast_bytes("  "), b"  \n", "whitespace-only is still a real line");
-        assert!(broadcast_bytes("").is_empty(), "blank must not broadcast a bare newline");
+        assert_eq!(
+            broadcast_bytes("  "),
+            b"  \n",
+            "whitespace-only is still a real line"
+        );
+        assert!(
+            broadcast_bytes("").is_empty(),
+            "blank must not broadcast a bare newline"
+        );
     }
 }
