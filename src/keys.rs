@@ -39,6 +39,7 @@ pub const ACTIONS: &[(&str, &str)] = &[
     ("rename", ","),
     ("session_info", "i"),
     ("toggle_focus", "v"),
+    ("pin", "A"),
 ];
 
 /// The built-in full keybinding table. `(action, key)` in ACTIONS order.

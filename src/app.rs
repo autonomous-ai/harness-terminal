@@ -551,4 +551,19 @@ mod tests {
         a2.move_tab_from_to(9, 0); // from out of range
         assert_eq!(a2.tabs.len(), 3);
     }
+
+    /// A pinned tab refuses close (`close_tab` returns false and leaves the tab), while an
+    /// unpinned one closes normally. Mirrors the prefix+`close_tab` guard in native.rs.
+    #[test]
+    fn close_refuses_pinned_tab() {
+        let mut app = app_with(2);
+        app.active = 1;
+        let before = app.tabs.len();
+        // Pinned: refuse — returns false, tab count unchanged.
+        assert!(!crate::native::close_tab(&mut app, true));
+        assert_eq!(app.tabs.len(), before, "pinned tab must not close");
+        // Unpinned: closes — returns true, tab drops.
+        assert!(crate::native::close_tab(&mut app, false));
+        assert_eq!(app.tabs.len(), before - 1);
+    }
 }

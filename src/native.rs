@@ -58,6 +58,7 @@ enum PaletteAction {
     Duplicate,
     SessionInfo,
     ToggleFocus,
+    Pin,
     Help,
     Quit,
 }
@@ -80,6 +81,7 @@ impl PaletteAction {
             ("duplicate active tab (fork same engine@host)", Duplicate),
             ("show session info (kind/host/task)", SessionInfo),
             ("toggle focus mode (hide tab bar + status)", ToggleFocus),
+            ("pin/unpin active tab (protect from close)", Pin),
             ("show this help", Help),
             ("quit", Quit),
         ]
@@ -120,6 +122,10 @@ struct Application {
     /// Per-tab mute state (prefix+m). A muted tab's busy nudge + badge are suppressed so a noisy
     /// pane a diver doesn't care about stops nagging. Grows/shrinks with the tab set.
     muted: Vec<bool>,
+    /// Per-tab pin state (prefix+a, default key `A`). A pinned tab can't be closed with `x` /
+    /// prefix+`close_tab` (or via the palette), so a long-running agent a diver cares about can't
+    /// be fat-fingered away — you must unpin first. Grows/shrinks with the tab set.
+    pinned: Vec<bool>,
     /// Per-tab count of new scrollback lines produced since we last looked (output delta). Populated
     /// by `activity_flags`; the tab bar shows it as the badge magnitude so a diver reads how hot a
     /// pane is, not just *that* it moved.
@@ -249,6 +255,20 @@ impl Application {
                 }
             }
         }
+        // Bring back pinned tabs (prefix+a) from the last session — a pinned agent run that was
+        // still going the previous session stays just as protected across a restart.
+        let mut pinned = vec![false; tab_count];
+        {
+            let saved = crate::restore::load_pinned();
+            if !saved.is_empty() {
+                for (i, s) in app.tabs.iter().enumerate() {
+                    let key = format!("{}:{}:{}", s.kind(), s.meta.host, s.meta.engine);
+                    if saved.contains(&key) {
+                        pinned[i] = true;
+                    }
+                }
+            }
+        }
         Application {
             window: None,
             context: None,
@@ -270,6 +290,7 @@ impl Application {
             broadcast_sel: 0,
             new_cwd: String::new(),
             muted,
+            pinned,
             grew_delta: vec![0; tab_count],
             find_hit: None,
             find_all: Vec::new(),
@@ -364,6 +385,7 @@ impl Application {
         self.seen_history.resize(n, usize::MAX);
         self.notified.resize(n, false);
         self.muted.resize(n, false);
+        self.pinned.resize(n, false);
         self.grew_delta.resize(n, 0);
         let mut flags = vec![false; n];
         for (i, s) in self.app.tabs.iter().enumerate() {
@@ -582,6 +604,24 @@ impl Application {
         }
     }
 
+    /// `prefix+a` (default key `A`): toggle pin on the active tab. A pinned tab is protected from
+    /// accidental close (`x` / prefix+close_tab refuse it with a flash), so a long-running agent a
+    /// diver cares about stays until deliberately unpinned. Persists across restarts like mute.
+    fn toggle_pin_active(&mut self) {
+        if self.app.active < self.app.tabs.len() {
+            let on = !self.pinned[self.app.active];
+            self.pinned[self.app.active] = on;
+            let state = if on { "PINNED 🔒" } else { "unpinned" };
+            let head = self
+                .app
+                .active_session()
+                .map(|s| s.meta.name.clone().unwrap_or_else(|| s.meta.engine.clone()))
+                .unwrap_or_default();
+            self.flash = Some((format!("{head} {state}"), std::time::Instant::now()));
+            self.save_pin_state();
+        }
+    }
+
     /// `prefix+v`: toggle focus mode — hide the tab bar + status line so the grid fills the whole
     /// window for a distraction-free dive. The resize runs `redraw` which re-sizes the session to the
     /// now-larger grid. Toggle again to bring the chrome back.
@@ -746,6 +786,13 @@ impl Application {
                 } else {
                     " "
                 };
+                // A pinned tab shows a small 🔒 so its protected status (won't close with x) is
+                // readable at a glance, next to the mute marker.
+                let pin = if self.pinned.get(i).copied().unwrap_or(false) {
+                    "🔒"
+                } else {
+                    " "
+                };
                 // Show the user's rename if set; otherwise the plain engine id.
                 let head = s.meta.name.clone().unwrap_or_else(|| s.meta.engine.clone());
                 // A 🔔 badge marks a terminal bell (a long agent run finishing) for a few seconds.
@@ -755,7 +802,7 @@ impl Application {
                 } else {
                     ""
                 };
-                let label = format!(" {}{}{} {} {}{} ", bell, flag, head, live, mute, dot);
+                let label = format!(" {}{}{}{} {} {}{} ", bell, flag, pin, head, live, mute, dot);
                 // Active tab: tinted by a stable hash of its host (dive context). Inactive tabs fall back
                 // to the engine's own accent color so you can spot the "claude" tab from across the bar.
                 let color = if active {
@@ -1408,6 +1455,7 @@ impl Application {
             ("paste", "paste clipboard (bracketed)"),
             ("next_busy", "jump to next busy tab"),
             ("mute", "mute/unmute the active tab"),
+            ("pin", "pin/unpin the active tab (protect from close)"),
             ("last_window", "flip to the previous tab"),
             ("undo_close", "undo close (reopen last closed tab)"),
             ("duplicate", "duplicate this tab (fork same engine@host)"),
@@ -2088,6 +2136,7 @@ impl Application {
                 self.app.overlay = Overlay::Info;
             }
             ToggleFocus => self.toggle_focus(),
+            Pin => self.toggle_pin_active(),
             Help => {
                 self.app.overlay = Overlay::Help;
             }
@@ -2302,12 +2351,27 @@ impl Application {
         crate::restore::save_muted(&keys);
     }
 
+    /// Persist which tabs are pinned (prefix+a) so a restart keeps protecting them. Shared by
+    /// `quit` and the close path (a pinned tab should survive a relaunch as pinned).
+    fn save_pin_state(&self) {
+        let keys: Vec<(&str, &str, &str)> = self
+            .app
+            .tabs
+            .iter()
+            .enumerate()
+            .filter(|(i, _)| self.pinned.get(*i).copied().unwrap_or(false))
+            .map(|(_, s)| (s.kind(), s.meta.host.as_str(), s.meta.engine.as_str()))
+            .collect();
+        crate::restore::save_pinned(&keys);
+    }
+
     /// Apply the same save-then-exit dance as a window CloseRequested: persist open tabs, tab list,
     /// and geometry, then flag the loop to exit at the next `about_to_wait`.
     fn quit(&mut self) {
         self.app.save_all_scrollbacks();
         crate::restore::save(&self.app.tab_specs());
         self.save_muted_state();
+        self.save_pin_state();
         crate::restore::save_geometry(self.size.width, self.size.height);
         self.quit_requested = true;
     }
@@ -2370,6 +2434,7 @@ impl Application {
                 }
                 Some("next_busy") => self.next_busy(),
                 Some("mute") => self.toggle_mute_active(),
+                Some("pin") => self.toggle_pin_active(),
                 Some("last_window") => self.last_window(),
                 Some("paste") => self.paste_clipboard(),
                 Some("broadcast") => {
@@ -2383,7 +2448,14 @@ impl Application {
                     self.app.overlay = Overlay::Broadcast;
                 }
                 Some("close_tab") => {
-                    close_tab(&mut self.app);
+                    let pin = self.pinned.get(self.app.active).copied().unwrap_or(false);
+                    if !close_tab(&mut self.app, pin) && pin {
+                        self.flash = Some((
+                            "🔒 pinned — prefix A to unpin first".to_string(),
+                            std::time::Instant::now(),
+                        ));
+                    }
+                    self.save_pin_state();
                 }
                 Some("copy_scrollback") => self.copy_whole_scrollback(),
                 Some("export_scrollback") => self.export_scrollback(),
@@ -3041,25 +3113,33 @@ fn collect_fleet_matches(
     out
 }
 
-fn close_tab(app: &mut App) {
-    if !app.tabs.is_empty() {
-        // Stash the closed tab's spec so prefix+u can undo a mistaken close. Kind + host + engine
-        // are enough to re-spawn the same identity (TMUX/etc. re-attach to the same pane@host).
-        if let Some(s) = app.tabs.get(app.active) {
-            app.last_closed = Some(crate::restore::TabSpec {
-                kind: s.kind().to_string(),
-                host: s.meta.host.clone(),
-                engine: s.meta.engine.clone(),
-                port: None,
-                name: s.meta.name.clone(),
-            });
-        }
-        app.tabs.remove(app.active);
-        if app.active >= app.tabs.len() {
-            app.active = app.tabs.len().saturating_sub(1);
-        }
-        crate::restore::save(&app.tab_specs());
+/// Close the active tab (`x` / prefix+close_tab), unless it's pinned. A pinned tab (prefix+a)
+/// refuses the close with a flash and keeps itself in the bar, so a long-running agent can't be
+/// fat-fingered away — you must unpin first.
+pub(crate) fn close_tab(app: &mut App, pinned: bool) -> bool {
+    if app.tabs.is_empty() {
+        return false;
     }
+    if app.active < app.tabs.len() && pinned {
+        return false;
+    }
+    // Stash the closed tab's spec so prefix+u can undo a mistaken close. Kind + host + engine
+    // are enough to re-spawn the same identity (TMUX/etc. re-attach to the same pane@host).
+    if let Some(s) = app.tabs.get(app.active) {
+        app.last_closed = Some(crate::restore::TabSpec {
+            kind: s.kind().to_string(),
+            host: s.meta.host.clone(),
+            engine: s.meta.engine.clone(),
+            port: None,
+            name: s.meta.name.clone(),
+        });
+    }
+    app.tabs.remove(app.active);
+    if app.active >= app.tabs.len() {
+        app.active = app.tabs.len().saturating_sub(1);
+    }
+    crate::restore::save(&app.tab_specs());
+    true
 }
 
 /// Scroll the active session's viewport by `delta` lines into history (positive = up/back).

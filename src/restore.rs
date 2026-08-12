@@ -373,6 +373,35 @@ pub fn load_muted() -> Vec<String> {
     serde_json::from_str(&raw).unwrap_or_default()
 }
 
+// ── pin persistence ─────────────────────────────────────────────────────────
+
+fn pinned_path() -> std::path::PathBuf {
+    config_dir().join("pinned.json")
+}
+
+/// Persist the identities (kind+host+engine) of tabs the user pinned (prefix+a), so a pinned
+/// agent run stays protected across a restart. Unlike muted (which skips empty), an empty list is
+/// written too — unpinning the last tab must clear the file, not leave the old set behind.
+pub fn save_pinned(kinds_engines: &[(&str, &str, &str)]) {
+    let payload: Vec<String> = kinds_engines
+        .iter()
+        .map(|(k, h, e)| format!("{k}:{h}:{e}"))
+        .collect();
+    let _ = std::fs::create_dir_all(config_dir());
+    let _ = std::fs::write(
+        pinned_path(),
+        serde_json::to_string(&payload).unwrap_or_default(),
+    );
+}
+
+/// Load the set of pinned identity keys, each "kind:host:engine". Empty set on error/missing.
+pub fn load_pinned() -> Vec<String> {
+    let Ok(raw) = std::fs::read_to_string(pinned_path()) else {
+        return Vec::new();
+    };
+    serde_json::from_str(&raw).unwrap_or_default()
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -485,6 +514,21 @@ mod tests {
             assert_eq!(back.get("claude"), Some(&5));
             assert_eq!(back.get("grok"), Some(&9));
             assert_eq!(back.len(), 2);
+        });
+    }
+
+    /// Pinned identities round-trip; an empty save CLEARS the file (unpinning the last tab must not
+    /// leave a stale pin set behind — unlike muted which skips empty writes).
+    #[test]
+    fn pinned_roundtrips_and_empty_clears() {
+        with_isolated_dir(|_| {
+            save_pinned(&[("tmux", "box1", "claude")]);
+            assert_eq!(load_pinned(), vec!["tmux:box1:claude".to_string()]);
+            save_pinned(&[]);
+            assert!(
+                load_pinned().is_empty(),
+                "empty pin set must clear the file"
+            );
         });
     }
 
