@@ -82,7 +82,8 @@ The prefix is `Ctrl+Space` (tmux-style), then a command:
 Backgrounded tabs that keep producing output are flagged with a magnitude badge in the tab bar
 (e.g. `!43` — how many new lines since you last looked). Muted tabs show a dim `M` instead.
 A tab that rings its terminal bell (a long agent run finishing) shows a short-lived `🔔` badge and
-nudges once with a notification when it isn't focused.
+nudges once with a notification when it isn't focused. Pane-backed (non-local) tabs append `@host`
+so a fleet diver reads where each session runs without hovering.
 
 ## Config
 

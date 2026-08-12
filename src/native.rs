@@ -997,6 +997,13 @@ impl Application {
                 };
                 // Show the user's rename if set; otherwise the plain engine id.
                 let head = s.meta.name.clone().unwrap_or_else(|| s.meta.engine.clone());
+                // For a pane-backed (non-local) tab, append @host so a diver reads WHERE each tab
+                // runs without hovering — a local PTY has nothing to say here and stays bare.
+                let where_s = if s.kind() == "pty" {
+                    String::new()
+                } else {
+                    format!("@{}", s.meta.host)
+                };
                 // A 🔔 badge marks a terminal bell (a long agent run finishing) for a few seconds.
                 // Drawn before the busy flag stays out of the label's own magnitude space.
                 let bell = if self.bell_until.get(i).copied().flatten().is_some() {
@@ -1004,7 +1011,10 @@ impl Application {
                 } else {
                     ""
                 };
-                let label = format!(" {}{}{}{} {} {}{} ", bell, flag, pin, head, live, mute, dot);
+                let label = format!(
+                    " {}{}{}{} {} {}{}{} ",
+                    bell, flag, pin, head, live, mute, where_s, dot
+                );
                 // Active tab: tinted by a stable hash of its host (dive context). Inactive tabs fall back
                 // to the engine's own accent color so you can spot the "claude" tab from across the bar.
                 let color = if active {
