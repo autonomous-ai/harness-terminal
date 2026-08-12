@@ -9,7 +9,6 @@ use std::collections::HashMap;
 
 use ab_glyph::{Font as _, FontArc, Glyph as AbsGlyph, PxScale, ScaleFont as _};
 use alacritty_terminal::grid::Dimensions;
-use alacritty_terminal::index::{Column, Line};
 use alacritty_terminal::term::cell::Flags;
 use alacritty_terminal::term::Term;
 use alacritty_terminal::vte::ansi;
@@ -237,61 +236,69 @@ pub fn draw_grid(
     font_px: u32,
     cache: &mut GlyphCache,
 ) {
-    let lines = term.screen_lines();
     let cols = term.columns();
     // Cursor cell (block) — draw on top of its own cell after painting the background.
     let cursor = &term.grid().cursor.point;
+    // When scrolled into history the cursor should not draw (it lives off-screen).
+    let scrolled = term.grid().display_offset() > 0;
 
-    for row in 0..lines {
-        for col in 0..cols {
-            let x0 = col as u32 * cell_w;
-            let y0 = row as u32 * cell_h;
-            let is_cursor = row as i32 == cursor.line.0 && col == cursor.column.0 as usize;
-            let cell = &term.grid()[Line(row as i32)][Column(col)];
+    // Iterate the grid in *display* order (rows scrolled into the viewport), so a non-zero
+    // `display_offset` (history scrollback) renders correctly rather than the raw storage lines.
+    // Each item is an `Indexed<&Cell>` deref'ing to the cell, with a display `point` we use to
+    // place it on screen.
+    for idx in term.grid().display_iter() {
+        let cell = &idx.cell;
+        let row = idx.point.line.0;
+        let col = idx.point.column.0 as usize;
+        if row < 0 || col >= cols {
+            continue;
+        }
+        let x0 = col as u32 * cell_w;
+        let y0 = row as u32 * cell_h;
+        let is_cursor = !scrolled && row == cursor.line.0 && col == cursor.column.0 as usize;
 
-            // Background.
-            let mut bg = cell_color(&cell.bg);
-            if is_cursor {
-                // Classic block cursor: use the cell's foreground as the block fill.
-                bg = cell_color(&cell.fg);
-            }
-            paint_bg(buf, x0 as usize, y0 as usize, cell_w as usize, cell_h as usize, bg);
-            if cell.c == ' ' {
-                continue;
-            }
+        // Background.
+        let mut bg = cell_color(&cell.bg);
+        if is_cursor {
+            // Classic block cursor: use the cell's foreground as the block fill.
+            bg = cell_color(&cell.fg);
+        }
+        paint_bg(buf, x0 as usize, y0 as usize, cell_w as usize, cell_h as usize, bg);
+        if cell.c == ' ' {
+            continue;
+        }
 
-            // Foreground: normal cell fg, or (cursor) theme background so the glyph inverts.
-            let mut fg = cell_color(&cell.fg);
-            if is_cursor {
-                // Invert: draw the glyph in the cell's original background color.
-                let mut bgsave = cell_color(&cell.bg);
-                std::mem::swap(&mut fg, &mut bgsave);
-            }
-            let (r, g, b) = fg.to_rgb();
-            let bold = cell.flags.contains(Flags::BOLD);
-            let (gw, gh, alpha) = cache.glyph(cell.c, font_px, bold);
-            // Draw glyph alpha over bg at baseline; clamp to the cell box.
-            let gx = x0 as usize;
-            let top = y0 as usize + cell_h as usize - gh as usize;
-            for gy in 0..gh as usize {
-                for gx2 in 0..gw as usize {
-                    let a = alpha[gy * gw as usize + gx2];
-                    if a == 0 {
-                        continue;
-                    }
-                    let px = gx + gx2;
-                    let py = top + gy;
-                    if px < buf.width && py < buf.height {
-                        let dst = buf.pixels[py * buf.width + px];
-                        let dr = ((dst >> 16) & 0xff) as u32;
-                        let dg = ((dst >> 8) & 0xff) as u32;
-                        let db = (dst & 0xff) as u32;
-                        let a32 = a as u32;
-                        let nr = (r as u32 * a32 + dr * (255 - a32)) / 255;
-                        let ng = (g as u32 * a32 + dg * (255 - a32)) / 255;
-                        let nb = (b as u32 * a32 + db * (255 - a32)) / 255;
-                        buf.pixels[py * buf.width + px] = argb(255, nr as u8, ng as u8, nb as u8);
-                    }
+        // Foreground: normal cell fg, or (cursor) theme background so the glyph inverts.
+        let mut fg = cell_color(&cell.fg);
+        if is_cursor {
+            // Invert: draw the glyph in the cell's original background color.
+            let mut bgsave = cell_color(&cell.bg);
+            std::mem::swap(&mut fg, &mut bgsave);
+        }
+        let (r, g, b) = fg.to_rgb();
+        let bold = cell.flags.contains(Flags::BOLD);
+        let (gw, gh, alpha) = cache.glyph(cell.c, font_px, bold);
+        // Draw glyph alpha over bg at baseline; clamp to the cell box.
+        let gx = x0 as usize;
+        let top = y0 as usize + cell_h as usize - gh as usize;
+        for gy in 0..gh as usize {
+            for gx2 in 0..gw as usize {
+                let a = alpha[gy * gw as usize + gx2];
+                if a == 0 {
+                    continue;
+                }
+                let px = gx + gx2;
+                let py = top + gy;
+                if px < buf.width && py < buf.height {
+                    let dst = buf.pixels[py * buf.width + px];
+                    let dr = ((dst >> 16) & 0xff) as u32;
+                    let dg = ((dst >> 8) & 0xff) as u32;
+                    let db = (dst & 0xff) as u32;
+                    let a32 = a as u32;
+                    let nr = (r as u32 * a32 + dr * (255 - a32)) / 255;
+                    let ng = (g as u32 * a32 + dg * (255 - a32)) / 255;
+                    let nb = (b as u32 * a32 + db * (255 - a32)) / 255;
+                    buf.pixels[py * buf.width + px] = argb(255, nr as u8, ng as u8, nb as u8);
                 }
             }
         }
@@ -438,5 +445,51 @@ mod tests {
             g > 100 && r < 100 && b < 100
         });
         assert!(has_green, "expected a green glyph pixel");
+    }
+
+    /// Scrollback: feed far more lines than the viewport (so earlier ones scroll off-screen), then
+    /// scroll the viewport up and assert the display_iter renderer shows the scrolled-into-view
+    /// line (i.e. non-blank glyphs appear that weren't visible at the live position). This proves
+    /// `draw_grid` honors `display_offset` rather than always drawing the raw storage rows.
+    #[test]
+    fn renders_scrollback_when_scrolled() {
+        use alacritty_terminal::grid::Scroll;
+        use alacritty_terminal::sync::FairMutex;
+        use alacritty_terminal::term::{Config, Term};
+        use alacritty_terminal::vte::ansi::{Processor, StdSyncHandler};
+
+        use crate::session::Listener;
+
+        let size = crate::session::TermSize { lines: 8, cols: 40 };
+        let term = FairMutex::new(Term::new(Config::default(), &size, Listener));
+
+        // Feed 30 lines of a distinctive character so the screen (8 lines) overflows into history.
+        let mut buf = Vec::new();
+        for i in 0..30 {
+            buf.extend_from_slice(format!("\r\nLINE{i:02}").as_bytes());
+        }
+        {
+            let mut p: Processor<StdSyncHandler> = Processor::default();
+            let mut g = term.lock();
+            p.advance(&mut *g, &buf);
+            // At live position the first line is scrolled off into history.
+            assert!(g.grid().display_offset() == 0, "live view should be at bottom");
+            assert!(g.grid().history_size() > 0, "expected history to accumulate");
+
+            // Scroll up one page; the display offset becomes non-zero.
+            use alacritty_terminal::grid::Dimensions;
+            g.grid_mut().scroll_display(Scroll::Delta(4));
+            assert!(g.grid().display_offset() > 0, "display_offset should rise after scroll");
+        }
+
+        // Rendering at the scrolled position must produce glyph pixels (the scrolled-into-view rows).
+        let mut fb = Framebuffer::new(40 * 9, 8 * 18);
+        let mut cache = GlyphCache::load();
+        {
+            let g = term.lock();
+            draw_grid(&mut fb, &g, 9, 18, 12, &mut cache);
+        }
+        let non_blank = fb.pixels.iter().filter(|&&p| p != 0x0000_0000).count();
+        assert!(non_blank > 20, "expected scrollback glyphs when scrolled, got {non_blank}");
     }
 }

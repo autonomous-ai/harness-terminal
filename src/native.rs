@@ -41,6 +41,10 @@ struct Application {
     cache: GlyphCache,
     prefix_down: bool,
     mods: ModifiersState,
+    /// True while the view is scrolled into history (live follow suspended). Set when the user
+    /// scrolls up; cleared when they return to the bottom (scroll command / Esc) or new output
+    /// resets the display offset in `render`.
+    scrolled: bool,
 }
 
 impl Application {
@@ -57,6 +61,7 @@ impl Application {
             cache: GlyphCache::load(),
             prefix_down: false,
             mods: ModifiersState::default(),
+            scrolled: false,
         }
     }
 
@@ -114,7 +119,15 @@ impl Application {
 
         // Terminal grid.
         if let Some(active) = self.app.active_session() {
-            let g = active.term.lock();
+            let mut g = active.term.lock();
+            // With history, a non-zero display_offset is a live-follow "scroll" (bottom = offset 0).
+            // Auto-return to the live view when new content pushes us to the bottom again: if we're
+            // not mid-gesture (self.scrolled is false) force the view back to the latest line.
+            let at_bottom = g.grid().display_offset() == 0;
+            if !self.scrolled && !at_bottom {
+                use alacritty_terminal::grid::Scroll;
+                g.grid_mut().scroll_display(Scroll::Bottom);
+            }
             draw_grid(fb, &g, self.cell_w, self.cell_h, self.font_px, &mut self.cache);
         }
 
@@ -255,6 +268,8 @@ impl Application {
                 }
                 "c" => { if !self.app.tabs.is_empty() { self.app.active = 0; } }
                 "x" => { close_tab(&mut self.app); }
+                "g" => { scroll_active(self, 20); self.scrolled = true; }
+                "b" => self.scroll_to_bottom(),
                 // Numeric tabs 1-9.
                 _ if c.len() == 1 && c.chars().next().unwrap().is_ascii_digit() => {
                     let idx = c.chars().next().unwrap() as u8;
@@ -335,6 +350,33 @@ impl Application {
 
         // Normal mode: send keystrokes to the active session.
         if self.app.overlay == Overlay::None {
+            // Scrollback navigation takes precedence over forwarding to the shell. While scrolled,
+            // page/arrow keys move the viewport; Esc returns to the live (bottom) view. PageUp from
+            // the live view also enters scroll mode.
+            if self.scrolled || matches!(key, Key::Named(winit::keyboard::NamedKey::PageUp)) {
+                match key {
+                    Key::Named(n) => match n {
+                        winit::keyboard::NamedKey::PageUp => { scroll_active(self, 20); self.scrolled = true; }
+                        winit::keyboard::NamedKey::PageDown => scroll_active(self, -20),
+                        winit::keyboard::NamedKey::ArrowUp => { scroll_active(self, 1); self.scrolled = true; }
+                        winit::keyboard::NamedKey::ArrowDown => scroll_active(self, -1),
+                        winit::keyboard::NamedKey::Escape => self.scroll_to_bottom(),
+                        _ => {}
+                    },
+                    _ => {}
+                }
+                // Snap scrolled state to reality once we hit bottom (offset no longer moves).
+                if self.scrolled {
+                    if let Some(active) = self.app.active_session() {
+                        let g = active.term.lock();
+                        if g.grid().display_offset() == 0 {
+                            self.scrolled = false;
+                        }
+                    }
+                }
+                return;
+            }
+
             if let Some(s) = self.app.active_session_mut() {
                 match key {
                     Key::Character(c) => {
@@ -370,6 +412,28 @@ fn close_tab(app: &mut App) {
         if app.active >= app.tabs.len() {
             app.active = app.tabs.len().saturating_sub(1);
         }
+    }
+}
+
+/// Scroll the active session's viewport by `delta` lines into history (positive = up/back).
+/// Marks the view as user-scrolled so render doesn't snap us back to the live line.
+fn scroll_active(app: &Application, delta: i32) {
+    use alacritty_terminal::grid::Scroll;
+    if let Some(active) = app.app.active_session() {
+        let mut g = active.term.lock();
+        g.grid_mut().scroll_display(Scroll::Delta(delta));
+    }
+}
+
+impl Application {
+    /// Return to the latest (live) view: clear the display offset and end scroll mode.
+    fn scroll_to_bottom(&mut self) {
+        use alacritty_terminal::grid::Scroll;
+        if let Some(active) = self.app.active_session() {
+            let mut g = active.term.lock();
+            g.grid_mut().scroll_display(Scroll::Bottom);
+        }
+        self.scrolled = false;
     }
 }
 
