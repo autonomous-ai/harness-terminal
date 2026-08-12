@@ -7,9 +7,10 @@
 //! - `TmuxTransport`: a real tmux pane driven through tmux control mode (`tmux -C`). The pane
 //!   emits `%output` notifications, which we replay into the grid; keystrokes go to the control
 //!   client's stdin. This is the target: one pane per session, visible and attachable on the host.
-//!
-//! A future `HarnessTransport` will source bytes from the harness e2ee tunnel instead of a local
-//! pane — same trait, same grid.
+//! - `HarnessTransport`: runs an engine through the installed `harness` CLI on the joined machine.
+//!   The harness owns the e2ee tunnel to the fleet backend; the transport rides `harness <engine>`
+//!   (which launches into a tmux pane) and feeds that pane's bytes into the grid — the same pane
+//!   geometry as `TmuxTransport`, but with the harness identity/agent lifecycle applied.
 
 use std::io;
 use std::process::{Child, Command, Stdio};
@@ -109,6 +110,7 @@ pub struct TmuxTransport {
 
 impl TmuxTransport {
     /// Spawn a dedicated tmux session + pane running `program`, then control-mode into it.
+    /// Spawn a control-mode tmux pane running `program` in a fresh, uniquely-named session.
     pub fn spawn(program: &str, size: TermSize, term: Arc<FairMutex<Term<Listener>>>) -> io::Result<TmuxTransport> {
         // A fresh, uniquely-named tmux session with one pane. We run a bare `tmux -C` (control
         // mode) and issue `new-session` on its stdin: that creates the session, makes this client

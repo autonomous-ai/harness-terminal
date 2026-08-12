@@ -107,7 +107,31 @@ transport threads.
 
 1. `engines` — 12 engine definitions (name, CLI command, colors).
 2. `session` — one `Term` + transport + its input/output channel.
-3. `transport` — local tmux control-mode now; remote tunnel later. (Same `Term` surface.)
+3. `transport` — `LocalPtyTransport` (alacritty PTY) and `TmuxTransport` (real tmux pane,
+   control-mode, proven end-to-end). `Box<dyn Transport>` per session; a remote tunnel-backed
+   impl slots in behind the same trait. (Same `Term` surface.)
 4. `app` — `Vec<Tab>`, active index, palette index, key dispatch.
 5. `tui` — ratatui shell drawing tabs/palette/status + the active `Term` grid.
 6. remote — the tunnel-backed transport (harness e2ee, `machineId`, tmux pane@host).
+
+## 10. Remote pane@host attach — current state
+
+`TAB = SESSION = PANE@HOST` is literal for local panes today: a `Session`'s transport is either
+alacritty's PTY or a real tmux pane driven via control mode (`tmux -C`). tmux control mode is the
+raw byte-stream primitive: the pane's `%output` notifications are decoded (tmux octal escapes) and
+replayed into the shared `Term` grid via `vte::ansi::Processor::advance`; keystrokes become
+`send-keys -l` / `send-keys Enter` commands; resize is `resize-window`.
+
+The harness fabric (`harness join` → `machine-ws`) is a *structured* agent-event channel, not a raw
+pane byte relay. So true remote attach (a tab sourcing bytes from a pane on another joined machine)
+is the next transport behind the same trait — decode `%output` → `advance` stays identical; only the
+byte source changes. That remote impl needs one thing harness doesn't yet expose from Rust: a raw
+per-pane byte stream over the tunnel. Two buildable paths, in preference order:
+
+1. **Tunnel a tmux control-mode stream**: on the remote host run `tmux -C` (or `harness attach`),
+   and relay its `%output`/`send-keys` byte pairs over the existing e2ee `machine-ws` channel as a
+   new frame type. This reuses control-mode semantics proven here and adds just a relay hop.
+2. **`machine-ws` raw relay**: extend the harness backend/adapter with a raw bytes frame, mirroring
+   how the web UI streams launcher frames today.
+
+Either slots into `Transport` behind `kind() == "remote"` with no session/tui changes.
