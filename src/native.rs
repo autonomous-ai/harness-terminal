@@ -288,6 +288,9 @@ struct Application {
     drag_tab: Option<usize>,
     /// The focused tile in the fleet-grid overlay (prefix+e); Enter dives into this session.
     grid_sel: usize,
+    /// Monotonic frame counter, bumped each redraw, so frame-animated affordances (the per-tab
+    /// streaming spinner) can cycle without a wall-clock dependency.
+    frame: u64,
 }
 
 impl Application {
@@ -407,6 +410,7 @@ impl Application {
             hover_tab: None,
             drag_tab: None,
             tooltip_box: None,
+            frame: 0,
             grid_sel: 0,
         }
     }
@@ -1265,6 +1269,7 @@ impl Application {
             *p = 0x0000_0000;
         }
         // Render into the CPU framebuffer first (doesn't borrow the surface).
+        self.frame = self.frame.wrapping_add(1);
         self.render(&mut fb);
 
         // Sync the OS window title to the active tab's live OSC title so the fleet Diver sees at a
@@ -1408,6 +1413,16 @@ impl Application {
                 } else {
                     " "
                 };
+                // A small spinner next to the busy badge shows a tab that is producing output THIS
+                // FRAME — output appearing on screen as you watch — distinct from the cumulative
+                // `!N` badge (which lingers after an agent settles). The glyph cycles on the frame
+                // counter, so live tabs visibly turn while idle ones sit still. Bottom frames are
+                // graphite rather than the accent so the spinning reads as motion, not a badge.
+                let spin = if activity[i] {
+                    ["◐", "◓", "◑", "◒"][(self.frame as usize / 2) % 4]
+                } else {
+                    ""
+                };
                 // A pinned tab shows a small 🔒 so its protected status (won't close with x) is
                 // readable at a glance, next to the mute marker.
                 let pin = if self.pinned.get(i).copied().unwrap_or(false) {
@@ -1449,8 +1464,8 @@ impl Application {
                     String::new()
                 };
                 let label = format!(
-                    " {}{}{}{}{} {} {}{}{}{} ",
-                    bell, recover, flag, pin, head, live, mute, where_s, queued_mark, dot
+                    " {}{}{}{}{}{} {} {}{}{}{} ",
+                    bell, recover, flag, spin, pin, head, live, mute, where_s, queued_mark, dot
                 );
                 // Active tab: tinted by a stable hash of its host (dive context). Inactive tabs fall back
                 // to the engine's own accent color so you can spot the "claude" tab from across the bar.

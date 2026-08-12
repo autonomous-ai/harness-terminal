@@ -6,6 +6,9 @@ entries record user-visible and architectural changes since the last tagged mile
 ## Unreleased / 0.1.0 (in progress)
 
 ### Added
+- **Streaming spinner** — a tab that is producing output right now (this frame) shows a small,
+  cycling spinner next to its busy badge, so live tabs visibly turn while settled ones sit still.
+  Distinct from the cumulative `!N` badge, which lingers after an agent goes quiet.
 - **Clickable hover tooltip** — the hover-preview popover (the live tail shown for a backgrounded
   tab) is now click-through: clicking inside it switches to that session instead of having to find
   the tab chip. "Hover to preview, go" is one gesture.
