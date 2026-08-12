@@ -205,6 +205,9 @@ pub struct Session {
     /// reconnect. Lets a diver queue a command for a host that's coming back instead of typing into a
     /// black hole (and losing the input when the pane re-attaches).
     pending: Mutex<Vec<u8>>,
+    /// Monotonic instant the session was constructed — its age/uptime, shown in the `prefix+i`
+    /// info panel so a diver can tell a long-running agent from a just-spawned one at a glance.
+    born: Instant,
 }
 
 /// Per-session auto-reconnect policy: exponential backoff with a visible attempt count.
@@ -234,6 +237,12 @@ impl Session {
     /// chrome to show live task context per tab.
     pub fn live_title(&self) -> Option<String> {
         self.title.lock().ok().and_then(|t| t.clone())
+    }
+
+    /// How long this session has been alive (since construction). Drives the age/uptime row in the
+    /// `prefix+i` info panel.
+    pub fn age(&self) -> Duration {
+        Instant::now().saturating_duration_since(self.born)
     }
 
     /// True if the pane has rung the terminal bell since it was last checked, clearing the flag.
@@ -279,6 +288,7 @@ impl Session {
             retry: Mutex::new(RetryState::new()),
             scrolled: Arc::new(std::sync::atomic::AtomicBool::new(false)),
             pending: Mutex::new(Vec::new()),
+            born: Instant::now(),
         })
     }
 
@@ -303,6 +313,7 @@ impl Session {
             retry: Mutex::new(RetryState::new()),
             scrolled: Arc::new(std::sync::atomic::AtomicBool::new(false)),
             pending: Mutex::new(Vec::new()),
+            born: Instant::now(),
         })
     }
 
@@ -344,6 +355,7 @@ impl Session {
             retry: Mutex::new(RetryState::new()),
             scrolled: Arc::new(std::sync::atomic::AtomicBool::new(false)),
             pending: Mutex::new(Vec::new()),
+            born: Instant::now(),
         })
     }
 
@@ -377,6 +389,7 @@ impl Session {
             retry: Mutex::new(RetryState::new()),
             scrolled: Arc::new(std::sync::atomic::AtomicBool::new(false)),
             pending: Mutex::new(Vec::new()),
+            born: Instant::now(),
         })
     }
 
@@ -739,6 +752,7 @@ mod tests {
             retry: Mutex::new(RetryState::new()),
             scrolled: Arc::new(AtomicBool::new(false)),
             pending: Mutex::new(Vec::new()),
+            born: Instant::now(),
         }
     }
 

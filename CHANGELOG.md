@@ -6,6 +6,9 @@ entries record user-visible and architectural changes since the last tagged mile
 ## Unreleased / 0.1.0 (in progress)
 
 ### Added
+- **Session age in the info panel** — `prefix+i` now shows how long a session has been alive
+  (`age` row, via a new `Session::age`), so a diver can tell a long-running agent from a just-spawned
+  one at a glance alongside the existing idle `silence` row.
 - **Targeted broadcast from the fleet grid** — the war-room grid (`prefix+e`) is now more than a
   viewer: `Space` toggles a mark (●) on the focused tile and `b` opens the broadcast overlay
   pre-scoped to exactly the marked sessions, so commanding a subset of hosts is two keys instead of

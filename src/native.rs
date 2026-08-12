@@ -2378,6 +2378,9 @@ impl Application {
                 None => "live".to_string(),
             }
         ));
+        // Age / uptime — how long this session has been alive. Tells a long-running agent (hours
+        // of work) from a just-spawned one at a glance, alongside the idle `silence` row below.
+        rows.push(format!("  age        {}", fmt_duration(s.age())));
         // Idle age — how long this session has sat without producing output. Negative/zero means
         // it produced output this very frame (or we never sampled it); otherwise the readable time.
         if s.alive() && s.kind() != "pty" {
