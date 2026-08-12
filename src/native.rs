@@ -204,6 +204,9 @@ struct Application {
     /// Focus mode (prefix+v): hide the tab bar + status line so the grid gets the whole window.
     /// A distraction-free dive into one session. Toggle again to bring the chrome back.
     focus: bool,
+    /// Monotonic instant until which a terminal-bell badge is shown for each tab (index). A bell
+    /// (a long agent run finishing) shows a 🔔 badge for a few seconds, then fades on its own.
+    bell_until: Vec<Option<std::time::Instant>>,
 }
 
 impl Application {
@@ -290,6 +293,7 @@ impl Application {
             quit_requested: false,
             key_action,
             focus: false,
+            bell_until: vec![None; tab_count],
         }
     }
 
@@ -318,7 +322,33 @@ impl Application {
     /// Return which tab indices have produced output since we last looked at them (are
     /// backgrounded AND have grown scrollback since our last sample). The focused tab is never
     /// flagged. Unknown/gone tabs (never sampled) are not flagged.
+    /// Check every tab's bell flag and turn a fresh ring into a short-lived 🔔 badge. Runs once per
+    /// frame (via `activity_flags`); `take_bell` is reset-on-read so each ring badges exactly once,
+    /// and the badge fades after a few seconds without being re-armed.
+    fn poll_bells(&mut self) {
+        let n = self.app.tabs.len();
+        self.bell_until.resize(n, None);
+        let now = std::time::Instant::now();
+        for (i, s) in self.app.tabs.iter().enumerate() {
+            if s.take_bell() {
+                // A bell while focused is a "your run finished" cue in view — just a badge. A bell in
+                // a backgrounded (unmuted) tab nudges with a notification so a diver doesn't miss it.
+                if i != self.app.active && !self.muted.get(i).copied().unwrap_or(false) {
+                    notify_bell(&s.meta.engine, &s.meta.host, &s.meta.name);
+                }
+                self.bell_until[i] = Some(now + std::time::Duration::from_secs(5));
+            }
+            // Fade stale badges on their own; bell_until goes None once expired.
+            if let Some(until) = self.bell_until[i] {
+                if until < now {
+                    self.bell_until[i] = None;
+                }
+            }
+        }
+    }
+
     fn activity_flags(&mut self) -> Vec<bool> {
+        self.poll_bells();
         let n = self.app.tabs.len();
         self.seen_history.resize(n, usize::MAX);
         self.notified.resize(n, false);
@@ -692,7 +722,14 @@ impl Application {
                 };
                 // Show the user's rename if set; otherwise the plain engine id.
                 let head = s.meta.name.clone().unwrap_or_else(|| s.meta.engine.clone());
-                let label = format!(" {}{} {} {}{} ", flag, head, live, mute, dot);
+                // A 🔔 badge marks a terminal bell (a long agent run finishing) for a few seconds.
+                // Drawn before the busy flag stays out of the label's own magnitude space.
+                let bell = if self.bell_until.get(i).copied().flatten().is_some() {
+                    "🔔 "
+                } else {
+                    ""
+                };
+                let label = format!(" {}{}{} {} {}{} ", bell, flag, head, live, mute, dot);
                 // Active tab: tinted by a stable hash of its host (dive context). Inactive tabs fall back
                 // to the engine's own accent color so you can spot the "claude" tab from across the bar.
                 let color = if active {
@@ -3395,6 +3432,21 @@ fn notify_busy(engine: &str, host: &str, name: &Option<String>) {
     let label = name.as_deref().unwrap_or(engine);
     let title = format!("{label} · {host} — busy");
     let body = format!("Session {engine}@{host} produced new output.");
+    let script = format!("display notification \"{body}\" with title \"{title}\"");
+    let _ = std::process::Command::new("osascript")
+        .arg("-e")
+        .arg(script)
+        .stdout(std::process::Stdio::null())
+        .stderr(std::process::Stdio::null())
+        .spawn();
+}
+
+/// One-shot macOS notification that a backgrounded agent session rang its terminal bell (a long run
+/// finishing, e.g.). Same osascript mechanism as `notify_busy`; best-effort and never fatal.
+fn notify_bell(engine: &str, host: &str, name: &Option<String>) {
+    let label = name.as_deref().unwrap_or(engine);
+    let title = format!("{label} · {host} — bell");
+    let body = format!("Session {engine}@{host} rang the terminal bell.");
     let script = format!("display notification \"{body}\" with title \"{title}\"");
     let _ = std::process::Command::new("osascript")
         .arg("-e")

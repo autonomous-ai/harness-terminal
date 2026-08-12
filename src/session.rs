@@ -6,6 +6,7 @@
 
 use std::collections::VecDeque;
 use std::io;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
@@ -38,21 +39,34 @@ impl Dimensions for TermSize {
 }
 
 /// Sink for terminal render events. Rendering is drawn synchronously from the grid, so wakeups
-/// are currently no-ops; a future dirty-region/GPU client can hook `Event::Wakeup` here. We do act
-/// on two events:
+/// are currently no-ops; a future dirty-region/GPU client can hook `Event::Wakeup` here. We act on
+/// these events:
 /// - `ClipboardStore`, which the alacritty emulator issues for an OSC 52 write (e.g. an agent's
 ///   `pbcopy`/`wl-copy` over the pane) — the data is copied to the system clipboard.
 /// - `Title`, which the emulator issues for an OSC 0/2 window-title write (e.g. an agent announcing
 ///   what it's working on). The text is stored in a shared slot so the tab/status can show it.
+/// - `Bell`, which the emulator issues on a terminal bell (BEL / OSC 14-#). Many agent CLIs and
+///   shells ring it when a long run finishes, so the bell is surfaced as a tab badge + OS
+///   notification to tell a diver "done" without watching.
 #[derive(Clone, Default)]
 pub struct Listener {
     title: Arc<Mutex<Option<String>>>,
+    /// Set when this pane rings the terminal bell. Read + cleared by `Session::take_bell`.
+    bell: Arc<AtomicBool>,
 }
 
 impl Listener {
     /// Create a listener that records OSC window/task titles into `title`.
     pub fn with_title(title: Arc<Mutex<Option<String>>>) -> Self {
-        Listener { title }
+        Listener {
+            title,
+            bell: Arc::new(AtomicBool::new(false)),
+        }
+    }
+
+    /// The shared bell flag, for `Session` to clone while keeping the listener for the emulator.
+    pub fn bell_flag(&self) -> Arc<AtomicBool> {
+        Arc::clone(&self.bell)
     }
 }
 
@@ -74,6 +88,9 @@ impl EventListener for Listener {
                 if let Ok(mut t) = self.title.lock() {
                     *t = None;
                 }
+            }
+            Event::Bell => {
+                self.bell.store(true, Ordering::SeqCst);
             }
             _ => {}
         }
@@ -173,6 +190,9 @@ pub struct Session {
     /// Live OSC title (what the shell/agent in the pane is currently doing), written by the
     /// emulator's Listener and read by the tab/status chrome.
     title: Arc<Mutex<Option<String>>>,
+    /// Set when the pane rang the terminal bell (a long agent run finishing, e.g.). Read + cleared
+    /// by `take_bell` so the chrome can show one bell badge + notification per ring.
+    bell: Arc<AtomicBool>,
     /// Reconnect bookkeeping for dropped remote transports (tmux/ssh/tunnel): how many consecutive
     /// attempts have failed and when the next attempt may fire (exponential backoff so a dead daemon
     /// isn't hammered and the status line can show *how long* it's been down).
@@ -212,6 +232,12 @@ impl Session {
         self.title.lock().ok().and_then(|t| t.clone())
     }
 
+    /// True if the pane has rung the terminal bell since it was last checked, clearing the flag.
+    /// Used by the chrome to badge a bell (a long agent run finishing) once, then let it fade.
+    pub fn take_bell(&self) -> bool {
+        self.bell.swap(false, Ordering::SeqCst)
+    }
+
     /// Current scrollback line count (rows that have scrolled off the top and into history). Grows
     /// monotonically as the pane produces output; used to badge tabs that produced unseen output
     /// while we were looking at another one. Read-only; never locks for long.
@@ -230,10 +256,12 @@ impl Session {
         working_dir: Option<String>,
     ) -> io::Result<Session> {
         let title = Arc::new(Mutex::new(None));
+        let listener = Listener::with_title(Arc::clone(&title));
+        let bell = listener.bell_flag();
         let term = Arc::new(FairMutex::new(Term::new(
             Config::default(),
             &size,
-            Listener::with_title(Arc::clone(&title)),
+            listener,
         )));
         let transport =
             LocalPtyTransport::spawn(program, args, size, working_dir, Arc::clone(&term))?;
@@ -243,6 +271,7 @@ impl Session {
             transport: Box::new(transport),
             echo: None,
             title,
+            bell,
             retry: Mutex::new(RetryState::new()),
             scrolled: Arc::new(std::sync::atomic::AtomicBool::new(false)),
         })
@@ -251,10 +280,12 @@ impl Session {
     /// Create a session backed by a real tmux pane (control mode).
     pub fn tmux(meta: SessionMeta, program: &str, size: TermSize) -> io::Result<Session> {
         let title = Arc::new(Mutex::new(None));
+        let listener = Listener::with_title(Arc::clone(&title));
+        let bell = listener.bell_flag();
         let term = Arc::new(FairMutex::new(Term::new(
             Config::default(),
             &size,
-            Listener::with_title(Arc::clone(&title)),
+            listener,
         )));
         let transport = crate::transport::TmuxTransport::spawn(program, size, Arc::clone(&term))?;
         Ok(Session {
@@ -263,6 +294,7 @@ impl Session {
             transport: Box::new(transport),
             echo: None,
             title,
+            bell,
             retry: Mutex::new(RetryState::new()),
             scrolled: Arc::new(std::sync::atomic::AtomicBool::new(false)),
         })
@@ -278,10 +310,12 @@ impl Session {
         size: TermSize,
     ) -> io::Result<Session> {
         let title = Arc::new(Mutex::new(None));
+        let listener = Listener::with_title(Arc::clone(&title));
+        let bell = listener.bell_flag();
         let term = Arc::new(FairMutex::new(Term::new(
             Config::default(),
             &size,
-            Listener::with_title(Arc::clone(&title)),
+            listener,
         )));
         // The tunnel crosses a latency link, so the session owns an echo canceller (Session::write
         // notes keystrokes; the transport's reader thread cancels the returned copy).
@@ -300,6 +334,7 @@ impl Session {
             transport: Box::new(transport),
             echo: Some(echo),
             title,
+            bell,
             retry: Mutex::new(RetryState::new()),
             scrolled: Arc::new(std::sync::atomic::AtomicBool::new(false)),
         })
@@ -309,10 +344,12 @@ impl Session {
     /// `meta.host` carries the `@host` half of `pane@host`.
     pub fn remote(meta: SessionMeta, program: &str, size: TermSize) -> io::Result<Session> {
         let title = Arc::new(Mutex::new(None));
+        let listener = Listener::with_title(Arc::clone(&title));
+        let bell = listener.bell_flag();
         let term = Arc::new(FairMutex::new(Term::new(
             Config::default(),
             &size,
-            Listener::with_title(Arc::clone(&title)),
+            listener,
         )));
         // Remote ssh crosses a latency link — same echo-cancellation setup as the tunnel.
         let echo = Arc::new(EchoCanceller::default());
@@ -329,6 +366,7 @@ impl Session {
             transport: Box::new(transport),
             echo: Some(echo),
             title,
+            bell,
             retry: Mutex::new(RetryState::new()),
             scrolled: Arc::new(std::sync::atomic::AtomicBool::new(false)),
         })
@@ -651,5 +689,22 @@ mod tests {
         assert_eq!(RetryState::backoff_seconds(3), 40);
         assert_eq!(RetryState::backoff_seconds(4), 60);
         assert_eq!(RetryState::backoff_seconds(9), 60, "must cap, not overflow");
+    }
+
+    /// The bell flag is set when the emulator fires the bell event, and `take_bell` is reset-on-read
+    /// so a single ring badges exactly once (a second read must come back false).
+    #[test]
+    fn bell_flag_sets_on_bell_and_takes_once() {
+        let listener = Listener::default();
+        let bell = listener.bell_flag();
+        assert!(!bell.load(Ordering::SeqCst), "starts clear");
+        listener.send_event(Event::Bell);
+        assert!(bell.load(Ordering::SeqCst), "bell event sets the flag");
+        assert!(listener.bell_flag().load(Ordering::SeqCst), "clone sees it");
+
+        // Simulate what a Session would do: take -> true once, then false.
+        let take = || listener.bell_flag().swap(false, Ordering::SeqCst);
+        assert!(take(), "first take returns true");
+        assert!(!take(), "second take is false (reset-on-read)");
     }
 }
