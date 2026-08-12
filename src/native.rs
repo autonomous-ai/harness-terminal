@@ -1587,6 +1587,20 @@ impl Application {
                 "live follow (bottom)"
             }
         ));
+        // Pin/mute protection status — same flags the tab bar badges, so the info panel is a
+        // one-stop read of a tab's shielding without hunting the bar.
+        rows.push(format!(
+            "  protec     {}",
+            match (
+                self.pinned.get(self.app.active).copied().unwrap_or(false),
+                self.muted.get(self.app.active).copied().unwrap_or(false),
+            ) {
+                (true, true) => "pinned 🔒 · muted M",
+                (true, false) => "pinned 🔒",
+                (false, true) => "muted M",
+                (false, false) => "none",
+            }
+        ));
         // The OSC task title, if the shell/agent has set one — the running task context.
         if let Some(t) = s.live_title() {
             rows.push(format!("  task       {t}"));
