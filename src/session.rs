@@ -76,6 +76,20 @@ impl Session {
         Ok(Session { meta, term, transport: Box::new(transport) })
     }
 
+    /// Create a session whose pane is reached through the harness pane-relay tunnel at `host:port`.
+    /// The pane and its bytes live on `host`; our client only talks to the local harness daemon.
+    pub fn tunnel(
+        meta: SessionMeta,
+        host: &str,
+        port: u16,
+        program: &str,
+        size: TermSize,
+    ) -> io::Result<Session> {
+        let term = Arc::new(FairMutex::new(Term::new(Config::default(), &size, Listener)));
+        let transport = crate::transport::TunnelTransport::spawn(host, port, program, size, Arc::clone(&term))?;
+        Ok(Session { meta, term, transport: Box::new(transport) })
+    }
+
     /// Create a session whose pane lives on REMOTE host `host` (via ssh + tmux control mode).
     /// `meta.host` carries the `@host` half of `pane@host`.
     pub fn remote(
@@ -100,7 +114,7 @@ impl Session {
         // so mirror the keystrokes into the grid here to make typing feel instant. The real echo from
         // the pane overwrites these (they are the same chars + any app-driven prompt echo). Purely an
         // optimistic render — never affects the actual transport bytes.
-        if self.transport.kind() == "remote" {
+        if self.transport.kind() == "ssh" || self.transport.kind() == "tunnel" {
             let mut term = self.term.lock();
             let mut parser: Processor<StdSyncHandler> = Processor::default();
             parser.advance(&mut *term, bytes);

@@ -136,12 +136,30 @@ per-pane byte stream over the tunnel. Two buildable paths, in preference order:
 
 Either slots into `Transport` behind `kind() == "remote"` with no session/tui changes.
 
-## 11. Remote attach — current state
+## 11. Cross-machine transport — built: ssh + harness pane-relay tunnel
 
-The remote transport is wired end-to-end (no harness change): `prefix + r` opens a
-remote-attach overlay (type host + pick engine), which calls `App::spawn_remote` →
-`Session::remote` → `RemoteTransport`, spawning `ssh -tt <host> tmux -C` and streaming that
-remote pane's `%output` through the identical `ControlPipe` decode → `advance` path.
+Remote attach is live two ways, both streaming `%output` → `advance` behind `Transport`:
+
+- **ssh** (`prefix + r` → `App::spawn_remote` → `Session::remote` → `RemoteTransport`, kind
+  `"ssh"`): spawns `ssh -tt <host> tmux -C` and streams that remote pane through the identical
+  `ControlPipe` decode → `advance` path. No harness change. Host discovery
+  (`transport::discover_hosts`) reads `~/.ssh/config` `Host` entries.
+- **harness tunnel** (ARCHITECTURE §10 path 1 — now real; kind `"tunnel"`): a tab backs onto a
+  pane on another joined machine via the machine's `harness` daemon (`prefix + r` defaults the host
+  to `127.0.0.1` and reaches `/api/pane-ws` on `HARNESS_PORT_DEFAULT`, 18473).
+  - Harness side (`autonomous-harness/cli`): `hookServer.ts` serves `/api/pane-ws`; on attach it
+    spawns `tmux -C`, relays the pane's `%output` byte stream to the client verbatim, and forwards
+    client messages (control-mode commands) into the tmux client's stdin. `cli.ts` routes
+    `onPaneRelay`.
+  - Client side (`transport.rs`): `TunnelTransport::spawn` opens one nonblocking WebSocket to
+    `/api/pane-ws`, sends `new-session` on attach, and a single thread reads `%output` →
+    `parse_output` → `advance` while draining keystrokes encoded via the shared
+    `encode_keys(bytes)` helper (the same `send-keys -l` / `send-keys Enter` encoding the local
+    control-mode pipe uses — the relay expects commands, not raw bytes). Locked in by
+    `tests/tunnel_live.rs`, a live E2E that types a marker over the tunnel and asserts it echoes
+    back into the grid.
+
+What's still refinements on both: no latency smoothing, no reconnect — geometric/VM until asked for.
 What's live today is geometric: bytes flow as fast as ssh will carry them; no latency
 smoothing, no local echo, no reconnect — those are refinements, not missing pieces.
 Host discovery (`transport::discover_hosts`) reads `~/.ssh/config` `Host` entries; the
@@ -160,6 +178,7 @@ harness `machine-ws` tunnel can back the same attach later without touching this
   optimistically while they cross the network, so typing feels instant; the pane's real echo
   overwrites it. Purely a render optimization — never mutates the transport bytes.
 
-Only the raw pane *byte* relay across machines remains harness-via-ssh. The tunnel needs a new
-backend frame the harness doesn't yet serve (hookServer.ts:400: "Terminal I/O is not streamed"),
-so it stays behind `Transport` with no client changes needed when that lands.
+The raw pane *byte* relay across machines now rides the harness fabric itself: the daemon's
+`/api/pane-ws` relay (see §11) carries the control-mode stream over the existing loopback control
+port, so a joined machine is reached without raw ssh. The emulator client and the daemon relay
+share the control-mode protocol end to end.

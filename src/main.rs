@@ -67,8 +67,10 @@ fn handle_key(app: &mut App, key: KeyEvent, in_command: &mut bool) -> bool {
                 KeyCode::Esc => app.overlay = Overlay::None,
                 KeyCode::Enter => {
                     if let Some(eng) = app.selected_engine() {
-                        let host = if host.trim().is_empty() { "localhost".to_string() } else { host.trim().to_string() };
-                        app.spawn_remote(&host, eng);
+                        let host = if host.trim().is_empty() { "127.0.0.1".to_string() } else { host.trim().to_string() };
+                        // Preferred transport: the harness pane-relay tunnel (path 1) on the machine's
+                        // harness control port.
+                        app.spawn_tunnel(&host, autonomous_term::harness::HARNESS_PORT_DEFAULT, eng);
                         app.overlay = Overlay::None;
                     }
                 }

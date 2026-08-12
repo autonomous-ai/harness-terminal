@@ -197,38 +197,44 @@ impl ControlPipe {
         Ok(ControlPipe { child, tx })
     }
 
-    /// Encode a keystroke buffer as `send-keys` commands (see [`ControlPipe::write`]).
+    /// Encode a keystroke buffer as `send-keys` commands (see [`encode_keys`]).
     fn write(&self, bytes: &[u8]) {
-        // In control mode, typed bytes go to the pane as `send-keys -l '<text>'`. The pane gets a
-        // raw key press on CR/LF, which we submit as a separate `send-keys Enter` command (the -l
-        // form types literally, so it cannot carry key names). A trailing partial literal line is
-        // flushed without an Enter so backspace-then-type still works.
-        let mut cmd = String::new();
-        let mut literal = String::new();
-        let flush = |cmd: &mut String, literal: &mut String, enter: bool| {
-            if !literal.is_empty() {
-                cmd.push_str("send-keys -l '");
-                cmd.push_str(&escape_single_quote(literal));
-                cmd.push_str("'\n");
-                literal.clear();
-            }
-            if enter {
-                cmd.push_str("send-keys Enter\n");
-            }
-        };
-        for &b in bytes {
-            match b {
-                b'\r' | b'\n' => flush(&mut cmd, &mut literal, true),
-                b'\t' => {
-                    flush(&mut cmd, &mut literal, false);
-                    cmd.push_str("send-keys Tab\n");
-                }
-                _ => literal.push(b as char),
-            }
-        }
-        flush(&mut cmd, &mut literal, false);
-        let _ = self.tx.send(cmd.into_bytes());
+        let _ = self.tx.send(encode_keys(bytes).into_bytes());
     }
+}
+
+/// Encode a keystroke buffer as tmux control-mode `send-keys` commands.
+///
+/// Typed bytes go to the pane as `send-keys -l '<text>'`. The pane gets a raw key press on CR/LF,
+/// which we submit as a separate `send-keys Enter` command (the `-l` form types literally, so it
+/// cannot carry key names). Tab becomes `send-keys Tab`. A trailing partial literal line is flushed
+/// without an Enter so backspace-then-type still works. Shared by the local control-mode pipe and the
+/// harness tunnel (the relay expects commands, not raw bytes).
+fn encode_keys(bytes: &[u8]) -> String {
+    let mut cmd = String::new();
+    let mut literal = String::new();
+    let flush = |cmd: &mut String, literal: &mut String, enter: bool| {
+        if !literal.is_empty() {
+            cmd.push_str("send-keys -l '");
+            cmd.push_str(&escape_single_quote(&std::mem::take(literal)));
+            cmd.push_str("'\n");
+        }
+        if enter {
+            cmd.push_str("send-keys Enter\n");
+        }
+    };
+    for &b in bytes {
+        match b {
+            b'\r' | b'\n' => flush(&mut cmd, &mut literal, true),
+            b'\t' => {
+                flush(&mut cmd, &mut literal, false);
+                cmd.push_str("send-keys Tab\n");
+            }
+            _ => literal.push(b as char),
+        }
+    }
+    flush(&mut cmd, &mut literal, false);
+    cmd
 }
 
 impl Drop for ControlPipe {
@@ -289,7 +295,7 @@ impl RemoteTransport {
 
 impl Transport for RemoteTransport {
     fn kind(&self) -> &'static str {
-        "remote"
+        "ssh"
     }
 
     fn write(&self, bytes: &[u8]) {
@@ -299,6 +305,107 @@ impl Transport for RemoteTransport {
     fn resize(&self, size: TermSize) {
         let cmd = format!("resize-window -x {} -y {}\n", size.cols, size.lines);
         let _ = self.pipe.tx.send(cmd.into_bytes());
+    }
+}
+
+/// Tunnel-backed remote transport — ARCHITECTURE §10 path 1, now real.
+///
+/// The on-machine harness daemon (`harness`) exposes a raw pane-byte relay at
+/// `ws://localhost:<port>/api/pane-ws` (added to `autonomous-harness` hookServer.ts): it owns a
+/// `tmux -C` control-mode client and relays the pane's `%output` byte stream over the machine-ws
+/// WebSocket. This transport drives that SAME control-mode protocol through the tunnel — a pane on a
+/// joined machine is reached over the e2ee harness fabric instead of raw ssh. The `%output` decode →
+/// `advance` path is byte-identical to the local tmux transport, proven against the live relay.
+pub struct TunnelTransport {
+    tx: mpsc::Sender<Vec<u8>>,
+}
+
+impl TunnelTransport {
+    /// Attach to a fresh pane on the harness daemon at `host:port`, running `program`.
+    pub fn spawn(
+        host: &str,
+        port: u16,
+        program: &str,
+        size: TermSize,
+        term: Arc<FairMutex<Term<Listener>>>,
+    ) -> io::Result<TunnelTransport> {
+        let name = format!("auton-{}", program.replace('/', "-"));
+        let (tx, rx) = mpsc::channel::<Vec<u8>>();
+
+        // Build the connection by hand so the underlying socket can be set nonblocking before the
+        // upgrade (tungstenite's `connect` owns the socket and gives no way in).
+        let addr = format!("{host}:{port}");
+        let tcp = std::net::TcpStream::connect(&addr)
+            .map_err(|e| io::Error::new(io::ErrorKind::Other, format!("tunnel connect {addr}: {e}")))?;
+        let url = format!("ws://{host}:{port}/api/pane-ws");
+        let request = tungstenite::client::IntoClientRequest::into_client_request(url)
+            .map_err(|e| io::Error::new(io::ErrorKind::Other, e.to_string()))?;
+        // Handshake BLOCKING first (a nonblocking socket makes the upgrade itself fail), then flip the
+        // underlying stream to nonblocking so one connection can both read output and drain keystrokes.
+        let (mut ws, _) = tungstenite::client::client(request, tcp)
+            .map_err(|e| io::Error::new(io::ErrorKind::Other, format!("tunnel upgrade: {e}")))?;
+        // With a raw TcpStream the upgrade produces a MaybeTlsStream wrapping it; set the underlying
+        // socket nonblocking so the read/write loop below can service both directions on one connection.
+        let _ = ws.get_ref().set_nonblocking(true);
+        // Create the pane + start the program, mirroring ControlPipe's first on-stdin command.
+        ws.send(tungstenite::Message::Text(format!(
+            "new-session -s {} -x {} -y {} {}\n", name, size.cols, size.lines, program,
+        )))
+        .map_err(|e| io::Error::new(io::ErrorKind::Other, e.to_string()))?;
+
+        // One thread owns the single connection: read `%output` → grid, drain tx → send-keys.
+        let t = Arc::clone(&term);
+        thread::Builder::new().name("tunnel".into()).spawn(move || {
+            let mut parser: Processor<StdSyncHandler> = Processor::default();
+            loop {
+                match ws.read() {
+                    Ok(tungstenite::Message::Text(s)) => {
+                        for line in s.lines() {
+                            if let Some(payload) = parse_output(line) {
+                                let mut term = t.lock();
+                                parser.advance(&mut *term, &payload);
+                            }
+                        }
+                    }
+                    Ok(tungstenite::Message::Binary(b)) => {
+                        for line in String::from_utf8_lossy(&b).lines() {
+                            if let Some(payload) = parse_output(line) {
+                                let mut term = t.lock();
+                                parser.advance(&mut *term, &payload);
+                            }
+                        }
+                    }
+                    Ok(_) => {}
+                    // Nonblocking: nothing to read yet is not an error — keep draining keystrokes.
+                    Err(tungstenite::Error::Io(ref e)) if e.kind() == io::ErrorKind::WouldBlock => {}
+                    Err(_) => break, // closed
+                }
+                while let Ok(bytes) = rx.try_recv() {
+                    if let Ok(text) = String::from_utf8(bytes) {
+                        let _ = ws.send(tungstenite::Message::Text(text));
+                    }
+                }
+                thread::sleep(std::time::Duration::from_millis(2));
+            }
+        })?;
+
+        Ok(TunnelTransport { tx })
+    }
+}
+
+impl Transport for TunnelTransport {
+    fn kind(&self) -> &'static str {
+        "tunnel"
+    }
+
+    fn write(&self, bytes: &[u8]) {
+        // The relay forwards messages verbatim to its `tmux -C` client, which expects control-mode
+        // commands — so keystrokes must be encoded as `send-keys` first (same as the local pipe).
+        let _ = self.tx.send(encode_keys(bytes).into_bytes());
+    }
+
+    fn resize(&self, size: TermSize) {
+        let _ = self.tx.send(format!("resize-window -x {} -y {}\n", size.cols, size.lines).into_bytes());
     }
 }
 

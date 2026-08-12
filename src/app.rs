@@ -79,6 +79,18 @@ impl App {
         self.push_ok(Session::remote(meta, program, self.size), engine_id, host);
     }
 
+    /// Create a session over the harness pane-relay tunnel: the pane runs on `host` (the `@host` half
+    /// of `pane@host`), reached through that machine's harness daemon at `host:port`. This is
+    /// ARCHITECTURE §10 path 1 — the design-specified cross-machine transport.
+    pub fn spawn_tunnel(&mut self, host: &str, port: u16, engine_id: &str) {
+        let program = engine_cmd(engine_id).unwrap_or("bash");
+        let meta = self.meta_for(host, engine_id);
+        self.push_ok(
+            Session::tunnel(meta, host, port, program, self.size),
+            engine_id, host,
+        );
+    }
+
     fn meta_for(&self, host: &str, engine_id: &str) -> SessionMeta {
         SessionMeta {
             host: host.to_string(),
