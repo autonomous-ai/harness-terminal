@@ -58,6 +58,7 @@ impl LocalPtyTransport {
         program: &str,
         args: Vec<String>,
         size: TermSize,
+        env_cwd: Option<String>,
         term: Arc<FairMutex<Term<Listener>>>,
     ) -> io::Result<LocalPtyTransport> {
         let wsize = WindowSize {
@@ -66,15 +67,20 @@ impl LocalPtyTransport {
             cell_width: 0,
             cell_height: 0,
         };
+        // Per-tab working directory: a diver's typed `dir:` in the new-session picker wins; when
+        // they leave it blank (None/empty) we fall back to the config's `start_cwd` (when set) so a
+        // diver who keeps a repo can hit `prefix+n` and land in it, not wherever the binary launched.
+        let tty_cwd: Option<std::path::PathBuf> = match env_cwd {
+            Some(cwd) if !cwd.trim().is_empty() => Some(cwd.into()),
+            _ => crate::config::Config::load()
+                .start_cwd
+                .filter(|p| !p.is_empty())
+                .map(Into::into),
+        };
         let pty = tty::new(
             &tty::Options {
                 shell: Some(tty::Shell::new(program.into(), args)),
-                // New local tabs open in the config's `start_cwd` (when set) so a diver who keeps a
-                // repo can hit `prefix+n` and land in it, not wherever the binary was launched.
-                working_directory: crate::config::Config::load()
-                    .start_cwd
-                    .filter(|p| !p.is_empty())
-                    .map(Into::into),
+                working_directory: tty_cwd,
                 drain_on_exit: true,
                 env: Default::default(),
             },

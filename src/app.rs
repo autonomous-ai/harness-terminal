@@ -81,11 +81,12 @@ impl App {
         self.tabs.get_mut(self.active)
     }
 
-    /// Create a new session tab running a local engine, and focus it.
-    pub fn spawn_local(&mut self, host: &str, engine_id: &str) {
+    /// Create a new session tab running a local engine, and focus it. `cwd` is an optional per-tab
+    /// working directory; None falls back to the config `start_cwd` / the binary's cwd.
+    pub fn spawn_local(&mut self, host: &str, engine_id: &str, cwd: Option<String>) {
         let program = engine_cmd(engine_id).unwrap_or("bash");
         let meta = self.meta_for(host, engine_id);
-        self.push_ok(Session::local(meta, program, Vec::new(), self.size), engine_id, host);
+        self.push_ok(Session::local(meta, program, Vec::new(), self.size, cwd), engine_id, host);
     }
 
     /// Create a new session tab running the engine inside a real local tmux pane, and focus it.
@@ -246,7 +247,7 @@ impl App {
             "tmux" => Session::tmux(meta, program, self.size),
             "ssh" => Session::remote(meta, program, self.size),
             "tunnel" => Session::tunnel(meta, &spec.host, spec.port.unwrap_or(crate::harness::HARNESS_PORT_DEFAULT), program, self.size),
-            _ => Session::local(meta, program, Vec::new(), self.size),
+            _ => Session::local(meta, program, Vec::new(), self.size, None),
         };
         if let Ok(mut session) = res {
             session.meta.name = spec.name.clone();

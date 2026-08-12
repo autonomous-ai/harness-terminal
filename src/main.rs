@@ -52,7 +52,7 @@ fn run_tui() -> io::Result<()> {
     let mut term = Terminal::new(backend)?;
 
     let mut app = App::new(TermSize { lines: 24, cols: 80 });
-    app.spawn_local("this-host", "shell");
+    app.spawn_local("this-host", "shell", None);
 
     let mut in_command = false;
     loop {
@@ -119,7 +119,7 @@ fn handle_key_tui(app: &mut App, key: crossterm::event::KeyEvent, in_command: &m
                 KeyCode::Esc => app.overlay = Overlay::None,
                 KeyCode::Enter => {
                     if let Some(eng) = app.selected_engine() {
-                        app.spawn_local("this-host", eng);
+                        app.spawn_local("this-host", eng, None);
                         app.overlay = Overlay::None;
                     }
                 }

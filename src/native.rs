@@ -107,6 +107,8 @@ struct Application {
     broadcast_targets: Vec<bool>,
     /// Index of the row the broadcast overlay's focus is on (all-on by default).
     broadcast_sel: usize,
+    /// In-progress working-directory for the NewSession picker ("" when blank → config start_cwd).
+    new_cwd: String,
     /// Per-tab mute state (prefix+m). A muted tab's busy nudge + badge are suppressed so a noisy
     /// pane a diver doesn't care about stops nagging. Grows/shrinks with the tab set.
     muted: Vec<bool>,
@@ -225,6 +227,7 @@ impl Application {
             broadcast_query: String::new(),
             broadcast_targets: vec![true; tab_count],
             broadcast_sel: 0,
+            new_cwd: String::new(),
             muted,
             grew_delta: vec![0; tab_count],
             find_hit: None,
@@ -692,7 +695,7 @@ impl Application {
         // Overlays.
         match self.app.overlay {
             Overlay::Palette => self.render_palette(fb),
-            Overlay::NewSession => self.render_list(fb, "  new session  ", true),
+            Overlay::NewSession => self.render_new_session(fb),
             Overlay::RemoteAttach => self.render_remote(fb),
             Overlay::Find => self.render_find(fb),
             Overlay::FleetSearch => self.render_fleet_search(fb),
@@ -726,10 +729,17 @@ impl Application {
         }
     }
 
-    /// Engine list overlay (new-session picker). `_is_picker` reserved for remote mode extras.
-    fn render_list(&mut self, fb: &mut Framebuffer, header: &str, _is_picker: bool) {
+    /// New-session picker: a `dir:` working-directory line on top, then the engine list below
+    /// (Up/Down selects the engine, typing edits the directory). Mirrors the RemoteAttach overlay.
+    fn render_new_session(&mut self, fb: &mut Framebuffer) {
         let (base_y, line_px) = self.overlay_base_y();
-        draw_text(fb, &mut self.cache, header, 32, base_y, self.font_px, WHITE);
+        draw_text(fb, &mut self.cache, "  new session  ", 32, base_y, self.font_px, WHITE);
+        // Reuse `app.selected` as-is; the engine list offset accounts for the extra dir row.
+        if self.new_cwd.is_empty() {
+            draw_text(fb, &mut self.cache, "  dir:  (blank = config start_cwd)  ", 32, base_y + line_px, self.font_px, CHROME_FG);
+        } else {
+            draw_text(fb, &mut self.cache, &format!("  dir: {}", self.new_cwd), 32, base_y + line_px, self.font_px, CHROME_FG);
+        }
         for (i, e) in ENGINES.iter().enumerate() {
             let sel = i == self.app.selected;
             let color = if sel { WHITE } else { CHROME_DIM };
@@ -838,7 +848,7 @@ impl Application {
             ("Ctrl+Space", "prefix (then a command)"),
             ("prefix /", "palette: jump to any session"),
             ("prefix ;", "command palette (all actions)"),
-            ("prefix n", "new session (engine picker)"),
+            ("prefix n", "new session (engine + working dir)"),
             ("prefix r", "attach to a remote pane@host"),
             ("prefix s", "fleet status"),
             ("prefix { }", "move tab left / right"),
@@ -1237,6 +1247,7 @@ impl Application {
             NewSession => {
                 self.app.overlay = Overlay::NewSession;
                 self.app.select_default_engine();
+                self.new_cwd.clear();
             }
             RemoteAttach => {
                 self.app.overlay = Overlay::RemoteAttach;
@@ -1467,7 +1478,7 @@ impl Application {
         match key {
             Key::Character(c) => match c.as_str() {
                 "/" => { self.app.overlay = Overlay::Palette; self.app.query.clear(); self.app.selected = 0; self.app.refresh_filter(); }
-                "n" => { self.app.overlay = Overlay::NewSession; self.app.select_default_engine(); }
+                "n" => { self.app.overlay = Overlay::NewSession; self.app.select_default_engine(); self.new_cwd.clear(); }
                 "r" => { self.app.overlay = Overlay::RemoteAttach; self.app.remote_host.clear(); self.app.selected = 0; }
                 "t" => self.app.spawn_tmux("this-host", "shell"),
                 "q" => return true,
@@ -1569,13 +1580,18 @@ impl Application {
             }
             Overlay::NewSession => {
                 match key {
+                    // Typing builds the per-tab working-directory field; Up/Down still select the
+                    // engine; Backspace edits the directory.
+                    Key::Character(c) => self.new_cwd.push_str(c),
                     Key::Named(n) => match n {
                         winit::keyboard::NamedKey::Enter => if let Some(e) = self.app.selected_engine() {
-                            self.app.spawn_local("this-host", e); self.app.overlay = Overlay::None;
+                            let cwd = if self.new_cwd.trim().is_empty() { None } else { Some(self.new_cwd.trim().to_string()) };
+                            self.app.spawn_local("this-host", e, cwd); self.app.overlay = Overlay::None;
                         },
                         winit::keyboard::NamedKey::Escape => self.app.overlay = Overlay::None,
                         winit::keyboard::NamedKey::ArrowDown => self.app.selected = (self.app.selected + 1).min(ENGINES.len() - 1),
                         winit::keyboard::NamedKey::ArrowUp => self.app.selected = self.app.selected.saturating_sub(1),
+                        winit::keyboard::NamedKey::Backspace => { self.new_cwd.pop(); }
                         _ => {}
                     },
                     _ => {}

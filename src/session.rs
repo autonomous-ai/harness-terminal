@@ -208,15 +208,18 @@ impl Session {
     }
 
     /// Create a session running a LOCAL program (shell or an engine CLI) in a fresh PTY.
+    /// `working_dir` is an optional per-tab working directory (None falls back to config `start_cwd`
+    /// / the binary's cwd inside the transport).
     pub fn local(
         meta: SessionMeta,
         program: &str,
         args: Vec<String>,
         size: TermSize,
+        working_dir: Option<String>,
     ) -> io::Result<Session> {
         let title = Arc::new(Mutex::new(None));
         let term = Arc::new(FairMutex::new(Term::new(Config::default(), &size, Listener::with_title(Arc::clone(&title)))));
-        let transport = LocalPtyTransport::spawn(program, args, size, Arc::clone(&term))?;
+        let transport = LocalPtyTransport::spawn(program, args, size, working_dir, Arc::clone(&term))?;
         Ok(Session { meta, term, transport: Box::new(transport), echo: None, title, retry: Mutex::new(RetryState::new()), scrolled: Arc::new(std::sync::atomic::AtomicBool::new(false)) })
     }
 
