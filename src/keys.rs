@@ -1,10 +1,13 @@
 //! Prefix keybinding resolution.
 //!
-//! After `Ctrl+Space`, a single key triggers an action (tmux-style). These binds are configurable
+//! After the prefix chord (`Ctrl+Space`, or `Ctrl+\` when macOS owns `Ctrl+Space` — see
+//! `crate::macos`), a single key triggers an action (tmux-style). These binds are configurable
 //! via the `[keybindings]` block so a user can remap them without recompiling. An absent or empty
 //! `[keybindings]` block keeps today's exact defaults — see `DEFAULT_KEYS`.
 
 use std::collections::BTreeMap;
+
+use winit::keyboard::{Key, ModifiersState, NamedKey};
 
 /// The canonical, ordered set of every prefix action. The order here is also the order the defaults
 /// table is checked, so later entries never shadow earlier ones (each action maps to one key).
@@ -55,6 +58,20 @@ pub const ACTIONS: &[(&str, &str)] = &[
     ("reconnect", "R"),
     ("destroy", "D"),
 ];
+
+/// Prefix *chord* detection: the key(s) that enter command mode, as opposed to the single key
+/// pressed after the prefix. Ctrl+Space is the primary, tmux-style chord; Ctrl+\\ is the
+/// fallback because on macOS the system's input-source switcher owns Ctrl+Space when a second
+/// layout is enabled (see `crate::macos`), so that keystroke never reaches the app. A plain
+/// space always types normally — only the control chord enters command mode.
+pub fn is_prefix_press(key: &Key, mods: &ModifiersState) -> bool {
+    let is_space = matches!(key, Key::Character(c) if c == " ")
+        || matches!(key, Key::Named(NamedKey::Space));
+    // `|` is Shift+Ctrl+Backslash on US layouts (winit lets SHIFT through to the logical key),
+    // so accept it too — the user reaching for the fallback chord with shift held still works.
+    let is_backslash = matches!(key, Key::Character(c) if c == "\\" || c == "|");
+    mods.control_key() && (is_space || is_backslash)
+}
 
 /// The built-in full keybinding table. `(action, key)` in ACTIONS order.
 fn defaults() -> BTreeMap<&'static str, &'static str> {
@@ -157,5 +174,31 @@ mod tests {
         let empty = BTreeMap::new();
         assert_eq!(binding_for(&empty, "search"), "f");
         assert_eq!(binding_for(&empty, "new_session"), "n");
+    }
+
+    #[test]
+    fn ctrl_space_is_a_prefix_press_but_plain_space_is_not() {
+        let mut ctrl = ModifiersState::default();
+        ctrl.insert(ModifiersState::CONTROL);
+        assert!(is_prefix_press(&Key::Character(" ".into()), &ctrl));
+        assert!(is_prefix_press(&Key::Named(NamedKey::Space), &ctrl));
+        assert!(!is_prefix_press(&Key::Character(" ".into()), &ModifiersState::default()));
+        assert!(!is_prefix_press(&Key::Named(NamedKey::Space), &ModifiersState::default()));
+        // Control alone, without a space, is never a prefix press.
+        assert!(!is_prefix_press(&Key::Character("n".into()), &ctrl));
+    }
+
+    #[test]
+    fn ctrl_backslash_is_the_fallback_chord() {
+        let mut ctrl = ModifiersState::default();
+        ctrl.insert(ModifiersState::CONTROL);
+        assert!(is_prefix_press(&Key::Character("\\".into()), &ctrl));
+        // Without control it's just a backslash, not a prefix.
+        assert!(!is_prefix_press(&Key::Character("\\".into()), &ModifiersState::default()));
+        // Shift+Ctrl+Backslash is the pipe on most layouts, and as a coincidental fallback should
+        // still be a valid prefix press (the physical key is what the user is reaching for).
+        let mut ctrl_shift = ctrl;
+        ctrl_shift.insert(ModifiersState::SHIFT);
+        assert!(is_prefix_press(&Key::Character("|".into()), &ctrl_shift));
     }
 }

@@ -41,7 +41,9 @@ pub struct Config {
     /// Optional color theme. Absent (or a broken `[theme]` block) keeps the built-in palette.
     #[serde(default)]
     pub theme: Option<Theme>,
-    /// Optional prefix-key remapping: an action name -> the key that triggers it after `Ctrl+Space`.
+    /// Optional prefix-key remapping: an action name -> the key that triggers it after the
+    /// prefix chord (`Ctrl+Space`, or `Ctrl+\` when macOS claims `Ctrl+Space` for input-source
+    /// switching).
     /// Only actions named here that exist are remapped; everything else keeps its default. Absent
     /// (or an empty block) = today's exact keybindings. See `crate::keys`.
     #[serde(default)]

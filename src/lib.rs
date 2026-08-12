@@ -16,3 +16,4 @@ pub mod restore;
 pub mod session;
 pub mod transport;
 pub mod tui;
+pub mod macos;

@@ -6,6 +6,18 @@ entries record user-visible and architectural changes since the last tagged mile
 ## Unreleased / 0.1.0 (in progress)
 
 ### Added
+- **Prefix dislikes being dead: `Ctrl+\\` is now a working fallback chord.** macOS silently eats
+  `Ctrl+Space` for its *input-source switcher* whenever a second layout is enabled (English + a
+  Vietnamese Telex IM is the classic case) — the keystroke never reaches the app, so a tmux-style
+  prefix just stops answering. A new `src/macos.rs` detects that exact condition at launch
+  (`com.apple.symbolichotkeys` hotkey 60 enabled **and** ≥2 selectable input sources) and the app
+  then: (1) answers the prefix on `Ctrl+\\` too (the OS never grabs it), (2) flashes a one-line
+  "macOS owns Ctrl+Space" notice at launch and again once on the first `Ctrl+\\` press, and
+  (3) rewrites every in-app hint (empty-state, keymap, palette row) to advertise the chord that
+  actually works. Both chords stay live, so reclaiming `Ctrl+Space` in System Settings ▸ Keyboard ▸
+  Keyboard Shortcuts ▸ Input Sources just turns the primary back on. Unit tests for the plist parse
+  (fail-open on any unreadable/invalid input) and for the chord predicate (`Space` vs `\\` add
+  `|` for Shift+Ctrl+Backslash).
 - **Mark-all-read (`prefix+I`)** — clear every tab's busy `!N`, bell 🔔, and recovery ↻ badge in one
   key. Re-baselines each backgrounded tab's seen-history so the next output is the only thing that
   nags again; a baseline reset, not a mute (fresh output still refills a badge normally). In the

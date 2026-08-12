@@ -36,7 +36,9 @@ client owns the fleet of sessions. The tab bar IS the session palette.
 - **Status chrome per pane:** `host · engine · session-title · status` (title from tmux pane-title,
   same logic as harness `tmuxAgentDiscovery`). Remote-ness is a small glyph.
 - **Local echo** so remote typing feels local.
-- **Keyboard-first**, tmux-style prefix keys.
+- **Keyboard-first**, tmux-style prefix keys (`Ctrl+Space`; falls back to `Ctrl+\` when
+  `src/macos.rs` detects macOS owns `Ctrl+Space` for its input-source switcher — the OS swallows
+  the keystroke before it reaches the app once a second layout is enabled).
 
 ## 3. Wire protocol sketch (to be finalized)
 

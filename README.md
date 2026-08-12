@@ -38,7 +38,11 @@ By default it reopens the tabs that were open last time, restores the font zoom,
 
 ## Keys
 
-The prefix is `Ctrl+Space` (tmux-style), then a command:
+The prefix is `Ctrl+Space` (tmux-style), then a command. If macOS has a second input source
+enabled (e.g. English + Vietnamese Telex), the OS itself owns `Ctrl+Space` (its *input-source
+switcher* grabs the keystroke before any app sees it) — the app then falls back to **`Ctrl+\`**
+and tells you so at launch. Either chord enters the same command mode:
+
 
 | Keys | Action |
 |------|--------|

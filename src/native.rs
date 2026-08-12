@@ -134,6 +134,14 @@ struct Application {
     colors: crate::render::Colors,
     prefix_down: bool,
     mods: ModifiersState,
+    /// Set at startup when macOS owns Ctrl+Space (its input-source switcher grabs the
+    /// keystroke when a second layout is enabled, e.g. ABC + Vietnamese). When true the
+    /// prefix answers Ctrl+\ instead and hints advertise that; without this the "prefix is
+    /// dead" failure mode is a silent mystery. See `crate::macos`.
+    prefix_claimed: bool,
+    /// One-shot: once the Ctrl+Space-claimed explanation has flashed (on the first Ctrl+\
+    /// prefix press), don't repeat it every single time the fallback chord is used.
+    prefix_alt_notice: bool,
     /// The tab that was active before the current one, so prefix+l can flip back to it (tmux
     /// last-window muscle memory). Cleared to None when tabs get rearranged out from under it.
     last_active: Option<usize>,
@@ -317,6 +325,9 @@ impl Application {
             Some(t) => crate::render::Colors::from(t),
             None => crate::render::Colors::default(),
         };
+        // macOS borrows Ctrl+Space when a second input source is enabled; detect once at
+        // launch so the prefix can fall back to Ctrl+\ and the UI can tell the user why.
+        let prefix_claimed = crate::macos::ctrl_space_claimed();
         let tab_count = app.tabs.len();
         let seen_history = vec![usize::MAX; tab_count];
         // Quiet threshold from config: how long a live, backgrounded, unprotected tab can sit silent
@@ -365,6 +376,8 @@ impl Application {
             colors,
             prefix_down: false,
             mods: ModifiersState::default(),
+            prefix_claimed,
+            prefix_alt_notice: false,
             last_active: None,
             find_query: String::new(),
             rename_query: String::new(),
@@ -402,7 +415,12 @@ impl Application {
             seen_history,
             last_output,
             notified: vec![false; tab_count],
-            flash: None,
+            flash: if prefix_claimed {
+                // Tell a diver at launch, not silently: on this machine macOS eats Ctrl+Space.
+                Some((crate::macos::ctrl_space_notice(), std::time::Instant::now()))
+            } else {
+                None
+            },
             peek_sel: 0,
             peek_scroll: 0,
             palette_q: String::new(),
@@ -1432,8 +1450,11 @@ impl Application {
         } else {
             // No sessions open — draw a short 'how to start' hint so the window isn't a blank void.
             let cy = term_top + (grid_lines / 2) * gline_px;
-            let hint = "no sessions ·  Ctrl+Space n  new   Ctrl+Space r  attach remote   Ctrl+Space /  palette ";
-            let hw = draw_text(fb, &mut self.cache, hint, 0, cy, self.font_px, CHROME_DIM);
+            let chord = self.prefix_chord();
+            let hint = format!(
+                "no sessions ·  {chord} n  new   {chord} r  attach remote   {chord} /  palette "
+            );
+            let hw = draw_text(fb, &mut self.cache, &hint, 0, cy, self.font_px, CHROME_DIM);
             let cx = fb.width.saturating_sub(hw) / 2;
             // Blank the row so the sizing pass above doesn't leave a left-aligned ghost, then paint
             // a single centered copy. (All pixels are black here to begin; clearing is a no-op but
@@ -1445,7 +1466,7 @@ impl Application {
                     }
                 }
             }
-            draw_text(fb, &mut self.cache, hint, cx, cy, self.font_px, CHROME_DIM);
+            draw_text(fb, &mut self.cache, &hint, cx, cy, self.font_px, CHROME_DIM);
         }
 
         // Tab bar (top row). Flag backgrounded tabs that produced output since we last looked.
@@ -2300,6 +2321,17 @@ impl Application {
         format!("prefix {key}")
     }
 
+    /// The prefix chord to advertise in UI copy: `Ctrl+Space`, or `Ctrl+\` when macOS owns
+    /// Ctrl+Space (a second input source makes the OS swallow it). The hint always matches what
+    /// actually answers on this machine.
+    fn prefix_chord(&self) -> &'static str {
+        if self.prefix_claimed {
+            "Ctrl+\\"
+        } else {
+            "Ctrl+Space"
+        }
+    }
+
     fn render_help(&mut self, fb: &mut Framebuffer) {
         let (base_y, line_px) = self.overlay_base_y();
         draw_text(
@@ -2364,7 +2396,7 @@ impl Application {
         ] {
             if action.is_empty() {
                 all.push((
-                    "Ctrl+Space".to_string(),
+                    self.prefix_chord().to_string(),
                     "prefix (then a command)".to_string(),
                 ));
             } else {
@@ -3424,11 +3456,19 @@ impl Application {
     /// Handle a key. Mirrors the TUI's prefix→command→forward logic; prefix here is Ctrl+Space
     /// (tmux-like), so a plain space still types normally.
     fn handle_key(&mut self, key: &Key, mods: &ModifiersState) {
-        let is_space = matches!(key, Key::Character(c) if c == " ")
-            || matches!(key, Key::Named(winit::keyboard::NamedKey::Space));
-
-        // Enter command mode: Ctrl+Space (or, while we haven't a real prefix, Ctrl+Space).
-        if mods.control_key() && is_space && self.app.overlay == Overlay::None {
+        // Enter command mode: Ctrl+Space is primary; Ctrl+\ is the fallback. On a mac with a
+        // second input source enabled, macOS itself owns Ctrl+Space (input-source switcher) and the
+        // keystroke never arrives — so the first time the fallback chord works, explain once that
+        // the canonical prefix is being eaten by the OS rather than the app being broken.
+        if crate::keys::is_prefix_press(key, mods) && self.app.overlay == Overlay::None {
+            if matches!(key, Key::Character(c) if c == "\\")
+                && self.prefix_claimed
+                && !self.prefix_alt_notice
+            {
+                self.prefix_alt_notice = true;
+                self.flash =
+                    Some((crate::macos::ctrl_space_notice(), std::time::Instant::now()));
+            }
             self.prefix_down = true;
             return;
         }
