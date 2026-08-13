@@ -13,6 +13,10 @@ entries record user-visible and architectural changes since the last tagged mile
   hot-path config I/O.
 
 ### Fixed
+- **`prefix+H` next-host paging pinned with tests.** `next_host_index` (jumping the fleet by
+  machine) had no coverage for interleaved/repeated hosts or the wrap-around case; added a test
+  exercising distinct-host ordering, skipping ahead across repeats, and wrap-to-front (113→114).
+
 - **Pinned URL/path click expansion with regression tests.** `expand_click_word` (what `Cmd`-click
   URL-opening and `Alt`-click-cursor-move use to find the token under the cursor) had no tests and
   tricky boundary logic. Added an exhaustive test covering URL/path tokens, boundary columns,

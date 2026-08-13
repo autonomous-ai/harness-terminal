@@ -7287,4 +7287,25 @@ mod tests {
         // A single-character token.
         assert_eq!(expand_click_word("[x]", 1), "x");
     }
+
+    /// `prefix+H` next-host paging: jumps to the first tab of the next DISTINCT host (cycling),
+    /// preferring a tab after the current one and wrapping to the front only when none exists.
+    #[test]
+    fn next_host_index_pages_distinct_hosts_and_wraps() {
+        // Distinct hosts, first tab after active.
+        assert_eq!(next_host_index(&["a", "b", "c"], 0), Some(1));
+        // Active on the last distinct host wraps back to the first host.
+        assert_eq!(next_host_index(&["a", "b", "c"], 2), Some(0));
+        // Interleaved / repeated hosts: still pages by distinct host, and skips ahead on repeats.
+        // host order a,b,b,c; from active a (idx0) -> first tab of b is index 1.
+        assert_eq!(next_host_index(&["a", "b", "b", "c"], 0), Some(1));
+        // From the second b (idx2) -> c (idx3).
+        assert_eq!(next_host_index(&["a", "b", "b", "c"], 2), Some(3));
+        // From c (last) wraps to the first tab of a.
+        assert_eq!(next_host_index(&["a", "b", "b", "c"], 3), Some(0));
+        // One distinct host (even if repeated) has nothing to page to.
+        assert_eq!(next_host_index(&["x", "x", "x"], 0), None);
+        // Empty tab set has nowhere to go.
+        assert_eq!(next_host_index(&[], 0), None);
+    }
 }
