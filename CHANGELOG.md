@@ -6,6 +6,9 @@ entries record user-visible and architectural changes since the last tagged mile
 ## Unreleased / 0.1.0 (in progress)
 
 ### Fixed
+- **Docs: README reflects the fleet features.** The key table now names peek `/` filtering, the
+  fleet grid's full action set (`C`/`x`/`X`), per-host broadcast in the hosts drill, and the
+  down/reconnected OS notifications and `↓` tab marker, so onboarding matches the implementation.
 - **Native-mode Cmd+W clamps its focused window index.** The close path indexes
   `hosts[active_host]` to honor the pin guard; if a window was dropped without the index being
   re-derived, an unclamped index could panic. It now clamps `active_host` into range before use,

@@ -58,8 +58,8 @@ same command mode:
 | `Ctrl+H` `[` | copy mode (vim nav, block select, copy) |
 | `Ctrl+H` `,` | rename the active tab (persisted, shown in tab bar) |
 | `Ctrl+H` `a` | broadcast a line (per-session checkboxes target it) |
-| `Ctrl+H` `y` | peek the tail of every session, then jump |
-| `Ctrl+H` `e` | fleet grid: live tails of every session at once (war-room view; `Space` mark a tile, `b` broadcast to marked, `R` reconnect marked) |
+| `Ctrl+H` `y` | peek the tail of every session, then jump (`/` filters the list by host/engine/name/`down`) |
+| `Ctrl+H` `e` | fleet grid: live tails of every session at once (war-room view; `Space` mark a tile, `b` broadcast to marked, `C` Ctrl-C marked, `x`/`X` close sel/all marked, `R` reconnect marked) |
 | `Ctrl+H` `d` | copy the whole scrollback to the clipboard |
 | `Ctrl+H` `j` | copy the session identity (`engine@host`) to the clipboard |
 | `Ctrl+H` `E` | copy a one-line summary of every open tab (the fleet, grep-friendly) |
@@ -103,10 +103,14 @@ Backgrounded tabs that keep producing output are flagged with a magnitude badge 
 (e.g. `!43` — how many new lines since you last looked). Muted tabs show a dim `M` instead.
 A tab that rings its terminal bell (a long agent run finishing) shows a short-lived `🔔` badge and
 nudges once with a notification when it isn't focused. Pane-backed (non-local) tabs append `@host`
-so a fleet diver reads where each session runs without hovering. A down pane with input you typed
-while it was dead shows `⏳N` (bytes staged to flush on reconnect). The tab bar's right edge shows a
-fleet-triage count (`↓2` panes down/reconnecting in red, `!3` busy, `⌛2` quiet/done agents, `⏳N`
-queued) when any is non-zero, so a quiet fleet still advertises that something needs attention.
+so a fleet diver reads where each session runs without hovering (a down pane's tab carries a `↓`).
+A down pane with input you typed while it was dead shows `⏳N` (bytes staged to flush on reconnect).
+The tab bar's right edge shows a fleet-triage count (`↓2` panes down/reconnecting in red, `!3` busy,
+`⌛2` quiet/done agents, `↻` just-reconnected, `⏳N` queued) when any is non-zero, so a quiet fleet
+still advertises that something needs attention. Fleet OS notifications name the machine
+(`claude@build02 · went down` on a drop, `build05 · reconnected` when it comes back), so a multi-host
+fleet pings are actionable at a glance; the hosts overview (`Ctrl+H .` → `→`) drills into a machine,
+where `r` reconnects its panes and `b` broadcasts to all of them at once.
 The tab strip is drawn as a raised native-style bar (Safari/Chrome silhouette on the active tab,
 hairline divider above the grid), and a `+` at its right edge opens the New-Session picker like any
 idle-native terminal. When nothing is visible-changing the app idles at ~0% CPU, only pumping
