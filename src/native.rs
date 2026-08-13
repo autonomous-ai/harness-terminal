@@ -1056,13 +1056,27 @@ impl Application {
             .duration_since(std::time::UNIX_EPOCH)
             .map(|d| d.as_millis())
             .unwrap_or(0);
-        let path = base.join(format!("{}-{}.log", slug, stamp));
-        if std::fs::write(&path, &text).is_ok() {
-            let shown = path.to_string_lossy();
-            self.flash = Some((
-                format!("wrote {} bytes → {}", text.len(), shown),
-                std::time::Instant::now(),
-            ));
+        let fname = format!("{}-{}.log", slug, stamp);
+        let now = std::time::Instant::now();
+        // Try the current directory first; if that isn't writable (e.g. an unwritable cwd) fall back
+        // to the guaranteed-writable temp dir so the export never silently does nothing.
+        let mut path = base.join(&fname);
+        let mut res = std::fs::write(&path, &text);
+        if res.is_err() {
+            let alt = std::env::temp_dir().join(&fname);
+            res = std::fs::write(&alt, &text);
+            path = alt;
+        }
+        match res {
+            Ok(_) => {
+                self.flash = Some((
+                    format!("wrote {} bytes → {}", text.len(), path.to_string_lossy()),
+                    now,
+                ));
+            }
+            Err(e) => {
+                self.flash = Some((format!("⚠ couldn't write export: {e}"), now));
+            }
         }
     }
 

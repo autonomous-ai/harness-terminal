@@ -6,6 +6,10 @@ entries record user-visible and architectural changes since the last tagged mile
 ## Unreleased / 0.1.0 (in progress)
 
 ### Fixed
+- **Scrollback export never fails silently.** `prefix+export_scrollback` (`w`) silently did nothing
+  when the working directory wasn't writable. It now falls back to the temp directory and always
+  flashes the outcome (written path, or the write error), so an export is never a silent no-op.
+
 - **Queued type-ahead for a down host is now capped (1 MiB, newest-kept).** If a machine is offline
   for a long stretch the reconnect watchdog retries for hours, and the old code buffered every key
   typed into a dead pane without bound — a real memory leak for a far-flung fleet. Input now drops
