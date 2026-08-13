@@ -113,6 +113,7 @@ whenever the window is focused):
 | `Cmd+Shift+I` | show this tab's info (kind/host/task) |
 | `Cmd+Shift+C` | copy the active tab's whole scrollback |
 | `Cmd+Shift+S` | write the active tab's scrollback to a `.log` file |
+| `Cmd+.` | interrupt the active session (stop the run) |
 | `Ctrl+Tab` / `Ctrl+Shift+Tab` | previous / next tab (browser muscle memory) |
 
 Backgrounded tabs that keep producing output are flagged with a magnitude badge in the tab bar

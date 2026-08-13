@@ -3758,6 +3758,7 @@ impl Application {
             ("Cmd+Shift+I", "show this tab's info (kind/host/task)"),
             ("Cmd+Shift+C", "copy whole scrollback to clipboard"),
             ("Cmd+Shift+S", "write scrollback to a .log file"),
+            ("Cmd+.", "interrupt the active session (stop the run)"),
             (
                 "Hosts drill · r / b",
                 "reconnect this host / broadcast to this host",
@@ -5628,6 +5629,9 @@ impl Application {
             }
             CmdShortcut::ExportScrollback => {
                 self.export_scrollback();
+            }
+            CmdShortcut::Interrupt => {
+                self.interrupt_active();
             }
             CmdShortcut::GotoTab(i) => {
                 if !self.app.tabs.is_empty() {
@@ -8731,6 +8735,9 @@ enum CmdShortcut {
     /// Cmd+Shift+S — write the active tab's whole scrollback to a .log file, the system shortcut
     /// for prefix+export_scrollback. Hand an agent's session off to a file fast, without the chord.
     ExportScrollback,
+    /// Cmd+. — send Ctrl-C to the active session. The macOS "stop the running thing" key, so a
+    /// runaway agent is halted with the same reflex you'd use to stop a Python script in Xcode.
+    Interrupt,
     /// Not a Cmd shortcut we own (forward as normal).
     None,
 }
@@ -8840,6 +8847,8 @@ fn cmd_shortcut(key: &Key, mods: &ModifiersState) -> CmdShortcut {
             "C" if mods.shift_key() => CopyScrollback,
             // Cmd+Shift+S exports the scrollback to a .log (shift-guarded S: plain Cmd+S stays free).
             "S" if mods.shift_key() => ExportScrollback,
+            // Cmd+. is the macOS universal "stop" keystroke — interrupt the active session.
+            "." => Interrupt,
             // Plain Cmd+[ is left to the shell; only the Shift variant switches tabs.
             _ => None,
         },
@@ -9645,6 +9654,8 @@ mod tests {
             CmdShortcut::None,
             "plain Cmd+S is not hijacked"
         );
+        // Cmd+. interrupts the active session — the macOS stop key.
+        assert_eq!(chars(".", s), CmdShortcut::Interrupt);
         assert_eq!(
             chars("]", s),
             CmdShortcut::None,

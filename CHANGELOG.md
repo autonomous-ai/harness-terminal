@@ -21,6 +21,10 @@ entries record user-visible and architectural changes since the last tagged mile
   a bulk close — defeating the "marks required so a stray press is never destructive" guard. Marks
   now clear on grid close, matching the broadcast overlay's fresh-reset behavior.
 ### Added
+- **Native Cmd+. interrupts the active session.** The macOS universal "stop the running thing" key
+  (the reflex that halts an infinite loop in Xcode/a Python script) now sends Ctrl-C to the active
+  agent — so a runaway run is stopped with native muscle memory, no prefix chord. Routes via the
+  pure, unit-tested `cmd_shortcut`.
 - **Peek and the fleet grid gain a per-row `p` pin.** `Ctrl+H y` and `Ctrl+H e` now toggle pin
   (protect-from-close) on the selected pane/tile with `p`, so an important agent can be shielded
   from any bulk close (`X`, `prefix+close_quiet`) while triaging a fleet — the per-row sibling of
