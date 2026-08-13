@@ -2361,12 +2361,14 @@ impl Application {
             self.font_px,
             WHITE,
         );
-        for (row, &i) in self.app.filtered.iter().enumerate().take(12) {
+        let top = scroll_top(self.app.filtered.len(), self.app.selected, 12);
+        for (row, &i) in self.app.filtered.iter().enumerate().skip(top).take(12) {
+            let scr = row - top;
             let s = &self.app.tabs[i];
             let sel = row == self.app.selected;
             let color = if sel { WHITE } else { CHROME_DIM };
             if sel {
-                overlay_row_sel(fb, base_y + (row + 1) * line_px, line_px, 18);
+                overlay_row_sel(fb, base_y + (scr + 1) * line_px, line_px, 18);
             }
             let name = s.meta.name.clone().unwrap_or_else(|| s.meta.engine.clone());
             // Compact status flags so a jump carries context: live/pin/mute next to the name.
@@ -2395,7 +2397,7 @@ impl Application {
                 &mut self.cache,
                 &line,
                 32,
-                base_y + (row + 1) * line_px,
+                base_y + (scr + 1) * line_px,
                 self.font_px,
                 color,
             );
@@ -2528,8 +2530,7 @@ impl Application {
         };
         // Viewport for the scrolling list below; also feeds a "more above/below" hint in the header.
         let total = self.fleet_filtered.len();
-        let hi = self.app.selected.min(total.saturating_sub(1));
-        let top = if hi >= ROWS { hi - ROWS + 1 } else { 0 }.min(total.saturating_sub(ROWS));
+        let top = scroll_top(total, self.app.selected, ROWS);
         let hidden_up = top;
         let hidden_down = total.saturating_sub(top + ROWS);
         let scroll = match (hidden_up, hidden_down) {
@@ -3333,7 +3334,9 @@ impl Application {
             self.font_px,
             WHITE,
         );
-        for (row, s) in self.app.tabs.iter().enumerate().take(20) {
+        let top = scroll_top(self.app.tabs.len(), self.broadcast_sel, 20);
+        for (row, s) in self.app.tabs.iter().enumerate().skip(top).take(20) {
+            let scr = row - top;
             let on = self.broadcast_targets.get(row).copied().unwrap_or(false);
             let mark = if on { "☑" } else { "☐" };
             let name = s.meta.name.clone().unwrap_or_else(|| s.meta.engine.clone());
@@ -3348,7 +3351,7 @@ impl Application {
                 &mut self.cache,
                 &line,
                 32,
-                base_y + (row + 2) * line_px,
+                base_y + (scr + 2) * line_px,
                 self.font_px,
                 color,
             );
@@ -6296,6 +6299,16 @@ fn recall_index(n: usize, delta: isize, cur: Option<usize>) -> usize {
     }
 }
 
+/// Top offset of a scrolling viewport given `total` rows and a 0-based `selected` index. Keeps the
+/// highlighted row on screen and rides the bottom edge once the list is taller than `rows`, so a
+/// fleet/palette/broadcast list bigger than the window never hides rows behind an invisible
+/// selection. Shared by the fleet, palette and broadcast overlays.
+fn scroll_top(total: usize, selected: usize, rows: usize) -> usize {
+    let hi = selected.min(total.saturating_sub(1));
+    let by_bottom = if hi >= rows { hi - rows + 1 } else { 0 };
+    by_bottom.min(total.saturating_sub(rows))
+}
+
 fn collect_fleet_matches(
     terms: &[Arc<
         alacritty_terminal::sync::FairMutex<
@@ -6968,7 +6981,7 @@ mod tests {
         argb_to_rgb, broadcast_bytes, cmd_shortcut, collect_fleet_matches, engine_accent,
         expand_click_word, fmt_duration, fuzzy_match, group_notifications, host_color, join_labels,
         next_host_index, parse_remote_attach, reanchor_active_after_batch, recall_index,
-        CmdShortcut, FleetMatch,
+        scroll_top, CmdShortcut, FleetMatch,
     };
 
     use std::sync::Arc;
@@ -7359,6 +7372,24 @@ mod tests {
         // Stepping newer from the oldest wraps to the newest.
         assert_eq!(recall_index(n, 1, Some(0)), 1);
         assert_eq!(recall_index(n, 1, Some(2)), 0);
+    }
+
+    /// The list viewport never hides the selected row, and rides the bottom edge once the list
+    /// outgrows the window — so a fleet/palette/broadcast with more entries than fit on screen stays
+    /// fully reachable by Up/Down (regression for the 20-max fleet list swallowing later sessions).
+    #[test]
+    fn scroll_top_keeps_selection_visible_and_slides() {
+        // Fits: no scroll.
+        assert_eq!(scroll_top(5, 3, 20), 0);
+        // Larger than the window: selection rides the bottom edge.
+        assert_eq!(scroll_top(30, 0, 20), 0);
+        assert_eq!(scroll_top(30, 25, 20), 6);
+        assert_eq!(scroll_top(30, 29, 20), 10);
+        // Never over-scrolls past the end (total == window).
+        assert_eq!(scroll_top(20, 19, 20), 0);
+        // Empty / total == 1.
+        assert_eq!(scroll_top(0, 0, 20), 0);
+        assert_eq!(scroll_top(1, 0, 20), 0);
     }
 
     /// Idle-age formatting stays compact and readable at every scale — seconds, minutes, hours,

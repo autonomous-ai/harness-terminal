@@ -6,6 +6,12 @@ entries record user-visible and architectural changes since the last tagged mile
 ## Unreleased / 0.1.0 (in progress)
 
 ### Fixed
+- **Palette, broadcast, and fleet lists all scroll past the visible window.** The same
+  invisible-selection bug as the fleet list (`prefix+s`) also affected the palette (`prefix+/`,
+  capped at 12 rows) and the broadcast target list (`prefix+a`, capped at 20 rows): with enough
+  tabs/entries, Up/Down could select a row that was never rendered. All three now share a
+  `scroll_top` viewport that keeps the highlighted row on screen and rides the bottom edge.
+
 - **Fleet overlay scrolls past the first 20 sessions.** `prefix+s` now uses a scrolling viewport
   that keeps the highlighted row on screen, so a fleet bigger than a screenful no longer hides every
   session after the first 20 behind an invisible selection (Up/Down could select a row you couldn't
