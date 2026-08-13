@@ -9385,6 +9385,18 @@ impl ApplicationHandler for Application {
                         self.focus_host(hi);
                     }
                 }
+                if !focused {
+                    // The pointer may have been released outside the window (or the window lost
+                    // focus mid-drag), which would leave `mouse_left_down` stuck true and make a
+                    // mouse-mode app see drag-motion (code 32) when the user isn't holding anything.
+                    self.mouse_left_down = false;
+                }
+            }
+            WindowEvent::CursorLeft { .. } => {
+                // Same stuck-release concern: if the user presses inside a mouse-mode TUI, drags
+                // out, and releases outside the window, no release event arrives; drop the held
+                // state so a mouse app never stays "dragging" forever.
+                self.mouse_left_down = false;
             }
             WindowEvent::CloseRequested => {
                 if self.native_tabs {

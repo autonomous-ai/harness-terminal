@@ -6,6 +6,11 @@ entries record user-visible and architectural changes since the last tagged mile
 ## Unreleased / 0.1.0 (in progress)
 
 ### Fixed
+- **Mouse-drag state no longer sticks after the pointer leaves the window.** If you pressed inside
+  a mouse-mode app (vim/tmux/htop), dragged out, and released *outside* the window, no release
+  event arrived, so `mouse_left_down` stayed true and the app kept receiving drag-motion (code 32)
+  instead of buttonless motion. Leaving the window or losing focus now clears the held state, so a
+  mouse app returns to ordinary pointer motion — matching how a real terminal behaves.
 - **A stray trailing `/` after a remote host no longer breaks the connection.** If you typed or
   pasted `build.example.com/` (or `10.0.0.4:18473/`) into the Remote Attach overlay, the slash was
   kept as part of the host, so the daemon was contacted at a dead name and the connect failed. A
