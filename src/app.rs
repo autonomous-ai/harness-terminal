@@ -743,4 +743,45 @@ mod tests {
         assert!(crate::native::close_tab(&mut app, false));
         assert_eq!(app.tabs.len(), before - 1);
     }
+    /// Exhaustive check: for every (from, to, active) move, `move_tab_from_to` must (a) produce the
+    /// exact reordered bar (remove `from`, insert at `to`), and (b) keep focus on the same session
+    /// identity — never on a different session. Catches any latent off-by-one in the index shim.
+    #[test]
+    fn move_from_to_exhaustive_focus_identity() {
+        for n in 2..=5usize {
+            let orig: Vec<String> = (0..n).map(|i| format!("e{i}")).collect();
+            for from in 0..n {
+                for to in 0..n {
+                    if from == to {
+                        continue;
+                    }
+                    for active in 0..n {
+                        let mut app = app_with(n);
+                        app.active = active;
+                        let focused = app.tabs[active].meta.engine.clone();
+                        app.move_tab_from_to(from, to);
+
+                        // (a) exact reorder
+                        let mut expect = orig.clone();
+                        let v = expect.remove(from);
+                        expect.insert(to, v);
+                        let got: Vec<String> =
+                            app.tabs.iter().map(|t| t.meta.engine.clone()).collect();
+                        assert_eq!(got, expect, "n={n} move {from}->{to} active={active}");
+
+                        // (b) focus identity preserved
+                        assert!(
+                            app.active < app.tabs.len(),
+                            "active in range n={n} move {from}->{to} active={active}"
+                        );
+                        assert_eq!(
+                            app.tabs[app.active].meta.engine, focused,
+                            "focus keeps identity n={n} move {from}->{to} active={active}"
+                        );
+                    }
+                }
+            }
+        }
+    }
+
 }
