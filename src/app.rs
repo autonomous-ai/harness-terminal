@@ -38,6 +38,9 @@ pub enum Overlay {
     CommandPalette,
     /// Session info: read-only details about the active tab (kind, host, engine, size, reconnect).
     Info,
+    /// Host overview: distinct hosts across open tabs, each with live/total tallies; Enter jumps to
+    /// that host's first tab. The "which machines are up" view for a fleet spread across computers.
+    Hosts,
 }
 
 pub struct App {

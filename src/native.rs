@@ -86,6 +86,7 @@ enum PaletteAction {
     NextPinned,
     NextDown,
     NextHost,
+    Hosts,
     Dnd,
     Reconnect,
     ReconnectAll,
@@ -125,6 +126,7 @@ impl PaletteAction {
             ("jump to next pinned tab", NextPinned),
             ("jump to next down/reconnecting tab", NextDown),
             ("jump to next host (page fleet by machine)", NextHost),
+            ("host overview (which machines are up)", Hosts),
             ("toggle do-not-disturb (mute all OS notifications)", Dnd),
             ("force reconnect active tab (bypass backoff)", Reconnect),
             ("force reconnect ALL down panes", ReconnectAll),
@@ -275,6 +277,8 @@ struct Application {
     /// Peek list scroll offset — how many (capped) rows to skip at the top so ALL tabs are
     /// reachable, not just the first ~10. Bumped when the selection moves below the visible window.
     peek_scroll: usize,
+    /// Selected row in the host-overview overlay (`Overlay::Hosts`), an index into `host_tally`.
+    hosts_sel: usize,
     /// Command-palette filter text (the prefix+; palette). Typing narrows `palette_filtered`.
     palette_q: String,
     /// The full, static list of (label, action) rows the palette filters over.
@@ -573,6 +577,7 @@ impl Application {
             },
             peek_sel: 0,
             peek_scroll: 0,
+            hosts_sel: 0,
             palette_q: String::new(),
             palette_rows: PaletteAction::all_rows(),
             palette_filtered: Vec::new(),
@@ -2227,6 +2232,7 @@ impl Application {
             Overlay::FleetGrid => self.render_fleet_grid(fb),
             Overlay::CommandPalette => self.render_command_palette(fb),
             Overlay::Info => self.render_info(fb),
+            Overlay::Hosts => self.render_hosts(fb),
             Overlay::None => {}
         }
 
@@ -2773,6 +2779,104 @@ impl Application {
         }
     }
 
+    /// Render the host overview: one row per distinct host across open tabs, with its live/total
+    /// tally, so a diver sees "which machines are up" at a glance. Enter jumps to that host's first
+    /// tab. Selection is the pure `host_tally` grouping, so the data is unit-tested.
+    fn render_hosts(&mut self, fb: &mut Framebuffer) {
+        let (base_y, line_px) = self.overlay_base_y();
+        let tally = self.owned_host_tally();
+        draw_text(
+            fb,
+            &mut self.cache,
+            "  hosts · which machines are up · ↑/↓ select · Enter → first tab · Esc close  ",
+            32,
+            base_y,
+            self.font_px,
+            WHITE,
+        );
+        if tally.is_empty() {
+            draw_text(
+                fb,
+                &mut self.cache,
+                "  no hosts (no open sessions)  ",
+                32,
+                base_y + line_px,
+                self.font_px,
+                CHROME_DIM,
+            );
+            return;
+        }
+        // A tab can close while the overlay is open; re-clamp like the other overlays.
+        self.hosts_sel = self.hosts_sel.min(tally.len().saturating_sub(1));
+        let top = scroll_top(tally.len(), self.hosts_sel, 20);
+        for (row, (host, alive, total)) in tally.iter().enumerate().skip(top).take(20) {
+            let scr = row - top;
+            let sel = row == self.hosts_sel;
+            let label = host.as_str();
+            let mark = if *alive == 0 {
+                "○"
+            } else if *alive == *total {
+                "●"
+            } else {
+                "◐"
+            };
+            let state = if *alive == 0 {
+                "down".to_string()
+            } else if *alive < *total {
+                format!("{alive}/{total} live")
+            } else {
+                "live".to_string()
+            };
+            let sess = if *total == 1 { "session" } else { "sessions" };
+            if sel {
+                overlay_row_sel(fb, base_y + (scr + 1) * line_px, line_px, 18);
+            }
+            let color = if sel {
+                WHITE
+            } else if *alive == 0 {
+                CHROME_DIM
+            } else {
+                (0x4a, 0xe0, 0x8a)
+            };
+            draw_text(
+                fb,
+                &mut self.cache,
+                &format!(
+                    "  {mark} {label} · {state} · {total} {sess}{}",
+                    if sel { "  ◄" } else { "" }
+                ),
+                32,
+                base_y + (scr + 1) * line_px,
+                self.font_px,
+                color,
+            );
+        }
+    }
+
+    /// Owned, per-host tally over the open tabs (host as `String`, empty host normalized to
+    /// `local`) — the data behind the host-overview overlay. Returns owned values so it can be
+    /// called from a `&mut self` render/nav without borrowing the tab list past a mutation.
+    fn owned_host_tally(&self) -> Vec<(String, usize, usize)> {
+        let mut out: Vec<(String, usize, usize)> = Vec::new();
+        for s in &self.app.tabs {
+            let h = if s.meta.host.is_empty() {
+                "local".to_string()
+            } else {
+                s.meta.host.clone()
+            };
+            match out.iter_mut().find(|(host, _, _)| *host == h) {
+                Some((_, a, t)) => {
+                    *t += 1;
+                    if s.alive() {
+                        *a += 1;
+                    }
+                }
+                None => out.push((h, if s.alive() { 1 } else { 0 }, 1)),
+            }
+        }
+        out
+    }
+
     /// Keybinding reference overlay. Static list; dismiss on any key.
     /// The live key label for a prefix action, honoring any `[keybindings]` remap: `"prefix X"`.
     /// `key_action` is `key → action` (already resolved through config + defaults), so reverse it to
@@ -2827,6 +2931,7 @@ impl Application {
             ("next_down", "jump to next down/reconnecting tab"),
             ("next_pinned", "jump to next pinned tab"),
             ("next_host", "jump to next host (page the fleet by machine)"),
+            ("hosts", "host overview: which machines are up"),
             ("dnd", "toggle do-not-disturb (mute all OS notifications)"),
             ("reconnect", "force reconnect active tab (bypass backoff)"),
             ("reconnect_all", "force reconnect ALL down panes at once"),
@@ -3774,6 +3879,10 @@ impl Application {
             NextPinned => self.next_pinned(),
             NextDown => self.next_down(),
             NextHost => self.next_host(),
+            Hosts => {
+                self.hosts_sel = 0;
+                self.app.overlay = Overlay::Hosts;
+            }
             Dnd => self.toggle_dnd(),
             Reconnect => self.reconnect_active(),
             ReconnectAll => self.reconnect_all_down(),
@@ -4117,6 +4226,10 @@ impl Application {
                 Some("next_quiet") => self.next_quiet(),
                 Some("next_down") => self.next_down(),
                 Some("next_host") => self.next_host(),
+                Some("hosts") => {
+                    self.hosts_sel = 0;
+                    self.app.overlay = Overlay::Hosts;
+                }
                 Some("dnd") => self.toggle_dnd(),
                 Some("mute") => self.toggle_mute_active(),
                 Some("interrupt") => self.interrupt_active(),
@@ -4591,6 +4704,46 @@ impl Application {
                         self.app.selected = 0;
                         self.fleet_refresh_filter();
                     }
+                    _ => {}
+                }
+                return;
+            }
+            Overlay::Hosts => {
+                match key {
+                    Key::Named(n) => match n {
+                        winit::keyboard::NamedKey::Escape => {
+                            self.app.overlay = Overlay::None;
+                        }
+                        winit::keyboard::NamedKey::ArrowDown => {
+                            let tally = self.owned_host_tally();
+                            if !tally.is_empty() {
+                                self.hosts_sel =
+                                    (self.hosts_sel + 1).min(tally.len().saturating_sub(1));
+                            }
+                        }
+                        winit::keyboard::NamedKey::ArrowUp => {
+                            self.hosts_sel = self.hosts_sel.saturating_sub(1);
+                        }
+                        winit::keyboard::NamedKey::Enter => {
+                            let tally = self.owned_host_tally();
+                            if let Some((host, _, _)) = tally.get(self.hosts_sel) {
+                                if let Some(i) = self.app.tabs.iter().position(|s| {
+                                    let h = if s.meta.host.is_empty() {
+                                        "local".to_string()
+                                    } else {
+                                        s.meta.host.clone()
+                                    };
+                                    &h == host
+                                }) {
+                                    self.set_active(i);
+                                    self.flash =
+                                        Some((format!("host {host}"), std::time::Instant::now()));
+                                    self.app.overlay = Overlay::None;
+                                }
+                            }
+                        }
+                        _ => {}
+                    },
                     _ => {}
                 }
                 return;
@@ -5387,6 +5540,7 @@ impl Application {
                 Overlay::FleetGrid => self.render_fleet_grid(fb),
                 Overlay::CommandPalette => self.render_command_palette(fb),
                 Overlay::Info => self.render_info(fb),
+                Overlay::Hosts => self.render_hosts(fb),
                 Overlay::None => {}
             }
             if self.ctx.is_some() {

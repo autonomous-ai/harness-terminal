@@ -35,6 +35,11 @@ entries record user-visible and architectural changes since the last tagged mile
   see). The header shows `▲N above` / `▼N below` when rows are scrolled out of view.
 
 ### Added
+- **Host overview overlay (`prefix+.`).** A one-screen "which machines are up" view: every distinct
+  host across your open tabs, each with a live/total tally (`● build02 · 2/2 live`, `○ edge1 ·
+  down`). Up/Down select, Enter jumps to that host's first tab. Built on the pure `host_tally`
+  grouping (unit-tested) and the shared scrolling viewport; also reachable from the command palette.
+
 - **Copied fleet summary opens with a per-host health block.** `copy_fleet` now prepends a
   machine-by-machine snapshot (``● build02 · 2/2 live`` / ``○ edge1 · down``) before the per-session
   lines, so pasting fleet status answers "which machines are up" at a glance across a multi-computer
