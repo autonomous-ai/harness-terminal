@@ -80,6 +80,11 @@ entries record user-visible and architectural changes since the last tagged mile
   a bulk close — defeating the "marks required so a stray press is never destructive" guard. Marks
   now clear on grid close, matching the broadcast overlay's fresh-reset behavior.
 ### Added
+- **Find-in-session now has case and whole-word toggles (iTerm2-style).** In the find bar over an
+  active pane, press **`c`** to toggle case-sensitive matching and **`w`** to toggle whole-word
+  matching while the query is empty; both default off. Active flags are shown in the bar
+  (`[Aa]`, `[whole-word]`) along with a `c case · w whole-word` hint, and the highlighted
+  results update live. Covered by the new `all_matches_ex` render unit test.
 - **Find remembers your recent searches.** The find bar now keeps an MRU of queries you actually
   ran (deduped, capped at 16, persisted across restarts like broadcast history). Press **Up** with
   an empty query to recall the most recent search — iTerm2-style search memory, so a regex or a

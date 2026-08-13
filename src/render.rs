@@ -1157,30 +1157,67 @@ pub fn find(term: &Term<Listener>, query: &str, start: i32) -> Option<Find> {
     None
 }
 
+/// Find-matching toggles for the in-session search, parsed from the overlay (`c` case, `w` word).
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct FindOptions {
+    /// Case-sensitive matching (default: case-insensitive).
+    pub case_sensitive: bool,
+    /// Restrict to whole-word matches (a match is a word if not flanked by an alphanumeric/`_`).
+    pub whole_word: bool,
+}
+
+fn is_word_char(b: u8) -> bool {
+    b.is_ascii_alphanumeric() || b == b'_'
+}
+
 /// Every non-overlapping match of `query` across the whole grid (history + screen), as
 /// (line, column, width) positions — used to highlight ALL matches while the overlay is open.
+/// Case-insensitive, non-overlapping, and non-whole-word.
 pub fn all_matches(term: &Term<Listener>, query: &str) -> Vec<Find> {
+    all_matches_ex(term, query, FindOptions::default())
+}
+
+/// [`all_matches`] honoring case-sensitivity and whole-word toggles.
+pub fn all_matches_ex(term: &Term<Listener>, query: &str, opts: FindOptions) -> Vec<Find> {
     if query.is_empty() {
         return Vec::new();
     }
-    let q = query.to_lowercase();
+    let q = if opts.case_sensitive {
+        query.to_string()
+    } else {
+        query.to_lowercase()
+    };
     let grid = term.grid();
     let bottom = grid.bottommost_line().0;
     let mut line = grid.topmost_line().0;
     let mut out = Vec::new();
     while line <= bottom {
-        let text = line_text(term, line).to_lowercase();
-        let mut rest = text.as_str();
-        let mut col = 0usize;
-        while let Some(ci) = rest.find(&q) {
-            out.push((line, col + ci, match_width(query)));
-            let advance = ci + q.len();
-            col += advance;
-            rest = if advance < rest.len() {
-                &rest[advance..]
-            } else {
-                ""
+        // Lowercase once per line (known to be ASCII for the emulator), so the case-insensitive
+        // path doesn't re-lowercase for every occurrence on a long line.
+        let text = if opts.case_sensitive {
+            line_text(term, line)
+        } else {
+            line_text(term, line).to_lowercase()
+        };
+        let tbytes = text.as_bytes();
+        let mut search = 0usize;
+        while search + q.len() <= tbytes.len() {
+            let Some(rel) = text[search..].find(&q) else {
+                break;
             };
+            let start = search + rel;
+            let end = start + q.len();
+            // Always advance past the match (non-overlapping), even when a word-boundary check
+            // rejects it, so a skipped occurrence can't wedge the scan.
+            search = end;
+            if opts.whole_word {
+                let before = start == 0 || !is_word_char(tbytes[start - 1]);
+                let after = end >= tbytes.len() || !is_word_char(tbytes[end]);
+                if !(before && after) {
+                    continue;
+                }
+            }
+            out.push((line, start, match_width(query)));
         }
         line += 1;
     }
@@ -1794,6 +1831,70 @@ mod tests {
         assert_eq!(hits[1], (0, 8, 3));
         assert_eq!(hits[2], (2, 0, 3));
         assert!(all_matches(&g, "zzz").is_empty());
+    }
+
+    /// Case-sensitivity and whole-word toggles change which occurrences match: case on restricts
+    /// to exact case, word on drops matches flanked by an alphanumeric/underscore.
+    #[test]
+    fn all_matches_ex_honors_case_and_whole_word() {
+        use alacritty_terminal::sync::FairMutex;
+        use alacritty_terminal::term::{Config, Term};
+        use alacritty_terminal::vte::ansi::{Processor, StdSyncHandler};
+
+        use crate::session::Listener;
+
+        let size = crate::session::TermSize { lines: 4, cols: 40 };
+        let term = FairMutex::new(Term::new(Config::default(), &size, Listener::default()));
+        // "fix" twice (inside fooFix? no—exact), plus "Fix" upper and "prefix" (fix inside word).
+        let bytes = b"fix prefix Fix\r\nno match here\r\nfix";
+        {
+            let mut p: Processor<StdSyncHandler> = Processor::default();
+            p.advance(&mut *term.lock(), bytes);
+        }
+        let g = term.lock();
+        let default = FindOptions::default();
+        // Default: case-insensitive: "fix"@0, fix in "prefix"@7, "Fix"@11, and row2 "fix"@0 = 4.
+        let all = all_matches_ex(&g, "fix", default);
+        assert_eq!(all.len(), 4);
+        // Case-sensitive: the lowercase "fix" at @0, the one inside "prefix" @5, and row2 @0; the
+        // uppercase "Fix" @11 is excluded.
+        let cs = all_matches_ex(
+            &g,
+            "fix",
+            FindOptions {
+                case_sensitive: true,
+                ..default
+            },
+        );
+        assert_eq!(cs.len(), 3);
+        assert!(cs.contains(&(0, 0, 3)));
+        assert!(cs.contains(&(0, 7, 3)));
+        assert!(cs.contains(&(2, 0, 3)));
+        assert!(!cs.contains(&(0, 11, 3)));
+        // Whole-word: exclude the "fix" inside "prefix".
+        let ww = all_matches_ex(
+            &g,
+            "fix",
+            FindOptions {
+                whole_word: true,
+                ..default
+            },
+        );
+        assert_eq!(ww.len(), 3);
+        assert!(!ww.contains(&(0, 7, 3)));
+        assert!(ww.contains(&(0, 0, 3)));
+        assert!(ww.contains(&(2, 0, 3)));
+        assert!(ww.contains(&(0, 11, 3)));
+        // Both: only standalone lowercase fixes.
+        let both = all_matches_ex(
+            &g,
+            "fix",
+            FindOptions {
+                case_sensitive: true,
+                whole_word: true,
+            },
+        );
+        assert_eq!(both.len(), 2);
     }
 
     /// The font-fallback validator accepts a real, parseable mono font (SF Mono or Monaco, both

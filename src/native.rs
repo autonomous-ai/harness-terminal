@@ -206,6 +206,8 @@ struct Application {
     /// MRU of find queries actually run, most-recent first (cap 16), persisted across restarts.
     /// Up in the find bar with an empty query recalls the most recent — iTerm2-style search memory.
     find_history: Vec<String>,
+    /// Find toggles: `c` case-sensitive, `w` whole-word, both default off (iTerm2-style options).
+    find_opts: crate::render::FindOptions,
     /// In-progress rename for the active tab ("" when the Rename overlay is closed).
     rename_query: String,
     /// In-progress broadcast line ("" when the Broadcast overlay is closed). Enter sends it to every
@@ -602,6 +604,7 @@ impl Application {
             last_active: None,
             find_query: String::new(),
             find_history: crate::restore::load_find_history(),
+            find_opts: Default::default(),
             rename_query: String::new(),
             broadcast_query: String::new(),
             last_broadcast: crate::restore::load_last_broadcast(),
@@ -4150,7 +4153,7 @@ impl Application {
         let mut g = active.term.lock();
         // Remember the previous focus position so edits keep roughly the same match in view.
         let prev_line = self.find_hit.map(|(l, _, _)| l);
-        self.find_all = crate::render::all_matches(&g, &self.find_query);
+        self.find_all = crate::render::all_matches_ex(&g, &self.find_query, self.find_opts);
         // Pick the first match at-or-after the old focus; else the very first match.
         let idx = if self.find_all.is_empty() {
             0
@@ -4376,12 +4379,29 @@ impl Application {
     fn render_find(&mut self, fb: &mut Framebuffer) {
         let status_base = fb.height.saturating_sub(self.cell_h as usize / 2);
         // Overlay status line with query and match count info.
+        let flags = if self.find_opts.case_sensitive || self.find_opts.whole_word {
+            let mut f = String::from("  [");
+            if self.find_opts.case_sensitive {
+                f.push_str("Aa");
+            }
+            if self.find_opts.whole_word {
+                if self.find_opts.case_sensitive {
+                    f.push(' ');
+                }
+                f.push_str("whole-word");
+            }
+            f.push(']');
+            f
+        } else {
+            String::new()
+        };
         let line = if self.find_query.is_empty() {
+            let opts = "  c case · w whole-word";
             if self.find_history.is_empty() {
-                "  find: (type to search · ↑ recalls history)  ".to_string()
+                format!("  find: (type to search · ↑ recalls history){flags}{opts}  ")
             } else {
                 let last = &self.find_history[0];
-                format!("  find: (up recalls {last})  ")
+                format!("  find: (up recalls {last}){flags}  ")
             }
         } else {
             let n = self.find_all.len();
@@ -5986,6 +6006,19 @@ impl Application {
             }
             Overlay::Find => {
                 match key {
+                    // `c` toggles case-sensitivity, `w` toggles whole-word (iTerm2-style find
+                    // options, shown in the status hint). Typed only when the query is empty so a
+                    // search containing those letters isn't hijacked mid-entry.
+                    Key::Character(c) if c == "c" && self.find_query.is_empty() => {
+                        self.find_opts.case_sensitive = !self.find_opts.case_sensitive;
+                        self.find_query.clear();
+                        self.find_recompute(None);
+                    }
+                    Key::Character(c) if c == "w" && self.find_query.is_empty() => {
+                        self.find_opts.whole_word = !self.find_opts.whole_word;
+                        self.find_query.clear();
+                        self.find_recompute(None);
+                    }
                     Key::Character(c) => {
                         self.find_query.push_str(c);
                         self.find_recompute(None);
