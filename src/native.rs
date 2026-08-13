@@ -5489,7 +5489,14 @@ impl Application {
                         winit::keyboard::NamedKey::ArrowRight => s.write(b"\x1b[C"),
                         winit::keyboard::NamedKey::ArrowLeft => s.write(b"\x1b[D"),
                         winit::keyboard::NamedKey::Space => s.write(b" "),
-                        _ => {}
+                        other => {
+                            // Home/End/forward-Delete/Insert/F-keys aren't used by the app and were
+                            // previously dropped; forward the standard terminal sequences so they
+                            // work in bash/readline/TUIs.
+                            if let Some(seq) = extra_named_seq(&other) {
+                                s.write(seq);
+                            }
+                        }
                     },
                     _ => {}
                 }
@@ -7034,6 +7041,34 @@ enum CmdShortcut {
     None,
 }
 
+/// The terminal escape sequence for an app-level key the app doesn't otherwise consume: Home,
+/// End, forward-Delete, Insert, and F1-F12. These currently reached neither the shell nor any app
+/// handler (they fell into the generic `_ => {}` and were dropped), so Home/End/forward-delete did
+/// nothing in bash/readline/TUIs. Arrows, Tab, PageUp/PageDown, etc. are handled elsewhere by the
+/// app and deliberately return None here. Pure so the portability table is unit-tested.
+fn extra_named_seq(n: &winit::keyboard::NamedKey) -> Option<&'static [u8]> {
+    use winit::keyboard::NamedKey as K;
+    Some(match n {
+        K::Home => b"\x1b[H",
+        K::End => b"\x1b[F",
+        K::Delete => b"\x1b[3~",
+        K::Insert => b"\x1b[2~",
+        K::F1 => b"\x1bOP",
+        K::F2 => b"\x1bOQ",
+        K::F3 => b"\x1bOR",
+        K::F4 => b"\x1bOS",
+        K::F5 => b"\x1b[15~",
+        K::F6 => b"\x1b[17~",
+        K::F7 => b"\x1b[18~",
+        K::F8 => b"\x1b[19~",
+        K::F9 => b"\x1b[20~",
+        K::F10 => b"\x1b[21~",
+        K::F11 => b"\x1b[23~",
+        K::F12 => b"\x1b[24~",
+        _ => return None,
+    })
+}
+
 fn cmd_shortcut(key: &Key, mods: &ModifiersState) -> CmdShortcut {
     use CmdShortcut::*;
     // Browser-style Ctrl+Tab / Ctrl+Shift+Tab cycle tabs too (many terminal users expect the
@@ -7691,10 +7726,10 @@ fn move_slot<T>(v: &mut Vec<T>, from: usize, to: usize) {
 mod tests {
     use super::{
         argb_to_rgb, broadcast_bytes, cmd_shortcut, collect_fleet_matches, engine_accent,
-        expand_click_word, fleet_host_line, fmt_duration, format_engine_mix, fuzzy_match,
-        group_notifications, host_color, host_engine_breakdown, host_tally, join_labels, move_slot,
-        next_host_index, parse_remote_attach, reanchor_active_after_batch, recall_index,
-        scroll_top, session_indices_for_host, swap_slot, CmdShortcut, FleetMatch,
+        expand_click_word, extra_named_seq, fleet_host_line, fmt_duration, format_engine_mix,
+        fuzzy_match, group_notifications, host_color, host_engine_breakdown, host_tally,
+        join_labels, move_slot, next_host_index, parse_remote_attach, reanchor_active_after_batch,
+        recall_index, scroll_top, session_indices_for_host, swap_slot, CmdShortcut, FleetMatch,
     };
 
     use std::sync::Arc;
@@ -7809,6 +7844,30 @@ mod tests {
         // Cmd+C / Cmd+V are copy/paste, handled elsewhere — not a tab shortcut.
         assert_eq!(chars("c", s), CmdShortcut::None);
         assert_eq!(chars("v", s), CmdShortcut::None);
+    }
+
+    /// Home/End/forward-Delete/Insert/F-keys map to the standard terminal escape sequences so they
+    /// actually reach bash/readline/TUIs, and the keys the app owns (arrows, Tab, PageUp, Escape)
+    /// deliberately return None instead of being double-forwarded.
+    #[test]
+    fn extra_named_seq_maps_navigation_keys_to_escapes() {
+        use winit::keyboard::NamedKey as K;
+        // The app-level keys we forward.
+        assert_eq!(extra_named_seq(&K::Home), Some(&b"\x1b[H"[..]));
+        assert_eq!(extra_named_seq(&K::End), Some(&b"\x1b[F"[..]));
+        assert_eq!(extra_named_seq(&K::Delete), Some(&b"\x1b[3~"[..]));
+        assert_eq!(extra_named_seq(&K::Insert), Some(&b"\x1b[2~"[..]));
+        assert_eq!(extra_named_seq(&K::F1), Some(&b"\x1bOP"[..]));
+        assert_eq!(extra_named_seq(&K::F4), Some(&b"\x1bOS"[..]));
+        assert_eq!(extra_named_seq(&K::F5), Some(&b"\x1b[15~"[..]));
+        assert_eq!(extra_named_seq(&K::F12), Some(&b"\x1b[24~"[..]));
+        // Keys the app consumes itself must not ALSO be forwarded to the shell.
+        assert_eq!(extra_named_seq(&K::ArrowUp), None);
+        assert_eq!(extra_named_seq(&K::Tab), None);
+        assert_eq!(extra_named_seq(&K::PageUp), None);
+        assert_eq!(extra_named_seq(&K::PageDown), None);
+        assert_eq!(extra_named_seq(&K::Escape), None);
+        assert_eq!(extra_named_seq(&K::Enter), None);
     }
 
     /// Fleet search spans multiple sessions and is sorted by tab then line. Build two real emulator

@@ -6,6 +6,12 @@ entries record user-visible and architectural changes since the last tagged mile
 ## Unreleased / 0.1.0 (in progress)
 
 ### Fixed
+- **Home, End, forward-Delete, Insert, and F1-F12 now actually work in the shell.** These keys fell
+  through normal-mode key forwarding into a generic `_ => {}` and were silently dropped, so Home/End
+  and forward-delete did nothing in bash/readline/TUIs. They now forward the standard terminal escape
+  sequences (`ESC [ H/F`, `ESC [ 3~`, `ESC [ 2~`, and the F-key sequences). Keys the app owns (arrows,
+  Tab, PageUp/PageDown scrollback, Escape) are untouched.
+
 - **Each native-tab window renders and sizes at its own display density.** A background tab on a
   different-scale screen (Retina laptop next to an external monitor) previously rendered with the
   focused window's cell metrics, giving it the wrong grid that re-flowed when you focused it. Every
