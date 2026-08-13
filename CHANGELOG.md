@@ -6,6 +6,11 @@ entries record user-visible and architectural changes since the last tagged mile
 ## Unreleased / 0.1.0 (in progress)
 
 ### Fixed
+- **Mute/pin toggles are panic-proofed against freshly-spawned tabs.** `prefix+m` / `prefix+a` now
+  read and write the per-tab mute/pin state through the same guarded `.get()` pattern as every
+  other tab-parallel vector, so toggling right after a `duplicate_session` (which can leave the
+  mute list a slot short) can never index out of bounds and crash the app. The Info-overlay idle
+  read is guarded the same way.
 - **Fleet notifications now fire when a pane goes down.** The one missing edge — the most important
   one — is covered: when a backgrounded (unmuted) remote pane that was alive dies, a single
   coalesced OS notification reads `name@host · went down / … disappeared.` New tabs and panes

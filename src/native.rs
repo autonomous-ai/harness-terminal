@@ -1573,7 +1573,11 @@ impl Application {
     /// nagging — while still showing its own live tail in the tab bar. Toggle again to unmute.
     fn toggle_mute_active(&mut self) {
         if self.app.active < self.app.tabs.len() {
-            let on = !self.muted[self.app.active];
+            // Mirror the `.get()`-guarded pattern used across every other tab-parallel vector: a
+            // fresh tab (e.g. right after duplicate_active, which only resizes `pinned`) can leave
+            // this vector a slot short, and an unguarded index would panic on the very first toggle.
+            let on = !self.muted.get(self.app.active).copied().unwrap_or(false);
+            self.muted.resize(self.app.active + 1, false);
             self.muted[self.app.active] = on;
             let state = if on { "MUTED" } else { "unmuted" };
             let head = self
@@ -1811,7 +1815,8 @@ impl Application {
     /// diver cares about stays until deliberately unpinned. Persists across restarts like mute.
     fn toggle_pin_active(&mut self) {
         if self.app.active < self.app.tabs.len() {
-            let on = !self.pinned[self.app.active];
+            let on = !self.pinned.get(self.app.active).copied().unwrap_or(false);
+            self.pinned.resize(self.app.active + 1, false);
             self.pinned[self.app.active] = on;
             let state = if on { "PINNED 🔒" } else { "unpinned" };
             let head = self
@@ -3582,8 +3587,19 @@ impl Application {
         // it produced output this very frame (or we never sampled it); otherwise the readable time.
         if s.alive() && s.kind() != "pty" {
             let now = std::time::Instant::now();
-            let idle = now.saturating_duration_since(self.last_output[self.app.active]);
-            let idle_txt = if idle.is_zero() || self.seen_history[self.app.active] == usize::MAX {
+            // Guard like every other tab-parallel read: a slot not yet sampled reads as idle-0.
+            let last = self
+                .last_output
+                .get(self.app.active)
+                .copied()
+                .unwrap_or(now);
+            let idle = now.saturating_duration_since(last);
+            let unseen = self
+                .seen_history
+                .get(self.app.active)
+                .copied()
+                .unwrap_or(usize::MAX);
+            let idle_txt = if idle.is_zero() || unseen == usize::MAX {
                 "now".to_string()
             } else {
                 format!("quiet {}", fmt_duration(idle))
