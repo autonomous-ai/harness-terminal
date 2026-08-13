@@ -6,6 +6,11 @@ entries record user-visible and architectural changes since the last tagged mile
 ## Unreleased / 0.1.0 (in progress)
 
 ### Fixed
+- **Cmd+click opens URLs without a trailing sentence period.** A scheme URL that ended in
+  punctuation (``Read https://…/foo.``) included the trailing period and opened a 404; the docs
+  claimed it was stripped but the code kept it. A single trailing period is now trimmed, while an
+  internal dot (`pkg.v2`) and a relative parent `..` are preserved.
+
 - **Ctrl/Option-arrow now send word/paragraph-move sequences.** Ctrl+Left/Right in readline/bash
   previously fell back to a plain character move because the modifier was dropped from the arrow
   escape sequence. Arrows now honor the xterm modifier encoding (`ESC [ 1;5C/D` = Ctrl, `1;3` =

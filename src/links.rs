@@ -74,7 +74,13 @@ fn url_at(line: &str, start: usize) -> UrlSpan {
     {
         end += 1;
     }
-    // A single trailing close-paren/tick that follows a URL character is punctuation; leave it out.
+    // A trailing close-paren/tick is already excluded (not in the allowed set). A single trailing
+    // period, though it IS a URL char, is almost always sentence punctuation (`.../foo.`), so trim
+    // it to keep the opened URL clean; a path-internal dot (`foo.bar/baz`) or a relative `..` is
+    // untouched.
+    if end > start && bytes[end - 1] == b'.' && !(end >= 2 && bytes[end - 2] == b'.') {
+        end -= 1;
+    }
     UrlSpan { start, end }
 }
 
@@ -289,5 +295,23 @@ mod tests {
         let line3 = "path file:///tmp/a.log here";
         let s3 = url_span(line3, 10).unwrap();
         assert_eq!(s3.as_str(line3), "file:///tmp/a.log");
+    }
+
+    /// A scheme URL ending in sentence punctuation opens clean: the single trailing period after a
+    /// URL char is dropped, while an internal dot (`pkg.v2`) and a relative `..` are preserved.
+    #[test]
+    fn url_span_trims_trailing_sentence_period_only() {
+        // Sentence-final period is punctuation, not part of the URL.
+        let line = "read https://example.com/foo. ok";
+        let s = url_span(line, 10).unwrap();
+        assert_eq!(s.as_str(line), "https://example.com/foo");
+        // An internal dot is a real path character.
+        let line2 = "see https://example.com/pkg.v2/index here";
+        let s2 = url_span(line2, 8).unwrap();
+        assert_eq!(s2.as_str(line2), "https://example.com/pkg.v2/index");
+        // A relative parent `..` is a real path, not punctuation — keep both dots.
+        let line3 = "cd https://example.com/dir/.. now";
+        let s3 = url_span(line3, 8).unwrap();
+        assert_eq!(s3.as_str(line3), "https://example.com/dir/..");
     }
 }
