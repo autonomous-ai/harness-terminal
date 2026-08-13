@@ -6,6 +6,9 @@ entries record user-visible and architectural changes since the last tagged mile
 ## Unreleased / 0.1.0 (in progress)
 
 ### Added
+- **The command palette gains the triage jumps.** `next busy`, `next quiet`, `mute`/`unmute`, and
+  `rename` are now first-class palette actions, so a diver who forgot the prefix chords can find
+  them by typing in `Ctrl+H /`.
 - **`n` inside peek jumps to the next down pane.** With the peek list open, `n` wraps the
   selection to the next still-down remote pane and scrolls it into view — triage without leaving
   the picker.

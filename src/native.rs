@@ -84,7 +84,11 @@ enum PaletteAction {
     ToggleFocus,
     Pin,
     NextPinned,
+    NextBusy,
+    NextQuiet,
     NextDown,
+    MuteActive,
+    Rename,
     NextHost,
     Hosts,
     Dnd,
@@ -124,7 +128,14 @@ impl PaletteAction {
             ("toggle focus mode (hide tab bar + status)", ToggleFocus),
             ("pin/unpin active tab (protect from close)", Pin),
             ("jump to next pinned tab", NextPinned),
+            ("jump to next busy tab (just produced output)", NextBusy),
+            ("jump to next quiet (awaiting-you) tab", NextQuiet),
             ("jump to next down/reconnecting tab", NextDown),
+            (
+                "mute/unmute active tab (stop busy badge + OS ping)",
+                MuteActive,
+            ),
+            ("rename active session", Rename),
             ("jump to next host (page fleet by machine)", NextHost),
             ("host overview (which machines are up)", Hosts),
             ("toggle do-not-disturb (mute all OS notifications)", Dnd),
@@ -4280,7 +4291,18 @@ impl Application {
             ToggleFocus => self.toggle_focus(),
             Pin => self.toggle_pin_active(),
             NextPinned => self.next_pinned(),
+            NextBusy => self.next_busy(),
+            NextQuiet => self.next_quiet(),
             NextDown => self.next_down(),
+            MuteActive => self.toggle_mute_active(),
+            Rename => {
+                self.rename_query = self
+                    .app
+                    .active_session()
+                    .map(|s| s.meta.name.clone().unwrap_or_default())
+                    .unwrap_or_default();
+                self.app.overlay = Overlay::Rename;
+            }
             NextHost => self.next_host(),
             Hosts => {
                 self.hosts_sel = 0;
