@@ -6189,6 +6189,16 @@ impl Application {
                                     self.broadcast_sel = self.broadcast_sel.saturating_sub(1);
                                 }
                             }
+                            // Tab moves down / Shift+Tab up through the target list, so the focused
+                            // row can be walked without the arrows (peek/palette convention). Shift
+                            // here is distinct from Shift+arrows, which recall history.
+                            winit::keyboard::NamedKey::Tab if mods.shift_key() => {
+                                self.broadcast_sel = self.broadcast_sel.saturating_sub(1);
+                            }
+                            winit::keyboard::NamedKey::Tab => {
+                                self.broadcast_sel = (self.broadcast_sel + 1)
+                                    .min(self.app.tabs.len().saturating_sub(1));
+                            }
                             // PgDn/PgUp page the target list by a full window (the same 20-row slice
                             // the renderer shows), so a broadcast to a large fleet doesn't need one
                             // keypress per row — mirroring the fleet/palette/broadcast list overlays.

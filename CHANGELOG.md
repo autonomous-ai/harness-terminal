@@ -11,6 +11,9 @@ entries record user-visible and architectural changes since the last tagged mile
   a bulk close — defeating the "marks required so a stray press is never destructive" guard. Marks
   now clear on grid close, matching the broadcast overlay's fresh-reset behavior.
 ### Added
+- **Broadcast target list navigates with Tab/Shift+Tab.** `prefix+b` walks the focused target with
+  Tab (Shift+Tab up), so the row is selected without the arrows; Shift+arrows still recall history
+  as before.
 - **Session-jump palette accepts Tab/Shift+Tab.** `prefix+/` moves the selection down/up through the
   filtered sessions with Tab (Shift+Tab up), so keyboard-only divers can browse without the arrows —
   matching the peek/command-palette conventions.
