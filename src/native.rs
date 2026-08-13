@@ -4728,9 +4728,29 @@ impl Application {
             if clipped > 0 {
                 badges.push_str(&format!(" ⏳{clipped}"));
             }
-            let line = format!(
-                "  {} · {} · {}{}{}{}{}",
-                s.meta.host,
+            let row_y = base_y + (row + 1) * line_px;
+            // Tint the host with its per-machine color so a multi-host fleet scans by machine at a
+            // glance (`@build05` and `@edge1` read differently); the rest of the row keeps the
+            // status color (white selected / red down / dim idle). The selected row stays uniform
+            // white so the highlight reads as one sheet.
+            let host_l = if s.meta.host.is_empty() {
+                "local".to_string()
+            } else {
+                s.meta.host.clone()
+            };
+            let host_seg = format!("  {host_l}");
+            let host_col = if sel { color } else { host_color(&host_l) };
+            draw_text(
+                fb,
+                &mut self.cache,
+                &host_seg,
+                32,
+                row_y,
+                self.font_px,
+                host_col,
+            );
+            let rest = format!(
+                " · {} · {}{}{}{}{}",
                 name,
                 live,
                 idle_tag,
@@ -4738,8 +4758,16 @@ impl Application {
                 badges,
                 if sel { " ◄" } else { "" }
             );
-            let row_y = base_y + (row + 1) * line_px;
-            draw_text(fb, &mut self.cache, &line, 32, row_y, self.font_px, color);
+            let rest_x = 32 + text_width(&mut self.cache, &host_seg, self.font_px);
+            draw_text(
+                fb,
+                &mut self.cache,
+                &rest,
+                rest_x,
+                row_y,
+                self.font_px,
+                color,
+            );
             // Expand the highlighted row: dim preview of the last ~4 scrollback lines underneath.
             // Use the cheap bounded reads (history_slice/tail walk a handful of rows, never the
             // whole history) — capturing the entire scrollback every frame would re-walk and

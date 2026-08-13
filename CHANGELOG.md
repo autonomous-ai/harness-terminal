@@ -11,6 +11,9 @@ entries record user-visible and architectural changes since the last tagged mile
   a bulk close — defeating the "marks required so a stray press is never destructive" guard. Marks
   now clear on grid close, matching the broadcast overlay's fresh-reset behavior.
 ### Added
+- **Peek rows tint the host by machine.** The fleet triage (`prefix+s`) now draws each row's host
+  in its per-host color (local → `local`), so a multi-host fleet scans by machine at a glance while
+  the rest of the row keeps its status color. The selected row stays uniform white for a clean sheet.
 - **Peek rows carry the full shield/activity badges.** The fleet triage (`prefix+s`) now shows each
   row's busy `!N`, muted `M`, pinned `🔒`, just-reconnected `↻`, and staged-input `⏳N` badges — the
   same Chrome the grid and tab bar use — so a diver sees a row's mute/pin/protection state at a
