@@ -11,6 +11,11 @@ entries record user-visible and architectural changes since the last tagged mile
   claude×2, codex`), so a diver sees the whole fleet's engine spread at a glance. Backed by a pure,
   unit-tested `host_engine_breakdown` helper.
 
+- **Drill-in shows what each agent is doing right now.** In the host-overview session list
+  (`prefix+.` → `→`), the selected session's newest output line is previewed underneath it
+  (`↳ …`), width-truncated, so you can pick a run by what it's streaming rather than by name alone
+  — the same live tail the hover tooltip shows, now in the overlay.
+
 - **Host overview drills into one machine's sessions.** On a host with several agent runs, `→`
   (or Enter on a single-session host) jumps past the host row into a sub-list of that machine's
   sessions — each labeled with its engine, tab number, name, and live title — so you can land on a

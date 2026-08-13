@@ -2939,11 +2939,15 @@ impl Application {
         }
         self.hosts_sel = self.hosts_sel.min(idxs.len().saturating_sub(1));
         let top = scroll_top(idxs.len(), self.hosts_sel, 20);
+        // Available width for a row's tail preview (what the selected session is doing right now).
+        let avail = (self.size.width.saturating_sub(72)).max(40) as usize;
+        let mut extra = 0usize; // extra preview line rows inserted so later rows shift down.
         for (row, &tab) in idxs.iter().enumerate().skip(top).take(20) {
             let scr = row - top;
             let sel = row == self.hosts_sel;
+            let y = base_y + (scr + 1 + extra) * line_px;
             if sel {
-                overlay_row_sel(fb, base_y + (scr + 1) * line_px, line_px, 18);
+                overlay_row_sel(fb, y, line_px, 18);
             }
             let color = if sel {
                 WHITE
@@ -2958,10 +2962,40 @@ impl Application {
                 &mut self.cache,
                 &format!("  {label}{}", if sel { "  ◄" } else { "" }),
                 32,
-                base_y + (scr + 1) * line_px,
+                y,
                 self.font_px,
                 color,
             );
+            // Under the selected row, a dimmer one-line preview of what that agent is doing.
+            if sel {
+                if let Some(pv) = self.session_tail_preview(tab) {
+                    let mut shown = 0usize;
+                    let mut out = String::new();
+                    let mut clipped = false;
+                    for ch in pv.chars() {
+                        let w = self.cache.glyph(ch, self.font_px, false).0 as usize;
+                        if shown + w > avail {
+                            clipped = true;
+                            break;
+                        }
+                        shown += w;
+                        out.push(ch);
+                    }
+                    if clipped {
+                        out.push('…');
+                    }
+                    draw_text(
+                        fb,
+                        &mut self.cache,
+                        &format!("   ↳ {out}"),
+                        32,
+                        y + line_px,
+                        self.font_px, // dimmer, one size for simplicity
+                        CHROME_DIM,
+                    );
+                    extra += 1;
+                }
+            }
         }
     }
 
@@ -3036,6 +3070,19 @@ impl Application {
             s.meta.engine,
             tab + 1
         )
+    }
+
+    /// Newest non-empty line of a session, trimmed — the one-line "what it's doing" preview shown
+    /// under the selected drill-in row. None when the session is gone or has no printable output.
+    fn session_tail_preview(&self, tab: usize) -> Option<String> {
+        let s = self.app.tabs.get(tab)?;
+        for line in s.tail(3) {
+            let t = line.trim();
+            if !t.is_empty() {
+                return Some(t.to_string());
+            }
+        }
+        None
     }
 
     /// Keybinding reference overlay. Static list; dismiss on any key.
