@@ -6,6 +6,9 @@ entries record user-visible and architectural changes since the last tagged mile
 ## Unreleased / 0.1.0 (in progress)
 
 ### Added
+- **The peek header shows the whole fleet's health.** It now reads `N down` (red) when panes are
+  down or `fleet healthy` otherwise, so the peek triage reflects all sessions, not just the row
+  you're looking at.
 - **Fleet notifications name the machine.** Bell, busy, and reconnected OS notifications now read
   `name@host` (e.g. `claude@build02 · reconnected`, `codex@build05 produced new output`), so in a
   multi-host fleet every ping is actionable instead of ambiguous.

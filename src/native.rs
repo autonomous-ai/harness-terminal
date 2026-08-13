@@ -4080,14 +4080,28 @@ impl Application {
 
     fn render_peek(&mut self, fb: &mut Framebuffer) {
         let (base_y, line_px) = self.overlay_base_y();
+        // Live fleet-health count in the header: how many panes are down right now, so the peek
+        // triage reads the whole fleet's state at a glance, not just the selected row.
+        let down_n = self
+            .app
+            .tabs
+            .iter()
+            .filter(|t| t.kind() != "pty" && !t.alive())
+            .count();
+        let header = if down_n > 0 {
+            format!("  peek · {down_n} down · ↑/↓ preview · n next down · Enter jump · Esc close  ")
+        } else {
+            "  peek · fleet healthy · ↑/↓ preview · n next down · Enter jump · Esc close  "
+                .to_string()
+        };
         draw_text(
             fb,
             &mut self.cache,
-            "  peek · ↑/↓ preview · n next down · Enter jump · Esc close  ",
+            &header,
             32,
             base_y,
             self.font_px,
-            WHITE,
+            if down_n > 0 { CHROME_ERR } else { WHITE },
         );
         // Cap the visible window (10 rows + preview lines), but scroll through ALL tabs: `peek_scroll`
         // offsets the start so sessions beyond the first window are reachable, matching peek_sel.
