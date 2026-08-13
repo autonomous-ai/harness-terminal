@@ -6,6 +6,11 @@ entries record user-visible and architectural changes since the last tagged mile
 ## Unreleased / 0.1.0 (in progress)
 
 ### Fixed
+- **Each native-tab window renders and sizes at its own display density.** A background tab on a
+  different-scale screen (Retina laptop next to an external monitor) previously rendered with the
+  focused window's cell metrics, giving it the wrong grid that re-flowed when you focused it. Every
+  session window now derives its own font/grid size from its window's backing scale factor, so all
+  windows look correct at once; single-display setups are unaffected.
 - **Native-tab windows now rescale when you focus a tab on a different display.** Each session
   window can sit on a different-density screen (e.g. a Retina laptop next to an external monitor);
   switching focus to a tab on another display keeps terminal text at a sensible size by re-deriving
