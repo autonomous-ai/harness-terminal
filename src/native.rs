@@ -5000,8 +5000,9 @@ impl Application {
                 h.grouped = true;
             }
             self.hosts[0].grouped = true;
-            self.active_host = 0;
-            self.app.active = 0;
+            // Honor the active tab that was restored at startup (main.rs) rather than forcing tab
+            // 0, so a relaunch with native tabs reopens focused on the session you left active.
+            self.active_host = self.app.active.min(self.hosts.len().saturating_sub(1));
             self.alias_active();
             return;
         }
@@ -6297,8 +6298,10 @@ impl ApplicationHandler for Application {
                 if let Some(w) = &self.window {
                     w.request_redraw();
                 }
-                if let Some(first) = self.hosts.first() {
-                    first.window.focus_window();
+                // Focus the window of the session that was active when we quit (alias_active has
+                // already pointed self.window at it), not always the first tab.
+                if let Some(w) = &self.window {
+                    w.focus_window();
                 }
                 return;
             }

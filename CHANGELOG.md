@@ -13,6 +13,13 @@ entries record user-visible and architectural changes since the last tagged mile
   hot-path config I/O.
 
 ### Fixed
+- **Native-tab mode no longer discards the persisted active tab on relaunch.** `sync_hosts` forced
+  the focused session/window to tab 0 when it built the initial tab set, clobbering the active-tab
+  that `main.rs` restores from the saved state — so a native-tab relaunch always reopened on the
+  first session regardless of which one you left focused. It now points the active host (and the
+  window that gets focus) at the restored tab, matching the single-window path.
+
+### Fixed
 - **Fleet-grid mark toggling can no longer panic on a desync.** The fleet-grid `Space` toggle read
   `grid_marks[grid_sel]` with an unwrap guarded only by the *tab* count, so a vector desync (the
   same class as the earlier `last_output` / tab-close fixes) would `unwrap()` past `grid_marks` and
