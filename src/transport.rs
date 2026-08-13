@@ -535,6 +535,10 @@ pub struct TunnelTransport {
     host: String,
     port: u16,
     program: String,
+    /// The tmux session name this pane maps to on the remote host (`auton-<program>` for a fresh
+    /// spawn, or the session the user asked to attach to). Kept so destroy/reconnect target the
+    /// exact same session instead of re-deriving it.
+    session: String,
     size: TermSize,
     /// The shared grid; a reconnect hands the fresh connection the same `Term`.
     term: Arc<FairMutex<Term<Listener>>>,
@@ -555,13 +559,51 @@ impl TunnelTransport {
         term: Arc<FairMutex<Term<Listener>>>,
         echo: Arc<EchoCanceller>,
     ) -> io::Result<TunnelTransport> {
+        let session = format!("auton-{}", program.replace('/', "-"));
         let (tx, alive) = TunnelTransport::build_connection(
-            host, port, program, size, &term, &echo, true, false,
+            host, port, &session, program, size, &term, &echo, true, false,
         )?;
         Ok(TunnelTransport {
             host: host.to_string(),
             port,
             program: program.to_string(),
+            session,
+            size,
+            term,
+            echo,
+            alive,
+            tx,
+        })
+    }
+
+    /// Attach to an EXISTING named tmux session on the harness daemon at `host:port`, without
+    /// creating or killing anything. Uses `new-session -A` (attach-or-create) against the exact
+    /// session the user named and a plain shell, and replays the pane's current screen so the grid
+    /// isn't blank. This is how a diver resumes a session that's already running on a server.
+    pub fn spawn_attach(
+        host: &str,
+        port: u16,
+        session: &str,
+        size: TermSize,
+        term: Arc<FairMutex<Term<Listener>>>,
+        echo: Arc<EchoCanceller>,
+    ) -> io::Result<TunnelTransport> {
+        let (tx, alive) = TunnelTransport::build_connection(
+            host,
+            port,
+            session,
+            "bash",
+            size,
+            &term,
+            &echo,
+            false,
+            true,
+        )?;
+        Ok(TunnelTransport {
+            host: host.to_string(),
+            port,
+            program: "bash".to_string(),
+            session: session.to_string(),
             size,
             term,
             echo,
@@ -579,6 +621,7 @@ impl TunnelTransport {
     fn build_connection(
         host: &str,
         port: u16,
+        session: &str,
         program: &str,
         size: TermSize,
         term: &Arc<FairMutex<Term<Listener>>>,
@@ -586,16 +629,31 @@ impl TunnelTransport {
         recreate: bool,
         capture: bool,
     ) -> io::Result<(mpsc::Sender<Vec<u8>>, Arc<std::sync::atomic::AtomicBool>)> {
-        let name = format!("auton-{}", program.replace('/', "-"));
+        let name = session;
         let (tx, rx) = mpsc::channel::<Vec<u8>>();
         let alive = Arc::new(std::sync::atomic::AtomicBool::new(true));
 
         // Build the connection by hand so the underlying socket can be set nonblocking before the
         // upgrade (tungstenite's `connect` owns the socket and gives no way in).
+        //
+        // NOTE on no-freeze: spawn/attach run synchronously on the UI thread, and a plain
+        // `TcpStream::connect` has NO timeout — a remote address that silently drops packets (not
+        // refusing) would block here for the OS's default multi-minute connect timeout, freezing
+        // the whole terminal during a Remote-Attach. `connect_timeout` caps that at 4s while still
+        // returning the error (so the in-app toast fires), instead of freezing the UI.
         let addr = format!("{host}:{port}");
-        let tcp = std::net::TcpStream::connect(&addr).map_err(|e| {
-            io::Error::new(io::ErrorKind::Other, format!("tunnel connect {addr}: {e}"))
-        })?;
+        let tcp = std::net::ToSocketAddrs::to_socket_addrs(addr.as_str())
+            .map_err(|e| io::Error::new(io::ErrorKind::Other, format!("tunnel resolve {addr}: {e}")))?
+            .next()
+            .ok_or_else(|| {
+                io::Error::new(io::ErrorKind::Other, format!("tunnel resolve {addr}: no address"))
+            })
+            .and_then(|sa| {
+                std::net::TcpStream::connect_timeout(&sa, std::time::Duration::from_secs(4))
+            })
+            .map_err(|e| {
+                io::Error::new(io::ErrorKind::Other, format!("tunnel connect {addr}: {e}"))
+            })?;
         let url = format!("ws://{host}:{port}/api/pane-ws");
         let request = tungstenite::client::IntoClientRequest::into_client_request(url)
             .map_err(|e| io::Error::new(io::ErrorKind::Other, e.to_string()))?;
@@ -704,6 +762,7 @@ impl TunnelTransport {
         let (tx, alive) = TunnelTransport::build_connection(
             &self.host,
             self.port,
+            &self.session,
             &self.program,
             self.size,
             &self.term,
@@ -746,7 +805,7 @@ impl Transport for TunnelTransport {
         // Same kill-session the connection thread sends on spawn, targeted at this pane's session so
         // the relay's tmux tears the pane down. The daemon holds the session, not us, so this must go
         // over the wire rather than die with the socket.
-        let name = format!("auton-{}", self.program.replace('/', "-"));
+        let name = &self.session;
         let _ = self
             .tx
             .send(format!("kill-session -t {name}\n").into_bytes());

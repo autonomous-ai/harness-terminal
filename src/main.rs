@@ -230,7 +230,9 @@ fn handle_key_tui(app: &mut App, key: crossterm::event::KeyEvent, in_command: &m
                 app.remote_host.clear();
                 app.selected = 0;
             }
-            KeyCode::Char('t') => app.spawn_tmux("this-host", "shell"),
+            KeyCode::Char('t') => {
+                app.spawn_tmux("this-host", "shell");
+            }
             KeyCode::Char('q') => return true,
             KeyCode::Char('s') => {
                 match harness_terminal::harness::HarnessClient::local().status() {

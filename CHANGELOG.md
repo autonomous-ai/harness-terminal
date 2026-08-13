@@ -5,7 +5,108 @@ entries record user-visible and architectural changes since the last tagged mile
 
 ## Unreleased / 0.1.0 (in progress)
 
+### Fixed
+- **`retry_backoff_ladder_caps_at_60` silently wasn't running.** A stray `#[test]` attribute had
+  been misplaced onto the next function, so the unit test guarding the reconnect backoff ladder
+  (5s→10s→20s→40s→60s cap) was never executed and the function was flagged dead code. The
+  attribute is restored; the test now runs (and passes) as part of the suite (105→106 unit tests).
+- **Flaky test harness (suite is now deterministic).** The file-backed persistence tests isolated
+  their dir by mutating the process-global `HARNESS_CONFIG_DIR` via `std::env::set_var` — unsound
+  under parallel test threads (concurrent `config_dir()` reads while env mutates is UB in Rust
+  2021), which intermittently panicked ~11 restore tests. The override is now per-thread (thread-
+  local), race-free by construction; the suite passes deterministically across repeated runs.
+### Fixed
+- **No more frozen UI on a dead remote host.** The tunnel connect ran synchronously on the main
+  thread with no timeout, so a Remote-Attach to a remote address that silently drops packets (not
+  refusing) could block for the OS's default multi-minute connect timeout and freeze the whole
+  terminal. `TcpStream::connect_timeout` now caps that at 4s and still returns the error, so the
+  in-app `⚠ host:port: …` toast fires promptly instead of the app hanging.
 ### Added
+- **First-run empty state mentions Cmd+T.** The "no sessions" hint (shown on a fresh
+  launch with zero tabs, in both in-app and native-tab modes) now leads with `Cmd+T` for a
+  quick new tab, then the prefix new/attach/palette shortcuts, so a new user sees the
+  fastest path immediately.
+- **Remote connect success is now visible.** Starting a remote spawn showed no feedback (only
+  failures did), so connecting to a faraway host was a silent wait. A successful Remote-Attach
+  now flashes `attached <session> @ host:port ✓` (or `connecting <engine> @ host:port …`),
+  while the existing keep-your-input-on-error behavior is unchanged.
+- **`Cmd+1..9` / `Cmd+0` jump straight to a tab.** The universal iTerm/browser muscle memory
+  now pages directly to any session (1-based; `0` = last) in both native-tab and in-app tab
+  modes, so a diver managing many agents can hop to a specific one in one keystroke instead
+  of cycling with `Cmd+Shift+[ / ]`. Pure `Cmd+number` never reaches the shell.
+- **`Cmd+Shift+[ / ]` tab-switch matched the real US-layout glyphs.** The shortcut only
+  checked the un-shifted `[`/`]`, but a real US keyboard produces `{`/`}` when Shift is held,
+  so on actual hardware `Cmd+Shift+[/]` (next/prev tab) could silently no-op while the unit
+  test passed on synthetic input. It now matches both glyphs.
+- **Failed New-Session / Remote-Attach keeps your input.** A spawn or tunnel/attach error
+  used to dismiss the overlay, wiping the typed working-directory or `host[:port][/session]`
+  (and skipping the recent-host history, so a typo meant retyping everything). Now the picker
+  stays open with your text and the `⚠ …` reason, so you fix and re-submit in one go.
+- **Help overlay documents the Cmd shortcuts.** The `Ctrl+H ?` / `Ctrl+H h` help list now
+  shows `Cmd+T/N` (new session / new native tab), `Cmd+W` (close active), `Cmd+Q` (quit),
+  `Cmd+Shift+[ / ]` (prev/next tab), and `Cmd+Shift+P` (palette), so the iTerm-style
+  shortcuts are discoverable from inside the app instead of only in the changelog.
+- **Cmd+Shift+P opens the command palette.** The conventional macOS/VSCode/iTerm shortcut now
+  opens the run-any-action palette (same as `Ctrl+H ;`). Pure `Cmd+P` is left alone.
+- **Recent-remote-host memory (`Ctrl+H r`).** The Remote-Attach overlay now pre-fills the last
+  server/session you attached to (`host[:port][/session]`, most-recent first, capped at 8 and
+  deduped), so re-connecting to the same computer is a single Enter instead of retyping the
+  address every time. Persisted across restarts.
+- **Cmd+= / Cmd+- / Cmd+0 font zoom.** The font-zoom shortcuts now also respond to the
+  Cmd (macOS ⌘) variants, matching how iTerm2 lets you zoom with either Ctrl or Cmd.
+- **Cmd+Shift+[ / Cmd+Shift+] prev/next tab.** The standard macOS terminal convention (iTerm2
+  uses it) to page through open sessions, working in both the in-app strip and native-tab mode.
+  Plain `Cmd+[` is left to the shell; only the Shift variant is intercepted.
+- **Remote attach/spawn failures are now visible.** A failed tunnel connect or session attach
+  (host down, wrong port, no such session) used to be silent — `push_ok`/`spawn_tunnel_attach`
+  only wrote to stderr, so a diver who typed an unreachable `host[:port][/session]` got no tab and
+  no explanation. The spawn/attach methods now return the error, and the New-Session and Remote
+  Attach overlays flash it in-status (`⚠ host:port: …`) instead of disappearing.
+- **Native Cmd+T/N/W/Q shortcuts.** With no AppKit menu installed, macOS delivered `Cmd+T`/`Cmd+Q`
+  to the app as ordinary key events, which the forwarding path then wrote to the session as plain
+  characters (Cmd+T typed `t`, Cmd+Q typed `q`). These now route to the native-terminal actions:
+  `Cmd+T`/`Cmd+N` open the New-Session picker (same as `Ctrl+H n`), `Cmd+W` closes the active
+  window (in native-tab mode it closes the focused session window correctly), and `Cmd+Q` quits
+  with the same save-then-exit dance as `prefix+q`. `Cmd+C`/`Cmd+V` copy/paste are untouched.
+- **Shift+Tab forwarding.** A plain modifier-less `Tab` was being sent to the session with the Shift
+  state dropped, so `Shift+Tab` reached Claude Code / shells as an ordinary Tab and their back-cycling
+  shortcuts broke. `Shift+Tab` is now written to the PTY as the standard reverse-tab sequence
+  (`ESC [ Z`), and plain `Tab` stays `\t`.
+- **True macOS window-level tabs.** When `native_tabs = true`, every session becomes a real
+  `NSWindow`, and AppKit's system title-bar tab bar (native traffic lights, Cmd+Tab picker, drag-a-
+  tab-out, `Ctrl+H n`/`+` spawning a new grouped window) replaces the in-app strip. Added an AppKit
+  FFI shim (`src/macos.rs`, via the `objc2`/`objc2-app-kit` stack winit already pins) that sets
+  `NSWindow.tabbingMode` and splices real `NSWindow`s into one native tab set
+  (`addTabbedWindow:ordered:`). A `Host` per session owns its own window + softbuffer surface; the
+  frame renderer draws each session's grid full-bleed into its own window (overlays stay on the
+  focused one), and focus/resize/close events are routed by `WindowId`. Switching tabs in-app
+  (last-window, number keys, palette) surfaces the matching real window. Closing a tab's window
+  closes that session; closing the last one quits. Opt-in (default off) so the in-app strip is
+  untouched until you flip it on.
+- **Native-style tab strip.** The in-window tab bar is now a two-row chrome strip with a raised,
+  rounded-top active-tab sheet (Safari/Chrome silhouette), a 1px hairline dividing it from the
+  grid, and a soft hover chip on inactive tabs — the current session reads as a lifted tab rather
+  than a flat pill. The bottom status strip gains a matching top hairline so the two bars bookend
+  the grid with the same native panel edge.
+- **New-tab (+) affordance.** A `+` button at the strip's right edge (hover-raised, native tab-strip
+  muscle memory) opens the New-Session picker — the same path `Ctrl+H n` and the context menu use.
+- **Idle CPU near 0%.** The render loop now pumps at ~60fps only while something is visibly live
+  (a tab pouring output, a fading bell/`↻` badge, an open overlay/tooltip, copy mode, hover);
+  otherwise it drops to a slow idle tick and skips the full-framebuffer re-present, so a quiet
+  terminal idles at ~0% instead of pegging a whole core re-uploading pixels to QuartzCore. Output is
+  still caught within the idle tick and flips the loop back to full speed the moment a pane produces.
+- **Attach an existing tmux session on a server (`Ctrl+H r`).** The remote-attach prompt now accepts
+  `host[:port]/session` to attach to a specific already-running remote tmux session (attach-or-
+  create, no kill/recreate) instead of spawning a fresh engine; the session identity persists in
+  the tab spec so a relaunch re-attaches to the same named session. `host[:port]` still spawns a new
+  `auton-<engine>` pane as before.
+- **Tab-bar close × buttons.** Each tab grows a right-edge `×` on hover (iTerm2 / Chrome-style);
+  clicking it closes that tab, honoring the pin guard (a pinned tab flashes the unpin hint instead).
+  Close-by-index keeps every tab-parallel bookkeeping vector in lockstep so pins/mutes/badges don't
+  shift after a middle-bar close.
+- **Right-click context menu.** Hover-tab-aware popover with Copy / Paste / Open Link / Select All /
+  Search for Selection / New Session / Close Tab, keyboard-navigable (`j`/`k`/arrows/Enter/Escape),
+  dismissed on any click outside.
 - **Configurable prefix — now `Ctrl+H` ("Ctrl Harness", tmux's `Ctrl+B` analog).** The prefix's
   leading chord was hardcoded to `Ctrl+Space`, which macOS silently owns for its input-source
   switcher (English + Vietnamese Telex = the canonical case), so the prefix just wouldn't answer.
@@ -117,6 +218,32 @@ entries record user-visible and architectural changes since the last tagged mile
 - **Remote attach `host:port`** — `prefix+r` accepts a `:port` to reach a non-default harness daemon.
 
 ### Changed
+- **Named color-theme presets.** `[theme] preset = "gruvbox-dark" | "solarized-dark" | "nord" |
+  "dracula" | "github-dark" | "tokyo-night"` selects a full palette as the base; any individual
+  `[theme]` fields layer on top. The built-in default is now the `tokyo-night`-inspired palette.
+- **Modal overlays dim the terminal behind them**, so the engine picker / remote-attach / palette /
+  fleet / find / broadcast text reads clearly against bright agent output instead of washing out.
+- **List overlays highlight the selected row** with the chrome's active-tab pill, so the current
+  entry reads at a glance (consistent with the context menu).
+- **Command-mode chip.** While the prefix is armed (you typed `Ctrl+H`, next key is a command), a
+  highlighted `Ctrl+H` chip appears in the status line, so it's clear the app is waiting for a
+  command and why the next key is consumed rather than typed.
+- **Fuzzy filtering for the session + command palettes.** Typing partial characters now matches in
+  subsequence order (case-insensitive), so e.g. `crd` matches "cursor codex" and `fle` finds the
+  fleet actions — a faster jump than exact substring.
+- **Visible spawn-failure toasts.** When a new-session or remote-attach fails (e.g. a host you can't
+  reach), a `⚠ couldn't start …` toast appears in the status line instead of failing silently to
+  stderr.
+- **Mouse-wheel over the tab bar cycles tabs** (iTerm2/Chrome-style): wheel up steps left, down
+  steps right, wrapping at the edges — while the wheel over the grid still scrolls scrollback.
+- **Idle CPU dropped to ~0%.** The continuous-render loop is capped at ~60fps via `WaitUntil`
+  instead of redrawing uncapped (previously pegged a core at ~99% when idle), while remaining fully
+  responsive to input and output.
+- **New default theme: a modern Tokyo Night-inspired dark palette.** Deeper, better-contrast ANSI
+  colors (rose/teal/lavender family) and a non-pure-black canvas; the whole framebuffer starts from
+  the theme background so grid margins read as one surface instead of a hard black frame. Tab bar,
+  status line, hover tooltip, and context menu share one coherent chrome surface that recedes below
+  the grid. A `[theme]` block still overrides any entry.
 - Codebase reformatted with `cargo fmt` (drift from many hand-edits); CI now enforces it.
 - `ARCHITECTURE.md` updated to describe the winit + softbuffer native layer (the ratatui TUI is
   demoted to the `--tui` headless fallback).

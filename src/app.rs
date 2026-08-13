@@ -67,6 +67,9 @@ pub struct App {
     /// Working directories local tabs were spawned in, most-recent first (MRU). Pre-fills the
     /// new-session picker's `dir:` so respawning in the same repo is one Enter. Cap 8.
     pub last_dirs: Vec<String>,
+    /// Remote hosts/sessions the diver attached to, most-recent first (MRU). Pre-fills the
+    /// Remote-Attach overlay so re-connecting to the same server is one Enter.
+    pub recent_hosts: Vec<String>,
 }
 
 impl App {
@@ -102,6 +105,7 @@ impl App {
             spawn_counter: counter,
             engine_last_used: recency,
             last_dirs: crate::restore::load_recent_dirs(),
+            recent_hosts: crate::restore::load_recent_hosts(),
         }
     }
 
@@ -115,7 +119,7 @@ impl App {
 
     /// Create a new session tab running a local engine, and focus it. `cwd` is an optional per-tab
     /// working directory; None falls back to the config `start_cwd` / the binary's cwd.
-    pub fn spawn_local(&mut self, host: &str, engine_id: &str, cwd: Option<String>) {
+    pub fn spawn_local(&mut self, host: &str, engine_id: &str, cwd: Option<String>) -> Option<String> {
         let program = engine_cmd(engine_id).unwrap_or("bash");
         let meta = self.meta_for(host, engine_id);
         if let Some(dir) = &cwd {
@@ -132,34 +136,61 @@ impl App {
             Session::local(meta, program, Vec::new(), self.size, cwd),
             engine_id,
             host,
-        );
+        )
     }
 
     /// Create a new session tab running the engine inside a real local tmux pane, and focus it.
-    pub fn spawn_tmux(&mut self, host: &str, engine_id: &str) {
+    pub fn spawn_tmux(&mut self, host: &str, engine_id: &str) -> Option<String> {
         let program = engine_cmd(engine_id).unwrap_or("bash");
         let meta = self.meta_for(host, engine_id);
-        self.push_ok(Session::tmux(meta, program, self.size), engine_id, host);
+        self.push_ok(Session::tmux(meta, program, self.size), engine_id, host)
     }
 
     /// Create a remote session: the engine's pane runs on `host` (via ssh + tmux control mode).
-    pub fn spawn_remote(&mut self, host: &str, engine_id: &str) {
+    pub fn spawn_remote(&mut self, host: &str, engine_id: &str) -> Option<String> {
         let program = engine_cmd(engine_id).unwrap_or("bash");
         let meta = self.meta_for(host, engine_id);
-        self.push_ok(Session::remote(meta, program, self.size), engine_id, host);
+        self.push_ok(Session::remote(meta, program, self.size), engine_id, host)
     }
 
     /// Create a session over the harness pane-relay tunnel: the pane runs on `host` (the `@host` half
     /// of `pane@host`), reached through that machine's harness daemon at `host:port`. This is
     /// ARCHITECTURE §10 path 1 — the design-specified cross-machine transport.
-    pub fn spawn_tunnel(&mut self, host: &str, port: u16, engine_id: &str) {
+    pub fn spawn_tunnel(&mut self, host: &str, port: u16, engine_id: &str) -> Option<String> {
         let program = engine_cmd(engine_id).unwrap_or("bash");
         let meta = self.meta_for(host, engine_id);
-        self.push_ok(
+        let res = self.push_ok(
             Session::tunnel(meta, host, port, program, self.size),
             engine_id,
             host,
         );
+        if res.is_none() {
+            self.note_remote(&format!("{host}:{port}"));
+        }
+        res
+    }
+
+    /// Attach to an EXISTING named tmux session on `host` through the harness pane-relay tunnel.
+    /// No engine runs (we resume whatever is already in the pane), so it's labelled a shell pane;
+    /// the session identity rides `meta.attach_session` so it persists and re-attaches on restore.
+    pub fn spawn_tunnel_attach(&mut self, host: &str, port: u16, session: &str) -> Option<String> {
+        let meta = SessionMeta {
+            host: host.to_string(),
+            engine: "shell".to_string(),
+            title: format!("attach {session} @ {host}"),
+            name: None,
+        };
+        match Session::tunnel_attach(meta, host, port, session, self.size) {
+            Ok(s) => {
+                // No engine recency bump — attaching isn't a framework spawn.
+                self.tabs.push(s);
+                self.active = self.tabs.len() - 1;
+                crate::restore::save(&self.tab_specs());
+                self.note_remote(&format!("{host}:{port}/{session}"));
+                None
+            }
+            Err(e) => Some(format!("attach {session}@{host}: {e}")),
+        }
     }
 
     fn meta_for(&self, host: &str, engine_id: &str) -> SessionMeta {
@@ -216,6 +247,19 @@ impl App {
         crate::restore::save_engine_recency(&self.engine_last_used);
     }
 
+    /// Remember a remote host/session the diver connected to (most-recent first, capped at 8) so
+    /// the Remote-Attach overlay can pre-fill it next time. Best-effort persistence.
+    pub fn note_remote(&mut self, addr: &str) {
+        let addr = addr.trim().to_string();
+        if addr.is_empty() {
+            return;
+        }
+        self.recent_hosts.retain(|h| h != &addr);
+        self.recent_hosts.insert(0, addr);
+        self.recent_hosts.truncate(8);
+        crate::restore::save_recent_hosts(&self.recent_hosts);
+    }
+
     /// Picker order for the 12 engines: most-recently-used first, ties broken alphabetically by id.
     pub fn engine_order(&self) -> Vec<&'static crate::engines::Engine> {
         let mut v: Vec<&'static crate::engines::Engine> = crate::engines::ENGINES.iter().collect();
@@ -227,15 +271,19 @@ impl App {
         v
     }
 
-    fn push_ok(&mut self, res: std::io::Result<Session>, engine_id: &str, host: &str) {
+    /// Push a newly-spawned session tab (focused) on success; on failure return the error message so
+    /// the caller can surface it in-UI (a remote attach/spawn that silently does nothing leaves a
+    /// diver guessing why their tab never appeared).
+    fn push_ok(&mut self, res: std::io::Result<Session>, engine_id: &str, host: &str) -> Option<String> {
         match res {
             Ok(session) => {
                 self.note_engine_used(engine_id);
                 self.persist_engine_recency();
                 self.tabs.push(session);
                 self.active = self.tabs.len() - 1;
+                None
             }
-            Err(e) => eprintln!("spawn {engine_id}@{host}: {e}"),
+            Err(e) => Some(format!("spawn {engine_id}@{host}: {e}")),
         }
     }
 
@@ -253,7 +301,7 @@ impl App {
                     s.meta.host, s.meta.engine, name, s.meta.title
                 )
                 .to_lowercase();
-                q.is_empty() || hay.contains(&q)
+                q.is_empty() || crate::native::fuzzy_match(&q, &hay)
             })
             .collect();
         if self.selected >= self.filtered.len() {
@@ -363,6 +411,7 @@ impl App {
             host: active.meta.host.clone(),
             engine: active.meta.engine.clone(),
             port: None,
+            session: active.attach_session.clone(),
             name: None,
         };
         let before = self.tabs.len();
@@ -382,13 +431,27 @@ impl App {
         let res = match spec.kind.as_str() {
             "tmux" => Session::tmux(meta, program, self.size),
             "ssh" => Session::remote(meta, program, self.size),
-            "tunnel" => Session::tunnel(
-                meta,
-                &spec.host,
-                spec.port.unwrap_or(crate::harness::HARNESS_PORT_DEFAULT),
-                program,
-                self.size,
-            ),
+            "tunnel" => {
+                // A tunnel tab opened as "attach existing session" resumes that exact named session
+                // (no kill/recreate); a plain tunnel spawns a fresh `auton-<engine>` as before.
+                if let Some(sess) = spec.session.as_deref() {
+                    Session::tunnel_attach(
+                        meta,
+                        &spec.host,
+                        spec.port.unwrap_or(crate::harness::HARNESS_PORT_DEFAULT),
+                        sess,
+                        self.size,
+                    )
+                } else {
+                    Session::tunnel(
+                        meta,
+                        &spec.host,
+                        spec.port.unwrap_or(crate::harness::HARNESS_PORT_DEFAULT),
+                        program,
+                        self.size,
+                    )
+                }
+            }
             _ => Session::local(meta, program, Vec::new(), self.size, None),
         };
         if let Ok(mut session) = res {
@@ -475,6 +538,7 @@ mod tests {
             spawn_counter: 0,
             engine_last_used: std::collections::HashMap::new(),
             last_dirs: Vec::new(),
+            recent_hosts: Vec::new(),
         };
         for i in 0..n {
             let meta = SessionMeta {
@@ -568,6 +632,35 @@ mod tests {
         assert_eq!(a2.tabs[0].meta.engine, "e0");
         a2.move_tab_from_to(9, 0); // from out of range
         assert_eq!(a2.tabs.len(), 3);
+    }
+
+
+    /// Remote-host MRU: most-recent first, deduped on re-use, capped at 8, empty strings skipped.
+    #[test]
+    fn note_remote_tracks_mru_dedup_capped() {
+        let mut app = app_with(0);
+        assert!(app.recent_hosts.is_empty());
+        app.note_remote(" b ");
+        app.note_remote("");
+        app.note_remote("10.0.0.4:18473/claude");
+        app.note_remote("10.0.0.4:18473/claude"); // re-use -> move to front, not duplicate
+        app.note_remote("builder:1543");
+        assert_eq!(
+            app.recent_hosts,
+            vec![
+                "builder:1543".to_string(),
+                "10.0.0.4:18473/claude".to_string(),
+                "b".to_string(), // " b " trimmed, pushed before the empties
+            ]
+        );
+        // Cap at 8 total.
+        let mut a8 = app_with(0);
+        for i in 0..10 {
+            a8.note_remote(&format!("host{i}"));
+        }
+        assert_eq!(a8.recent_hosts.len(), 8);
+        assert_eq!(a8.recent_hosts[0], "host9");
+        assert!(!a8.recent_hosts.contains(&"host0".to_string()));
     }
 
     /// Spawning a local tab in a cwd records it MRU-first, dedups the old entry, and caps at 8 — the

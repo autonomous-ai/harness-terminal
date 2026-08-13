@@ -15,7 +15,7 @@ use alacritty_terminal::selection::{Selection, SelectionType};
 use winit::application::ApplicationHandler;
 use winit::dpi::{LogicalSize, PhysicalSize, Size};
 use winit::event::{ElementState, MouseButton, WindowEvent};
-use winit::event_loop::{ActiveEventLoop, EventLoop};
+use winit::event_loop::{ActiveEventLoop, ControlFlow, EventLoop};
 use winit::keyboard::{Key, ModifiersState};
 use winit::window::{Window, WindowId};
 
@@ -23,7 +23,9 @@ use softbuffer::{Context, Surface};
 
 use crate::app::{App, Overlay};
 use crate::engines::ENGINES;
-use crate::render::{argb, draw_grid, draw_text, Framebuffer, GlyphCache};
+use crate::render::{
+    argb, draw_grid, draw_text, fill_rect, filled_round_top, text_width, Framebuffer, GlyphCache,
+};
 use crate::session::TermSize;
 
 /// Chromeless text colors (macOS style).
@@ -32,6 +34,22 @@ const CHROME_DIM: (u8, u8, u8) = (0x66, 0x66, 0x66);
 /// Muted red for the fleet-triage "N panes down" count — a host went dark, not a busy signal.
 const CHROME_ERR: (u8, u8, u8) = (0xf0, 0x6a, 0x6a);
 const WHITE: (u8, u8, u8) = (0xff, 0xff, 0xff);
+/// Elevated chrome surfaces (tab bar / status line panels) so the shell chrome reads as designed
+/// panels rather than text floating on the terminal background. Slightly darker than the theme's
+/// grid so the bars recede and the content reads forward; the active-tab pill sits a step lighter.
+const CHROME_BG: (u8, u8, u8) = (0x12, 0x13, 0x1c);
+/// Pre-computed opaque panel pixel (alpha already applied) for fast row-clears.
+const CHROME_BG_PX: u32 = argb(255, 0x12, 0x13, 0x1c);
+/// Active-tab background pill — a distinct, slightly-lit slab so the current session reads at a
+/// glance from across the bar (iTerm2/macOS-style).
+const CHROME_ACTIVE_BG: (u8, u8, u8) = (0x27, 0x29, 0x36);
+/// One-pixel hairline separating the chrome strip from the terminal grid below it, so the tab/status
+/// bars read as a designed surface rather than text bleeding into the grid.
+const CHROME_HAIR: (u8, u8, u8) = (0x22, 0x24, 0x31);
+/// Top bevel on the raised active tab sheet — a lighter hairline at the sheet's top edge.
+const CHROME_SHEET_HI: (u8, u8, u8) = (0x34, 0x37, 0x45);
+/// Hover chip behind an inactive tab under the pointer, so the target reads before you commit.
+const CHROME_HOVER: (u8, u8, u8) = (0x1c, 0x1e, 0x28);
 
 /// One fleet-search hit: which tab (index into `app.tabs`), the grid line in that session's
 /// scrollback, and the column where the match text begins. Sorted by (tab, line).
@@ -184,6 +202,16 @@ struct Application {
     /// by `activity_flags`; the tab bar shows it as the badge magnitude so a diver reads how hot a
     /// pane is, not just *that* it moved.
     grew_delta: Vec<usize>,
+    /// Whether any tab produced output the last frame we rendered (the live "busy" signal used to
+    /// decide if the render loop should keep pumping at full rate vs. drop to its idle tick). Set
+    /// during `render` from the same `activity_flags` pass that draws the badges, so it reflects
+    /// exactly what the current frame showed — not the cumulative, still-unread `grew_delta`.
+    live_busy: bool,
+    /// Per-tab scrollback length last seen by the idle loop, so a quiet (not-rendering) loop can
+    /// cheaply detect that NEW output arrived and request a repaint without re-uploading the whole
+    /// frame every tick. Kept in sync during every render so the idle detector only flags genuinely
+    /// fresh content.
+    detect_len: Vec<usize>,
     /// Pending OS notifications not yet delivered this frame, (kind "busy"|"bell", session index).
     /// Queued by `poll_bells`/`activity_flags` and drained together at the end of the frame so
     /// simultaneous busy/bell events across the fleet coalesce into ONE notification instead of one
@@ -249,6 +277,9 @@ struct Application {
     /// Set when any quit path fires (prefix+q, or the palette's Quit action); the event loop honors
     /// it at the next `about_to_wait`, applying the same save-then-exit dance as CloseRequested.
     quit_requested: bool,
+    /// Set by Cmd+W (close the active tab/window); honored in `about_to_wait` because closing a
+    /// native host window needs the `ActiveEventLoop` we only have there.
+    close_active_requested: bool,
     /// Mouse state: the cell anchor where a drag-selection started (Some while left button held).
     /// With winit 0.30 we track presses/releases ourselves; dragging updates the selection end.
     mouse_anchor: Option<Point>,
@@ -290,6 +321,10 @@ struct Application {
     /// Focus mode (prefix+v): hide the tab bar + status line so the grid gets the whole window.
     /// A distraction-free dive into one session. Toggle again to bring the chrome back.
     focus: bool,
+    /// Opt into macOS native window-level tabs (the system title-bar tab bar). When on, each
+    /// session maps to a real `NSWindow` and they're grouped into AppKit's native tab set; the
+    /// framebuffer tab strip is hidden in favor of the OS chrome.
+    native_tabs: bool,
     /// Monotonic instant until which a terminal-bell badge is shown for each tab (index). A bell
     /// (a long agent run finishing) shows a 🔔 badge for a few seconds, then fades on its own.
     bell_until: Vec<Option<std::time::Instant>>,
@@ -309,9 +344,87 @@ struct Application {
     /// with the tab set like the other aux vectors; `b` in the grid pre-scopes `broadcast_targets`
     /// to exactly these sessions.
     grid_marks: Vec<bool>,
+    /// The open right-click context menu, or None. A framebuffer-drawn popover of contextual
+    /// actions (Copy/Paste/Open Link/Select All/Search selection/New/Close), keyboard-drivable
+    /// like the other overlays. Dismissed on Escape or any click outside it.
+    ctx: Option<CtxMenu>,
+    /// Pixel rects for each rendered tab `(x_start, x_end)` within the top chrome, recomputed
+    /// every frame so hit-testing (hover preview + the close ×) tracks the painted bar exactly.
+    /// Truncated tabs past the window edge are simply not present past the clip.
+    tab_rects: Vec<(usize, usize)>,
+    /// Hit rect `(x0, y0, w, h)` of the "new tab" (+) affordance at the strip's right edge, or
+    /// None in focus mode. Clicking it opens the New-Session picker (native tab-strip behavior).
+    newtab_btn: Option<(usize, usize, usize, usize)>,
     /// Monotonic frame counter, bumped each redraw, so frame-animated affordances (the per-tab
     /// streaming spinner) can cycle without a wall-clock dependency.
     frame: u64,
+    /// Native-tab mode (`native_tabs = true`): one real window per session, grouped into AppKit's
+    /// system title-bar tab bar. `self.window`/`self.surface`/`self.size` always alias the ACTIVE
+    /// host so all the single-window rendering/input code keeps working unchanged; this list drives
+    /// grouping and per-session repaint, and `active_host` selects which one the user is looking at.
+    hosts: Vec<Host>,
+    /// Index into `hosts` of the window the user is currently looking at (the focused one). Its
+    /// session is `app.active`.
+    active_host: usize,
+}
+
+/// One real macOS window backing a session in native-tab mode. Each session gets its own `NSWindow`;
+/// AppKit groups them into the system title-bar tab bar. `self.window`/`self.surface`/`self.size`
+/// alias the active host so the shared single-window code paths still work untouched.
+struct Host {
+    window: Rc<Window>,
+    /// Held solely so the softbuffer `context` outlives our `surface` (the surface borrows it);
+    /// nothing reads it directly.
+    _context: Option<Context<Rc<Window>>>,
+    surface: Option<Surface<Rc<Window>, Rc<Window>>>,
+    size: PhysicalSize<u32>,
+    /// The session (index into `app.tabs`) this window displays.
+    tab: usize,
+    /// True once this window has been spliced into the native tab group (AppKit `addTabbedWindow:`).
+    grouped: bool,
+}
+
+/// A right-click context menu row.
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum CtxAction {
+    Copy,
+    Paste,
+    OpenLink,
+    SelectAll,
+    SearchSelection,
+    /// A non-selectable divider row.
+    Separator,
+    NewSession,
+    CloseTab,
+}
+
+/// The open right-click popover: its top-left pixel origin, panel geometry, and rows.
+struct CtxMenu {
+    /// Top-left pixel origin (clamped into the window).
+    px: usize,
+    py: usize,
+    /// Panel width in px (the widest label + padding).
+    w: usize,
+    /// Rows in display order. `Separator` draws a divider and is skipped by navigation.
+    items: Vec<CtxAction>,
+    /// Keyboard selection: index into `items` (never a `Separator`).
+    sel: usize,
+    /// Pointer pixel position at open, for "Open Link" cell resolution.
+    mx: f64,
+    my: f64,
+}
+
+fn ctx_label(a: CtxAction) -> &'static str {
+    match a {
+        CtxAction::Copy => "Copy",
+        CtxAction::Paste => "Paste",
+        CtxAction::OpenLink => "Open Link",
+        CtxAction::SelectAll => "Select All",
+        CtxAction::SearchSelection => "Search for Selection",
+        CtxAction::Separator => "",
+        CtxAction::NewSession => "New Session",
+        CtxAction::CloseTab => "Close Tab",
+    }
 }
 
 impl Application {
@@ -399,6 +512,8 @@ impl Application {
             muted,
             pinned,
             grew_delta: vec![0; tab_count],
+            live_busy: false,
+            detect_len: Vec::new(),
             pending_notify: Vec::new(),
             find_hit: None,
             find_all: Vec::new(),
@@ -431,8 +546,10 @@ impl Application {
             palette_filtered: Vec::new(),
             palette_sel: 0,
             quit_requested: false,
+            close_active_requested: false,
             key_action,
             focus: false,
+            native_tabs: cfg.native_tabs.unwrap_or(false),
             dnd: false,
             bell_until: vec![None; tab_count],
             was_down: vec![false; tab_count],
@@ -441,8 +558,13 @@ impl Application {
             drag_tab: None,
             tooltip_box: None,
             frame: 0,
+            hosts: Vec::new(),
+            active_host: 0,
             grid_sel: 0,
             grid_marks: vec![false; tab_count],
+            ctx: None,
+            tab_rects: Vec::new(),
+            newtab_btn: None,
         }
     }
 
@@ -462,7 +584,8 @@ impl Application {
         crate::restore::save_zoom(self.zoom);
         self.metrics_from_scale();
         if let Some(active) = self.app.active_session() {
-            let lines = (self.size.height - self.cell_h * 2) as usize / self.cell_h as usize;
+            let lines = (self.size.height as usize - (self.chrome_top() + self.chrome_bottom()))
+                / self.cell_h as usize;
             let cols = self.size.width as usize / self.cell_w as usize;
             active.resize(crate::session::TermSize { lines, cols });
         }
@@ -669,6 +792,16 @@ impl Application {
         }
         self.app.active = i.min(self.app.tabs.len().saturating_sub(1));
         crate::restore::save_active(self.app.active);
+        // Native-tab mode: switching tabs in-app (prefix+l last, prefix+number, palette) must also
+        // surface the matching real window and make it key, so the OS title-bar tab set follows.
+        if self.native_tabs {
+            if let Some(hi) = self.hosts.iter().position(|h| h.tab == self.app.active) {
+                self.active_host = hi;
+                self.alias_active();
+                self.hosts[hi].window.focus_window();
+                self.request_redraw();
+            }
+        }
     }
 
     /// Open the broadcast overlay pre-scoped to exactly the tiles marked in the fleet grid (`b`).
@@ -1123,6 +1256,7 @@ impl Application {
                 host: s.meta.host.clone(),
                 engine: s.meta.engine.clone(),
                 port: None,
+                session: s.attach_session.clone(),
                 name: s.meta.name.clone(),
             });
         }
@@ -1266,7 +1400,10 @@ impl Application {
             None => return,
         };
         self.flash = Some((note, std::time::Instant::now()));
-        crate::native::close_tab(&mut self.app, false);
+        let closed = self.app.active;
+        if crate::native::close_tab(&mut self.app, false) && self.native_tabs {
+            self.native_remove_host(closed);
+        }
     }
 
     /// Fork the active tab, preserving its pin state: a pinned clone (prefix+k / palette
@@ -1337,6 +1474,13 @@ impl Application {
     }
 
     fn redraw(&mut self) {
+        // Native-tab mode: one window per session. Route every frame through the per-host renderer
+        // instead of the single-window path (which draws the in-app fleet tab bar / status line —
+        // the OS title-bar tab bar replaces those).
+        if self.native_tabs {
+            self.redraw_hosts();
+            return;
+        }
         let (Some(w), Some(h)) = (
             NonZeroU32::new(self.size.width),
             NonZeroU32::new(self.size.height),
@@ -1354,10 +1498,13 @@ impl Application {
         if let Some(s) = &mut self.surface {
             let _ = s.resize(w, h);
         }
-        // 0x00RRGGBB (softbuffer's native format); starts solid black.
+        // 0x00RRGGBB (softbuffer's native format). Start from the resolved theme background so the
+        // margins around the grid (and any uncovered pixels) read as the theme's canvas rather
+        // than a hard black frame — the grid, chrome panels, and overlays paint over it.
         let mut fb = Framebuffer::new(width, height);
+        let fbargb = argb(255, self.colors.bg.0, self.colors.bg.1, self.colors.bg.2);
         for p in fb.pixels.iter_mut() {
-            *p = 0x0000_0000;
+            *p = fbargb;
         }
         // Render into the CPU framebuffer first (doesn't borrow the surface).
         self.frame = self.frame.wrapping_add(1);
@@ -1395,8 +1542,8 @@ impl Application {
     /// Render the whole frame into the framebuffer.
     fn render(&mut self, fb: &mut Framebuffer) {
         // In focus mode both bars collapse to zero so the grid fills the window edge to edge.
-        let bar_h = if self.focus { 0 } else { self.cell_h as usize };
-        let (tab_h, status_h) = (bar_h, bar_h);
+        let tab_h = self.chrome_top();
+        let status_h = self.chrome_bottom();
         let term_top = tab_h;
         let term_bottom = fb.height.saturating_sub(status_h);
         let gline_px = self.cell_h as usize;
@@ -1455,7 +1602,7 @@ impl Application {
             let cy = term_top + (grid_lines / 2) * gline_px;
             let chord = self.prefix_chord();
             let hint = format!(
-                "no sessions ·  {chord} n  new   {chord} r  attach remote   {chord} /  palette "
+                "no sessions ·  Cmd+T  new tab   {chord} n  new   {chord} r  attach remote   {chord} /  palette "
             );
             let hw = draw_text(fb, &mut self.cache, &hint, 0, cy, self.font_px, CHROME_DIM);
             let cx = fb.width.saturating_sub(hw) / 2;
@@ -1477,11 +1624,30 @@ impl Application {
         // including focus mode where the bar is hidden — hiding the chrome must not silence the
         // fleet: a backgrounded agent finishing still nudges there.
         let activity = self.activity_flags();
+        // Capture the live busy signal and refresh the idle detector's baseline: any tab producing
+        // output right now keeps the loop at full rate for a smooth spinner; a content-length change
+        // wakes an idle loop on the next tick so fresh output is never left un-drawn.
+        self.live_busy = activity.iter().any(|&b| b);
+        self.detect_len.resize(self.app.tabs.len(), 0);
+        for (i, s) in self.app.tabs.iter().enumerate() {
+            self.detect_len[i] = s.history_len();
+        }
+        self.newtab_btn = None;
         if self.focus {
             // Focus mode: no tab bar — the grid owns the full height.
         } else {
-            let tab_base = self.cell_h as usize / 2;
+            // Panel backdrop behind the whole (two-row) tab strip, plus a 1px hairline along its
+            // bottom edge so the chrome reads as a distinct surface separated from the grid rather
+            // than text bleeding into it (native tab-strip look).
+            fill_rect(fb, 0, 0, fb.width, tab_h, CHROME_BG);
+            fill_rect(fb, 0, tab_h.saturating_sub(1), fb.width, 1, CHROME_HAIR);
+            let tab_base = self.chrome_top() / 2;
+            // Raised active-tab sheet: inset from the strip top so rounded corners read as a tab
+            // sticking up, running flush to the strip bottom so it visually connects to content.
+            let inset_top = 3usize;
+            let sheet_h = tab_h.saturating_sub(inset_top);
             let mut x = 6usize;
+            self.tab_rects.clear();
             for (i, s) in self.app.tabs.iter().enumerate() {
                 let active = i == self.app.active;
                 // Color the active tab's dot by its host so a fleet diver reads 'which machine' at a
@@ -1568,7 +1734,19 @@ impl Application {
                 } else {
                     engine_accent(&s.meta.engine, &self.colors.accents)
                 };
-                x += draw_text(
+                let label_w = text_width(&mut self.cache, &label, self.font_px);
+                if active {
+                    // Raised native tab: a rounded-top sheet (Safari/Chrome silhouette) with a thin
+                    // top bevel and a 2px host-color underline at the strip bottom so the current
+                    // session pops and reads 'which machine' at a glance.
+                    filled_round_top(fb, x, inset_top, label_w, sheet_h, 7, CHROME_ACTIVE_BG);
+                    fill_rect(fb, x, inset_top, label_w, 1, CHROME_SHEET_HI);
+                    fill_rect(fb, x, tab_h.saturating_sub(2), label_w, 2, color);
+                } else if self.hover_tab == Some(i) {
+                    // Subtle hover chip so the pointer target reads before you commit to a switch.
+                    filled_round_top(fb, x, inset_top, label_w, sheet_h, 7, CHROME_HOVER);
+                }
+                draw_text(
                     fb,
                     &mut self.cache,
                     &label,
@@ -1576,7 +1754,35 @@ impl Application {
                     tab_base,
                     self.font_px,
                     color,
-                ) + 12;
+                );
+                // The tab's full hit region is its label plus the inter-tab spacing; record it so
+                // hover/close hit-testing tracks exactly what was painted.
+                let x_end = x + label_w + 12;
+                self.tab_rects.push((x, x_end));
+                // A right-edge close × appears on the tab under the pointer (iTerm2/Chrome-style).
+                // The × rides the active pill's right margin; pinned tabs still offer it, but the
+                // click handler refuses and flashes the guard hint instead of closing.
+                if self.hover_tab == Some(i) {
+                    let cw = self.cache.glyph('×', self.font_px, false).0 as usize;
+                    let cxx = x_end.saturating_sub(cw).saturating_sub(2);
+                    let close_color = if active {
+                        // On the active pill the label is already host-tinted; the × stays neutral
+                        // dim so it doesn't fight the busy badge or spin glyph.
+                        CHROME_DIM
+                    } else {
+                        CHROME_FG
+                    };
+                    draw_text(
+                        fb,
+                        &mut self.cache,
+                        "×",
+                        cxx,
+                        tab_base,
+                        self.font_px,
+                        close_color,
+                    );
+                }
+                x = x_end;
                 if x > fb.width.saturating_sub(20) {
                     // Tabs past the window edge get clipped with no hint. Show how many are hidden
                     // so a fleet diver knows the bar is truncating rather than assuming fewer tabs.
@@ -1640,12 +1846,34 @@ impl Application {
                     &mut self.cache,
                     &triage,
                     fb.width
-                        .saturating_sub((triage.chars().count() * self.cell_w as usize) + 24),
+                        .saturating_sub((triage.chars().count() * self.cell_w as usize) + 46),
                     tab_base,
                     self.font_px,
                     if down > 0 { CHROME_ERR } else { CHROME_DIM },
                 );
             }
+            // "New tab" (+) at the strip's right edge — the universal native affordance
+            // (Chrome/Safari/iTerm2). The hover chip matches the active-tab sheet so it reads as a
+            // tab you can drop a new one into; a click (via `newtab_btn` hit-testing) opens the
+            // New-Session picker.
+            let btn_w = 18usize;
+            let btn_x = fb.width.saturating_sub(btn_w + 6);
+            let hx = self.cursor.0 as usize;
+            let hover_new =
+                self.cursor.1 < self.chrome_top() as f64 && hx >= btn_x && hx < btn_x + btn_w;
+            if hover_new {
+                filled_round_top(fb, btn_x, inset_top, btn_w, sheet_h, 6, CHROME_ACTIVE_BG);
+            }
+            self.newtab_btn = Some((btn_x, 0, btn_w, tab_h));
+            draw_text(
+                fb,
+                &mut self.cache,
+                "+",
+                btn_x + 5,
+                tab_base,
+                self.font_px,
+                if hover_new { WHITE } else { CHROME_FG },
+            );
         } // end if self.focus (tab bar)
 
         // Status line (bottom row): left = session info, right = hints.
@@ -1655,6 +1883,25 @@ impl Application {
         if self.focus {
             // Focus mode: no status line either — just the grid.
         } else {
+            // Panel backdrop behind the status line (bottom row), same surface as the tab bar.
+            fill_rect(
+                fb,
+                0,
+                fb.height.saturating_sub(status_h),
+                fb.width,
+                status_h,
+                CHROME_BG,
+            );
+            // Top hairline on the status strip, mirroring the tab strip's bottom hairline, so the
+            // two chrome bars bookend the grid with the same 1px edge (native panel symmetry).
+            fill_rect(
+                fb,
+                0,
+                fb.height.saturating_sub(status_h),
+                fb.width,
+                1,
+                CHROME_HAIR,
+            );
             let mut info = String::new();
             if let Some(s) = self.app.active_session() {
                 let link = if s.alive() {
@@ -1742,6 +1989,32 @@ impl Application {
                 self.font_px,
                 CHROME_FG,
             );
+            // While the prefix is armed (typed, next key is a command), show a distinct chip so the
+            // user sees we're waiting for a command — and understands why the next key is consumed
+            // rather than typed. This is how tmux-family UIs communicate the mode.
+            if self.prefix_down {
+                let chip = format!("  {} ", crate::keys::prefix_label(&self.prefix_key));
+                let cw = text_width(&mut self.cache, &chip, self.font_px);
+                let px0 = 6;
+                let top = status_base.saturating_sub(self.font_px as usize);
+                fill_rect(
+                    fb,
+                    px0,
+                    top,
+                    cw,
+                    self.font_px as usize + 4,
+                    CHROME_ACTIVE_BG,
+                );
+                draw_text(
+                    fb,
+                    &mut self.cache,
+                    &chip,
+                    px0,
+                    status_base,
+                    self.font_px,
+                    WHITE,
+                );
+            }
             let hints = " prefix+/ palette  prefix+a broadcast  prefix+h search all  prefix+n new  prefix+r remote  prefix+s fleet  prefix+o busy  prefix+[ copy  prefix+p paste  prefix+l last  prefix+? help  prefix+q quit ";
             let hw = draw_text(
                 fb,
@@ -1761,7 +2034,7 @@ impl Application {
             {
                 for px in hx.min(fb.width)..fb.width {
                     if py < fb.height {
-                        fb.pixels[py * fb.width + px] = 0;
+                        fb.pixels[py * fb.width + px] = CHROME_BG_PX;
                     }
                 }
             }
@@ -1829,7 +2102,11 @@ impl Application {
             );
         }
 
-        // Overlays.
+        // Overlays render as modal dialogs: dim the whole frame first so the terminal content below
+        // recedes and the overlay's own text is readable instead of fighting bright agent output.
+        if self.app.overlay != Overlay::None {
+            fb.dim(0.38);
+        }
         match self.app.overlay {
             Overlay::Palette => self.render_palette(fb),
             Overlay::NewSession => self.render_new_session(fb),
@@ -1852,11 +2129,34 @@ impl Application {
         if self.hover_tab.is_some() {
             self.render_tooltip(fb);
         }
+        // The right-click context menu draws on top of everything, including the tooltip.
+        if self.ctx.is_some() {
+            self.render_ctx_menu(fb);
+        }
+    }
+
+    /// Height (device px) of the top chrome strip for the current focus state. The tab bar is a
+    /// two-row strip so the raised native tab silhouette has room to breathe; focus mode hides it.
+    fn chrome_top(&self) -> usize {
+        if self.focus {
+            0
+        } else {
+            self.cell_h as usize * 2
+        }
+    }
+
+    /// Height (device px) of the bottom status strip for the current focus state.
+    fn chrome_bottom(&self) -> usize {
+        if self.focus {
+            0
+        } else {
+            self.cell_h as usize
+        }
     }
 
     fn overlay_base_y(&self) -> (usize, usize) {
         let line_px = self.font_px as usize + 6;
-        (self.cell_h as usize + 4, line_px)
+        (self.chrome_top() + 4, line_px)
     }
 
     /// Hover tooltip: a small popover under the hovered tab showing that session's live tail, so a
@@ -1876,7 +2176,7 @@ impl Application {
             .cursor
             .0
             .clamp(6.0, (self.size.width.max(60) - 40) as f64)) as usize;
-        let base_y = self.cell_h as usize + 8;
+        let base_y = self.chrome_top() + 8;
 
         // A busy tab's live screen is a moving blur (new chars land every frame), so show its
         // settled scrollback — the freshly-printed rows that have frozen in history — for a stable
@@ -1930,7 +2230,7 @@ impl Application {
         // without the pointer having to find the tab chip itself.
         self.tooltip_box = Some((px0, py0, panel_w, panel_h));
         // Fill the panel background (dim near-black) then a soft border.
-        let bg = argb(255, 0x12, 0x12, 0x16);
+        let bg = CHROME_BG_PX;
         for py in py0..(py0 + panel_h).min(fb.height) {
             for px in px0..(px0 + panel_w).min(fb.width) {
                 fb.pixels[py * fb.width + px] = bg;
@@ -1986,6 +2286,9 @@ impl Application {
             let s = &self.app.tabs[i];
             let sel = row == self.app.selected;
             let color = if sel { WHITE } else { CHROME_DIM };
+            if sel {
+                overlay_row_sel(fb, base_y + (row + 1) * line_px, line_px, 18);
+            }
             let name = s.meta.name.clone().unwrap_or_else(|| s.meta.engine.clone());
             // Compact status flags so a jump carries context: live/pin/mute next to the name.
             let live = if s.alive() { "" } else { "○" };
@@ -2091,6 +2394,9 @@ impl Application {
                 "✗"
             };
             let line = format!("  {}  {}  {}", e.id, e.label, mark);
+            if sel {
+                overlay_row_sel(fb, base_y + (i + 3) * line_px, line_px, 18);
+            }
             draw_text(
                 fb,
                 &mut self.cache,
@@ -2185,6 +2491,9 @@ impl Application {
             let live = s.is_live();
             let sel = row == self.app.selected;
             let mark = if live { "●" } else { "○" };
+            if sel {
+                overlay_row_sel(fb, base_y + (row + 1) * line_px, line_px, 18);
+            }
             let color = if sel {
                 WHITE
             } else if live {
@@ -2394,10 +2703,7 @@ impl Application {
             ("quit", "quit"),
         ] {
             if action.is_empty() {
-                all.push((
-                    self.prefix_chord(),
-                    "prefix (then a command)".to_string(),
-                ));
+                all.push((self.prefix_chord(), "prefix (then a command)".to_string()));
             } else {
                 all.push((self.prefix_label(action), desc.to_string()));
             }
@@ -2407,10 +2713,16 @@ impl Application {
             ("1-9 / 0 / Tab", "switch tab (0 = last)"),
             ("x / c", "close tab / go to tab 0"),
             ("g / b", "scroll up a page / jump to bottom"),
-            ("Ctrl+= / Ctrl+-", "font zoom (Ctrl+0 reset)"),
+            ("Ctrl/Cmd+= / -", "font zoom (Ctrl/Cmd+0 reset)"),
             ("Ctrl+Enter", "toggle fullscreen"),
             ("PgUp/PgDn", "scrollback"),
             ("Cmd/Ctrl+click", "open URL / file path"),
+            ("Cmd+T / Cmd+N", "new session (new native tab)"),
+            ("Cmd+W", "close active tab/window"),
+            ("Cmd+Q", "quit"),
+            ("Cmd+Shift+[ / ]", "previous / next tab"),
+            ("Cmd+1-9 / 0", "jump straight to that tab (0 = last)"),
+            ("Cmd+Shift+P", "command palette"),
         ] {
             all.push((k.to_string(), d.to_string()));
         }
@@ -2545,16 +2857,28 @@ impl Application {
             self.font_px,
             CHROME_FG,
         );
+        draw_text(
+            fb,
+            &mut self.cache,
+            "  host[:port] = new engine · host[:port]/session = attach existing  ",
+            32,
+            base_y + 2 * line_px,
+            self.font_px,
+            CHROME_DIM,
+        );
         for (i, e) in ENGINES.iter().enumerate() {
             let sel = i == self.app.selected;
             let color = if sel { WHITE } else { CHROME_DIM };
             let line = format!("  {}  {}  {}", e.id, e.label, if sel { "◄" } else { "" });
+            if sel {
+                overlay_row_sel(fb, base_y + (i + 4) * line_px, line_px, 18);
+            }
             draw_text(
                 fb,
                 &mut self.cache,
                 &line,
                 32,
-                base_y + (i + 3) * line_px,
+                base_y + (i + 4) * line_px,
                 self.font_px,
                 color,
             );
@@ -2565,7 +2889,7 @@ impl Application {
                 &mut self.cache,
                 &format!("      {} — {}", e.label, e.desc),
                 32,
-                base_y + (ENGINES.len() + 3) * line_px,
+                base_y + (ENGINES.len() + 4) * line_px,
                 self.font_px,
                 CHROME_DIM,
             );
@@ -2922,6 +3246,7 @@ impl Application {
     /// of its last scrollback lines (WHITE). The selection index is `self.peek_sel`.
     fn render_fleet_grid(&mut self, fb: &mut Framebuffer) {
         let (_, line_px) = self.overlay_base_y();
+        let header_y = self.chrome_top() + 2;
         let n = self.app.tabs.len();
         draw_text(
             fb,
@@ -2932,7 +3257,7 @@ impl Application {
                 if n == 1 { "" } else { "s" }
             ),
             32,
-            self.cell_h as usize + 2,
+            header_y,
             self.font_px,
             WHITE,
         );
@@ -2950,7 +3275,7 @@ impl Application {
         let gcol = self.cell_w as usize;
         let grow = self.cell_h as usize;
         let x0 = 8usize;
-        let y0 = (self.cell_h as usize + 2) + line_px;
+        let y0 = header_y + line_px;
         let inner_w = fb.width.saturating_sub(x0 + 8);
         // Tile geometry is a full text cell (header + up to 3 tail lines). Fit as many columns as
         // the window allows; deeper rows simply clip at the window bottom.
@@ -3140,7 +3465,7 @@ impl Application {
     fn palette_refresh_filter(&mut self) {
         let q = self.palette_q.to_lowercase();
         self.palette_filtered = (0..self.palette_rows.len())
-            .filter(|&i| q.is_empty() || self.palette_rows[i].0.to_lowercase().contains(&q))
+            .filter(|&i| q.is_empty() || fuzzy_match(&q, &self.palette_rows[i].0.to_lowercase()))
             .collect();
         if self.palette_sel >= self.palette_filtered.len() {
             self.palette_sel = self.palette_filtered.len().saturating_sub(1);
@@ -3181,6 +3506,9 @@ impl Application {
         }
         for (row, &i) in self.palette_filtered.iter().enumerate().take(12) {
             let sel = row == self.palette_sel;
+            if sel {
+                overlay_row_sel(fb, base_y + (row + 1) * line_px, line_px, 18);
+            }
             let color = if sel { WHITE } else { CHROME_DIM };
             let line = format!(
                 "  {}  {}",
@@ -3213,7 +3541,9 @@ impl Application {
             }
             RemoteAttach => {
                 self.app.overlay = Overlay::RemoteAttach;
-                self.app.remote_host.clear();
+                // Pre-fill the last server/session attached to so re-connecting is one Enter
+                // (edit only if a different host is wanted).
+                self.app.remote_host = self.app.recent_hosts.first().cloned().unwrap_or_default();
                 self.app.selected = 0;
             }
             SessionPalette => {
@@ -3456,6 +3786,15 @@ impl Application {
     /// Handle a key. Mirrors the TUI's prefix→command→forward logic; prefix here is Ctrl+Space
     /// (tmux-like), so a plain space still types normally.
     fn handle_key(&mut self, key: &Key, mods: &ModifiersState) {
+        // A right-click context menu (when open) owns the next few keypresses: Escape dismisses,
+        // Enter runs the selected row, j/k/arrows navigate. Any other key dismisses it and falls
+        // through to the terminal below.
+        if self.handle_ctx_key(key, mods) {
+            if let Some(w) = &self.window {
+                w.request_redraw();
+            }
+            return;
+        }
         // Normalize the spacebar once: macOS winit reports it as Named(Space), but every text
         // field, the live shell, and the broadcast toggle match Character(" "). Without this a
         // plain space is silently swallowed everywhere; copy mode keeps its own "space = copy"
@@ -3475,8 +3814,10 @@ impl Application {
                 && !self.prefix_alt_notice
             {
                 self.prefix_alt_notice = true;
-                self.flash =
-                    Some((crate::macos::ctrl_space_notice(&self.prefix_key), std::time::Instant::now()));
+                self.flash = Some((
+                    crate::macos::ctrl_space_notice(&self.prefix_key),
+                    std::time::Instant::now(),
+                ));
             }
             self.prefix_down = true;
             return;
@@ -3567,10 +3908,12 @@ impl Application {
                 }
                 Some("remote_attach") => {
                     self.app.overlay = Overlay::RemoteAttach;
-                    self.app.remote_host.clear();
+                    self.app.remote_host = self.app.recent_hosts.first().cloned().unwrap_or_default();
                     self.app.selected = 0;
                 }
-                Some("local_shell") => self.app.spawn_tmux("this-host", "shell"),
+                Some("local_shell") => {
+                    self.app.spawn_tmux("this-host", "shell");
+                }
                 Some("quit") => return true,
                 Some("fleet") => {
                     // Fleet overlay: fetch status on open so it's fresh, then show it. Filter starts
@@ -3619,11 +3962,14 @@ impl Application {
                 Some("close_quiet") => self.close_quiet_tabs(),
                 Some("close_tab") => {
                     let pin = self.pinned.get(self.app.active).copied().unwrap_or(false);
+                    let closed = self.app.active;
                     if !close_tab(&mut self.app, pin) && pin {
                         self.flash = Some((
                             "🔒 pinned — prefix A to unpin first".to_string(),
                             std::time::Instant::now(),
                         ));
+                    } else if self.native_tabs {
+                        self.native_remove_host(closed);
                     }
                     self.save_pin_state();
                 }
@@ -3708,8 +4054,90 @@ impl Application {
         false
     }
 
-    /// Normal-typing + overlay navigation.
+    /// True when the frame should keep rendering at full rate right now: something is visibly
+    /// animating or changing that needs frequent repaints. When false the loop can afford its slow
+    /// idle tick, because a static terminal grid doesn't need a full-framebuffer present 60x/sec.
+    fn has_live_animation(&self) -> bool {
+        if self.app.overlay != Overlay::None {
+            return true;
+        }
+        if self.copy_mode || self.ctx.is_some() {
+            return true;
+        }
+        if self.tooltip_box.is_some() || self.hover_tab.is_some() || self.flash.is_some() {
+            return true;
+        }
+        // A tab producing output right now drives the busy spinner, so keep it smooth while it's
+        // actually pouring (not merely carrying an unread badge — a quiet badge is static and needs
+        // no full-rate pump). Uses the per-frame live signal, not cumulative `grew_delta`, so a
+        // backgrounded tab with unseen output doesn't peg the loop forever.
+        if self.live_busy {
+            return true;
+        }
+        let now = std::time::Instant::now();
+        if self.bell_until.iter().any(|t| t.is_some_and(|tt| tt > now))
+            || self
+                .recover_until
+                .iter()
+                .any(|t| t.is_some_and(|tt| tt > now))
+        {
+            return true;
+        }
+        false
+    }
+
     fn forward_key(&mut self, key: &Key, mods: &ModifiersState) {
+        // Native macOS menu shortcuts. We don't install an AppKit menu (yet), so on macOS these
+        // arrive here as ordinary key events — and without this intercept they were forwarded to the
+        // session as plain characters (Cmd+T typed "t", Cmd+Q typed "q"). Route them to the same
+        // actions the prefix does. The decision is pure (`cmd_shortcut`) so it's unit-tested; this
+        // method only executes the chosen action.
+        let sc = cmd_shortcut(key, mods);
+        match sc {
+            CmdShortcut::NewSession => {
+                self.app.overlay = Overlay::NewSession;
+                self.app.select_default_engine();
+                self.new_cwd = self.app.last_dirs.first().cloned().unwrap_or_default();
+            }
+            CmdShortcut::CloseActive => {
+                // Closing a native host window needs the event loop we only hold in `about_to_wait`.
+                self.close_active_requested = true;
+            }
+            CmdShortcut::Quit => self.quit(),
+            CmdShortcut::NextTab => {
+                if !self.app.tabs.is_empty() {
+                    let n = self.app.tabs.len();
+                    self.set_active((self.app.active + 1) % n);
+                }
+            }
+            CmdShortcut::PrevTab => {
+                if !self.app.tabs.is_empty() {
+                    let n = self.app.tabs.len();
+                    self.set_active((self.app.active + n - 1) % n);
+                }
+            }
+            CmdShortcut::CommandPalette => {
+                self.palette_q.clear();
+                self.palette_sel = 0;
+                self.palette_rows = PaletteAction::all_rows();
+                self.app.overlay = Overlay::CommandPalette;
+            }
+            CmdShortcut::GotoTab(i) => {
+                if !self.app.tabs.is_empty() {
+                    // `0` was encoded as usize::MAX → the last tab (mirrors prefix+0).
+                    let idx = if i == usize::MAX {
+                        self.app.tabs.len() - 1
+                    } else {
+                        i.min(self.app.tabs.len() - 1)
+                    };
+                    self.set_active(idx);
+                }
+            }
+            CmdShortcut::None => {}
+        }
+        if sc != CmdShortcut::None {
+            return;
+        }
         match self.app.overlay {
             Overlay::Palette => {
                 match key {
@@ -3753,7 +4181,12 @@ impl Application {
                                 } else {
                                     Some(self.new_cwd.trim().to_string())
                                 };
-                                self.app.spawn_local("this-host", e, cwd);
+                                if let Some(err) = self.app.spawn_local("this-host", e, cwd) {
+                                    self.flash = Some((format!("⚠ {err}"), std::time::Instant::now()));
+                                    // Keep the picker open on failure so a bad cwd/engine can be
+                                    // fixed and retried instead of forcing a full retype.
+                                    return;
+                                }
                                 self.app.overlay = Overlay::None;
                             }
                         }
@@ -3778,24 +4211,62 @@ impl Application {
                     Key::Character(c) => self.app.remote_host.push_str(c),
                     Key::Named(n) => match n {
                         winit::keyboard::NamedKey::Enter => {
-                            if let Some(e) = self.app.selected_engine() {
-                                let raw = self.app.remote_host.trim();
-                                let (host, port) = if raw.is_empty() {
-                                    (
-                                        "127.0.0.1".to_string(),
-                                        crate::harness::HARNESS_PORT_DEFAULT,
-                                    )
-                                } else if let Some((h, p)) = raw.split_once(':') {
-                                    (
-                                        h.to_string(),
-                                        p.parse().unwrap_or(crate::harness::HARNESS_PORT_DEFAULT),
-                                    )
-                                } else {
-                                    (raw.to_string(), crate::harness::HARNESS_PORT_DEFAULT)
-                                };
-                                self.app.spawn_tunnel(&host, port, e);
-                                self.app.overlay = Overlay::None;
+                            let raw = self.app.remote_host.trim();
+                            // `host[:port]` = spawn a fresh engine; `host[:port]/session` = attach an
+                            // existing remote tmux session without spawning anything (no engine pick).
+                            let (addr, attach) = parse_remote_attach(raw);
+                            let (host, port) = if addr.is_empty() {
+                                (
+                                    "127.0.0.1".to_string(),
+                                    crate::harness::HARNESS_PORT_DEFAULT,
+                                )
+                            } else if let Some((h, p)) = addr.split_once(':') {
+                                (
+                                    h.to_string(),
+                                    p.parse().unwrap_or(crate::harness::HARNESS_PORT_DEFAULT),
+                                )
+                            } else {
+                                (addr, crate::harness::HARNESS_PORT_DEFAULT)
+                            };
+                            let label = format!("{}:{port}", if host.is_empty() { "?" } else { &host });
+                            // Snapshot whether this is an attach (vs a fresh spawn) and the session
+                            // name before `attach` is moved into the match below, so the success
+                            // toast can describe what actually kicked off.
+                            let is_attach = attach.is_some();
+                            let attach_name = attach.clone().unwrap_or_default();
+                            let err = match attach {
+                                Some(session) => {
+                                    self.app.spawn_tunnel_attach(&host, port, &session)
+                                }
+                                None => self.app.selected_engine().and_then(|e| {
+                                    self.app.spawn_tunnel(&host, port, e)
+                                }),
+                            };
+                            // A failed remote connect must not be silent: flash the real reason so a
+                            // diver knows the daemon/session wasn't reached (host down, wrong port,
+                            // no such session) instead of the tab just never appearing.
+                            if let Some(e) = err {
+                                self.flash = Some((
+                                    format!("⚠ {label}: {e}"),
+                                    std::time::Instant::now(),
+                                ));
+                                // Keep the overlay open (and the typed address) so a typo'd host can
+                                // be corrected and re-submitted rather than lost and retyped.
+                                return;
                             }
+                            // Success feedback: connecting to a faraway host shouldn't be a silent
+                            // "did anything happen?" — flash what just kicked off. Attach resumes an
+                            // existing session; spawn starts a fresh engine on that machine.
+                            let ok = if is_attach {
+                                format!("attached {attach_name} @ {label} ✓")
+                            } else {
+                                format!(
+                                    "connecting {} @ {label} …",
+                                    self.app.selected_engine().unwrap_or("engine")
+                                )
+                            };
+                            self.flash = Some((ok, std::time::Instant::now()));
+                            self.app.overlay = Overlay::None;
                         }
                         winit::keyboard::NamedKey::Escape => self.app.overlay = Overlay::None,
                         winit::keyboard::NamedKey::ArrowDown => {
@@ -4196,9 +4667,10 @@ impl Application {
 
         // Normal mode: send keystrokes to the active session.
         if self.app.overlay == Overlay::None {
-            // Font zoom (Ctrl+= / Ctrl+- / Ctrl+0 to reset) — captured before anything reaches the
-            // shell, like any terminal's, and a persistent per-window preference.
-            if mods.control_key() {
+            // Font zoom (Ctrl/Cmd+= / - / 0 to reset) — captured before anything reaches the shell,
+            // like any terminal's, and a persistent per-window preference. Both the Ctrl and the
+            // Cmd (macOS ⌘) forms map, matching how iTerm2 lets you zoom either way.
+            if mods.control_key() || mods.super_key() {
                 if let Key::Character(c) = key {
                     match c.as_str() {
                         "=" | "+" => {
@@ -4335,6 +4807,12 @@ impl Application {
                     Key::Named(n) => match n {
                         winit::keyboard::NamedKey::Enter => s.write(b"\r"),
                         winit::keyboard::NamedKey::Backspace => s.write(b"\x7f"),
+                        // Shift+Tab must arrive as the reverse-tab sequence (`ESC [ Z`), not a bare
+                        // `\t` — dropping the modifier makes Claude Code / shells read it as a plain
+                        // Tab and their back-cycling (Shift+Tab) shortcuts silently stop working.
+                        winit::keyboard::NamedKey::Tab if mods.shift_key() => {
+                            s.write(b"\x1b[Z")
+                        }
                         winit::keyboard::NamedKey::Tab => s.write(b"\t"),
                         winit::keyboard::NamedKey::Escape => s.write(b"\x1b"),
                         winit::keyboard::NamedKey::ArrowUp => s.write(b"\x1b[A"),
@@ -4349,113 +4827,401 @@ impl Application {
             }
         }
     }
-}
 
-/// The bytes sent to every session when a broadcast line is committed: the query plus a trailing
-/// newline. A blank query sends nothing (never broadcast a bare newline). Shared free function so
-/// the fan-out formatting is unit-testable without building real `Session`s.
-/// Format a monotonic duration in the most readable compact unit: under a minute as `%ds`,
-/// otherwise `%dm`, `%dh`, or `%dd`. Used for a session's quiet ("idle") age — the readable
-/// inverse of "produced output just now".
-fn fmt_duration(d: std::time::Duration) -> String {
-    let secs = d.as_secs();
-    if secs < 60 {
-        format!("{secs}s")
-    } else if secs < 3600 {
-        format!("{}m", secs / 60)
-    } else if secs < 86400 {
-        format!("{}h", secs / 3600)
-    } else {
-        format!("{}d", secs / 86400)
+    /// Cheaply detect whether any pane produced new scrollback since we last rendered, by comparing
+    /// each session's current history length against the baseline captured at the last render. Only
+    /// consulted while the loop is idle; keeps the idle path near-0% CPU while still waking the
+    /// instant a backgrounded agent prints. Refreshes the baseline here so repeated idle ticks don't
+    /// re-fire on the same content.
+    fn detect_content_change(&mut self) -> bool {
+        let mut changed = false;
+        let n = self.app.tabs.len();
+        self.detect_len.resize(n, 0);
+        for (i, s) in self.app.tabs.iter().enumerate() {
+            let h = s.history_len();
+            if self.detect_len[i] != h {
+                changed = true;
+                self.detect_len[i] = h;
+            }
+        }
+        changed
     }
-}
 
-fn broadcast_bytes(q: &str) -> Vec<u8> {
-    if q.is_empty() {
-        Vec::new()
-    } else {
-        format!("{}\n", q).into_bytes()
+    /// Central repaint request. Native-tab mode repaints EVERY session window (each renders its own
+    /// session); single-window mode repaints the one window. Every `request_redraw` site funnels
+    /// through here so a new mode can't forget a window.
+    fn request_redraw(&self) {
+        if self.native_tabs {
+            for h in &self.hosts {
+                h.window.request_redraw();
+            }
+        }
+        if let Some(w) = &self.window {
+            w.request_redraw();
+        }
     }
-}
 
-/// Next broadcast-history slot when walking `delta` (negative = older). Starting cold (`None`),
-/// Shift+Up grabs the newest entry; Shift+Down wraps to the oldest. Wraps around the history list.
-fn recall_index(n: usize, delta: isize, cur: Option<usize>) -> usize {
-    match cur {
-        Some(i) => (i as isize + delta).rem_euclid(n as isize) as usize,
-        None => {
-            if delta < 0 {
-                n - 1
-            } else {
-                0
+    /// Create a real window hosting `tab`'s session (native-tab mode). Mirrors the geometry/config
+    /// the single-window path uses. None on window/surface creation failure.
+    fn create_host(&mut self, event_loop: &ActiveEventLoop, tab: usize) -> Option<Host> {
+        let size = crate::restore::load_geometry()
+            .map(|(w, h)| Size::Physical(PhysicalSize::new(w, h)))
+            .unwrap_or(Size::Logical(LogicalSize::new(110.0, 34.0)));
+        let attribs = winit::window::Window::default_attributes()
+            .with_title("harness-terminal")
+            .with_inner_size(size)
+            .with_position({
+                // Offset each tab window a little so the native tab bar has distinct siblings to
+                // show; the first window lands where the user last parked it.
+                let (x, y) = crate::restore::load_position().unwrap_or((200, 120));
+                winit::dpi::Position::Physical(winit::dpi::PhysicalPosition::new(
+                    x + 22 * tab as i32,
+                    y + 18 * tab as i32,
+                ))
+            });
+        let w = event_loop.create_window(attribs).ok()?;
+        let wsize = w.inner_size();
+        let w = Rc::new(w);
+        crate::macos::tabs::enable_tabbing(&w);
+        let context = Context::new(Rc::clone(&w)).ok();
+        let surface = context
+            .as_ref()
+            .and_then(|c| Surface::new(c, Rc::clone(&w)).ok());
+        w.request_redraw();
+        Some(Host {
+            window: w,
+            _context: context,
+            surface,
+            size: wsize,
+            tab,
+            grouped: false,
+        })
+    }
+
+    /// Make `idx` (into `hosts`) the focused/looking-at window and keep `self.app.active` aligned to
+    /// its session. A no-op when the index is unchanged.
+    fn focus_host(&mut self, idx: usize) {
+        if idx >= self.hosts.len() || idx == self.active_host {
+            return;
+        }
+        self.active_host = idx;
+        let tab = self.hosts[idx].tab;
+        if tab < self.app.tabs.len() {
+            self.app.active = tab;
+        }
+        self.alias_active();
+        self.request_redraw();
+    }
+
+    /// Point `self.window`/`self.size` at the currently-looked-at host so every shared input/render
+    /// path (key handling, cursor, title sync, metrics) keeps operating on the window the user is
+    /// actually looking at. `self.context`/`self.surface` stay null in native mode — they only back
+    /// the single-window `redraw()` path, which native mode never reaches.
+    fn alias_active(&mut self) {
+        if self.hosts.is_empty() {
+            return;
+        }
+        let hi = self.active_host.min(self.hosts.len() - 1);
+        self.window = Some(Rc::clone(&self.hosts[hi].window));
+        self.size = self.hosts[hi].size;
+        self.app.active = self.hosts[hi]
+            .tab
+            .min(self.app.tabs.len().saturating_sub(1));
+    }
+
+    /// Reconcile `hosts` with the session set (`app.tabs`): create a window for any new tab, drop a
+    /// window whose tab closed, and keep `host.tab`/`active_host`/`app.active` aligned. Runs after
+    /// any spawn/close so a native tab exists for every live session. Best-effort — a window that
+    /// fails to create is skipped rather than aborting the app.
+    fn sync_hosts(&mut self, event_loop: &ActiveEventLoop) {
+        if !self.native_tabs {
+            return;
+        }
+        if self.hosts.is_empty() {
+            // First window: create one host per session (or a bare window with none yet).
+            let n = self.app.tabs.len().max(1);
+            for i in 0..n {
+                if let Some(h) = self.create_host(event_loop, i) {
+                    self.hosts.push(h);
+                } else {
+                    break;
+                }
+            }
+            if self.hosts.is_empty() {
+                return;
+            }
+            // Splice every sibling into the first window's tab group (AppKit `addTabbedWindow:`).
+            let primary = self.hosts[0].window.clone();
+            for h in self.hosts.iter_mut().skip(1) {
+                crate::macos::tabs::join_tab_group(&primary, &h.window);
+                h.grouped = true;
+            }
+            self.hosts[0].grouped = true;
+            self.active_host = 0;
+            self.app.active = 0;
+            self.alias_active();
+            return;
+        }
+        // Keep exactly one window per session, but never drop to zero: a bare window stays up to
+        // host the "no sessions" hint (and the New-Session overlay) until a session exists.
+        let target = self.app.tabs.len().max(1);
+        // A tab closed: drop any host beyond the session count.
+        while self.hosts.len() > target {
+            self.hosts.pop();
+        }
+        // A tab was added: extend hosts to match, splicing each new window into the group.
+        while self.hosts.len() < target {
+            let i = self.hosts.len();
+            match self.create_host(event_loop, i) {
+                Some(h) => {
+                    let primary = self.hosts[0].window.clone();
+                    crate::macos::tabs::join_tab_group(&primary, &h.window);
+                    self.hosts.push(h);
+                    let last = self.hosts.len() - 1;
+                    self.hosts[last].grouped = true;
+                }
+                None => break,
+            }
+        }
+        // Realign each host to its same-index session, then fix the active pointers.
+        for (i, h) in self.hosts.iter_mut().enumerate() {
+            h.tab = i;
+        }
+        self.active_host = self.active_host.min(self.hosts.len().saturating_sub(1));
+        if self.app.active >= self.app.tabs.len() && !self.app.tabs.is_empty() {
+            self.app.active = self.app.tabs.len().saturating_sub(1);
+        }
+        self.alias_active();
+    }
+
+    /// Per-frame native-mode draw: repaint every session window into its own surface, presenting
+    /// each, then re-point the shared aliases at the window the user is looking at.
+    fn redraw_hosts(&mut self) {
+        let n = self.hosts.len();
+        if n == 0 {
+            return;
+        }
+        let active = self.active_host.min(n - 1);
+        for i in 0..n {
+            self.render_host_window(i, i == active);
+        }
+        self.alias_active();
+    }
+
+    /// Render one session window: its own session's grid full-bleed (no in-app chrome), plus the
+    /// app-global overlays when this is the focused window. Presents into the host's own softbuffer
+    /// surface.
+    fn render_host_window(&mut self, i: usize, focused: bool) {
+        let (width, height) = {
+            let h = &self.hosts[i];
+            (h.size.width as usize, h.size.height as usize)
+        };
+        let (Some(w), Some(h)) = (
+            NonZeroU32::new(width as u32),
+            NonZeroU32::new(height as u32),
+        ) else {
+            return;
+        };
+        let mut fb = Framebuffer::new(width, height);
+        let bg = argb(255, self.colors.bg.0, self.colors.bg.1, self.colors.bg.2);
+        for p in fb.pixels.iter_mut() {
+            *p = bg;
+        }
+        self.frame = self.frame.wrapping_add(1);
+        // Point the shared "active session" at this window's session for the duration of the frame.
+        let tab = self.hosts[i].tab.min(self.app.tabs.len().saturating_sub(1));
+        let prev = self.app.active;
+        self.app.active = tab;
+        self.render_host_grid(&mut fb, width, height, focused);
+        self.app.active = prev;
+
+        // Sync the OS window title to its session's live OSC title.
+        if let Some(t) = self.app.tabs.get(tab).and_then(|s| s.live_title()) {
+            let title = format!("{t} — harness-terminal");
+            self.hosts[i].window.set_title(&title);
+        }
+
+        // Present this window's own framebuffer.
+        if let Some(surface) = &mut self.hosts[i].surface {
+            let _ = surface.resize(w, h);
+            if let Ok(mut buffer) = surface.buffer_mut() {
+                for (dst, src) in buffer.iter_mut().zip(fb.pixels.iter()) {
+                    *dst = *src;
+                }
+                let _ = buffer.present();
             }
         }
     }
-}
 
-/// Collect every (tab, line, col) match of the lowercase query across ALL sessions' scrollbacks,
-/// sorted by tab then line. Used by fleet search. Shared free function so the cross-tab + sort
-/// behavior is unit-testable without building real `Session`s (tests pass raw lockable Terms).
-fn collect_fleet_matches(
-    terms: &[Arc<
-        alacritty_terminal::sync::FairMutex<
-            alacritty_terminal::term::Term<crate::session::Listener>,
-        >,
-    >],
-    query_lower: &str,
-) -> Vec<FleetMatch> {
-    let mut out = Vec::new();
-    for (tab, term) in terms.iter().enumerate() {
-        let g = term.lock();
-        // Reuse the public `all_matches` per-tab, tagging each hit with its tab index.
-        for (line, col, _) in crate::render::all_matches(&g, query_lower) {
-            out.push(FleetMatch { tab, line, col });
+    /// Draw a host's session into `fb` as a grid that fills the whole window (native tabs own the
+    /// chrome, so there's no in-app tab bar or status line). When `focused`, the app-global overlays
+    /// (palette, find, context menu, …) paint on top so they appear in the window you're using.
+    fn render_host_grid(
+        &mut self,
+        fb: &mut Framebuffer,
+        width: usize,
+        height: usize,
+        focused: bool,
+    ) {
+        let gline_px = self.cell_h as usize;
+        let gcol_px = self.cell_w as usize;
+        let grid_lines = height.max(1) / gline_px;
+        let grid_cols = width.max(1) / gcol_px;
+
+        // Size this window's session to its grid.
+        if let Some(active) = self.app.active_session() {
+            let g = active.term.lock();
+            let (gl, gc) = (g.screen_lines(), g.columns());
+            drop(g);
+            if gl != grid_lines || gc != grid_cols {
+                let size = TermSize {
+                    lines: grid_lines.max(1),
+                    cols: grid_cols.max(1),
+                };
+                active.resize(size);
+            }
+        }
+
+        // Terminal grid.
+        if let Some(active) = self.app.active_session() {
+            let mut g = active.term.lock();
+            let at_bottom = g.grid().display_offset() == 0;
+            if !active.scrolled() && !at_bottom {
+                use alacritty_terminal::grid::Scroll;
+                g.grid_mut().scroll_display(Scroll::Bottom);
+            }
+            let sel = g.selection.as_ref().and_then(|s| s.to_range(&g));
+            let copy = if self.copy_mode {
+                Some(self.copy_pos)
+            } else {
+                None
+            };
+            draw_grid(
+                fb,
+                &g,
+                self.cell_w,
+                self.cell_h,
+                self.font_px,
+                &mut self.cache,
+                &self.colors,
+                self.find_hit,
+                &self.find_all,
+                sel.as_ref(),
+                copy,
+            );
+        } else {
+            let cy = (grid_lines / 2) * gline_px;
+            let chord = self.prefix_chord();
+            let hint = format!(
+                "no sessions ·  Cmd+T  new tab   {chord} n  new   {chord} r  attach remote   {chord} /  palette "
+            );
+            let hw = draw_text(fb, &mut self.cache, &hint, 0, cy, self.font_px, CHROME_DIM);
+            let cx = width.saturating_sub(hw) / 2;
+            for py in cy.saturating_sub(self.font_px as usize)..(cy + self.font_px as usize) {
+                for px in 0..width {
+                    if py < height {
+                        fb.pixels[py * width + px] = argb(0, 0, 0, 0);
+                    }
+                }
+            }
+            draw_text(fb, &mut self.cache, &hint, cx, cy, self.font_px, CHROME_DIM);
+        }
+
+        // Overlays paint only in the focused window.
+        if focused {
+            if self.app.overlay != Overlay::None {
+                fb.dim(0.38);
+            }
+            match self.app.overlay {
+                Overlay::Palette => self.render_palette(fb),
+                Overlay::NewSession => self.render_new_session(fb),
+                Overlay::RemoteAttach => self.render_remote(fb),
+                Overlay::Find => self.render_find(fb),
+                Overlay::FleetSearch => self.render_fleet_search(fb),
+                Overlay::Fleet => self.render_fleet(fb),
+                Overlay::Help => self.render_help(fb),
+                Overlay::Rename => self.render_rename(fb),
+                Overlay::Broadcast => self.render_broadcast(fb),
+                Overlay::Peek => self.render_peek(fb),
+                Overlay::FleetGrid => self.render_fleet_grid(fb),
+                Overlay::CommandPalette => self.render_command_palette(fb),
+                Overlay::Info => self.render_info(fb),
+                Overlay::None => {}
+            }
+            if self.ctx.is_some() {
+                self.render_ctx_menu(fb);
+            }
         }
     }
-    out.sort_by(|a, b| (a.tab, a.line, a.col).cmp(&(b.tab, b.line, b.col)));
-    out
-}
 
-/// Close the active tab (`x` / prefix+close_tab), unless it's pinned. A pinned tab (prefix+a)
-/// refuses the close with a flash and keeps itself in the bar, so a long-running agent can't be
-/// fat-fingered away — you must unpin first.
-pub(crate) fn close_tab(app: &mut App, pinned: bool) -> bool {
-    if app.tabs.is_empty() {
-        return false;
+    /// Closing a native tab window: destroy that window + its session, realign indices, and exit the
+    /// whole app when it was the last window. The OS × on the last tab quits (matching how the
+    /// single-window close behaves) rather than leaving a zero-window app.
+    fn close_native_tab(&mut self, hi: usize, event_loop: &ActiveEventLoop) {
+        if hi >= self.hosts.len() {
+            return;
+        }
+        if self.hosts.len() <= 1 {
+            self.app.save_all_scrollbacks();
+            crate::restore::save(&self.app.tab_specs());
+            self.save_muted_state();
+            crate::restore::save_geometry(self.size.width, self.size.height);
+            event_loop.exit();
+            return;
+        }
+        let tab = self.hosts[hi].tab;
+        // Shut the session down (stash an undo spec) exactly as the in-app close does.
+        if let Some(s) = self.app.tabs.get(tab) {
+            self.app.last_closed = Some(crate::restore::TabSpec {
+                kind: s.kind().to_string(),
+                host: s.meta.host.clone(),
+                engine: s.meta.engine.clone(),
+                port: None,
+                session: s.attach_session.clone(),
+                name: s.meta.name.clone(),
+            });
+        }
+        self.forget_tab(tab);
+        self.app.tabs.remove(tab);
+        // Destroy the window (drops the last strong Rc → window closes).
+        self.hosts.remove(hi);
+        for h in self.hosts.iter_mut() {
+            if h.tab > tab {
+                h.tab -= 1;
+            }
+        }
+        if self.app.active >= self.app.tabs.len() {
+            self.app.active = self.app.tabs.len().saturating_sub(1);
+        }
+        if self.active_host >= self.hosts.len() {
+            self.active_host = self.hosts.len().saturating_sub(1);
+        }
+        self.save_pin_state();
+        crate::restore::save(&self.app.tab_specs());
+        self.alias_active();
+        self.request_redraw();
     }
-    if app.active < app.tabs.len() && pinned {
-        return false;
-    }
-    // Stash the closed tab's spec so prefix+u can undo a mistaken close. Kind + host + engine
-    // are enough to re-spawn the same identity (TMUX/etc. re-attach to the same pane@host).
-    if let Some(s) = app.tabs.get(app.active) {
-        app.last_closed = Some(crate::restore::TabSpec {
-            kind: s.kind().to_string(),
-            host: s.meta.host.clone(),
-            engine: s.meta.engine.clone(),
-            port: None,
-            name: s.meta.name.clone(),
-        });
-    }
-    app.tabs.remove(app.active);
-    if app.active >= app.tabs.len() {
-        app.active = app.tabs.len().saturating_sub(1);
-    }
-    crate::restore::save(&app.tab_specs());
-    true
-}
 
-/// Scroll the active session's viewport by `delta` lines into history (positive = up/back).
-/// Marks the view as user-scrolled so render doesn't snap us back to the live line.
-fn scroll_active(app: &Application, delta: i32) {
-    use alacritty_terminal::grid::Scroll;
-    if let Some(active) = app.app.active_session() {
-        let mut g = active.term.lock();
-        g.grid_mut().scroll_display(Scroll::Delta(delta));
+    /// Drop the native window for the session that was just closed at index `closed` (native-tab
+    /// mode). The app-level tab removal has already happened; this keeps `hosts`/`active_host`/tab
+    /// indices aligned with the shrunk session set. No-op outside native mode.
+    fn native_remove_host(&mut self, closed: usize) {
+        if !self.native_tabs || closed >= self.hosts.len() {
+            return;
+        }
+        self.hosts.remove(closed);
+        for h in self.hosts.iter_mut() {
+            if h.tab > closed {
+                h.tab -= 1;
+            }
+        }
+        if self.active_host >= self.hosts.len() {
+            self.active_host = self.hosts.len().saturating_sub(1);
+        }
+        self.alias_active();
+        self.request_redraw();
     }
-}
 
-impl Application {
     /// Move the broadcast overlay's recall cursor by `delta` slots (`-1` older, `+1` newer) and set
     /// the query to the recalled line. Wraps around the history; a fresh (unsaved) line sits above the
     /// newest entry and is yielded back to when stepping past the top. No-op with an empty history.
@@ -4520,7 +5286,19 @@ impl Application {
             return None;
         }
         // The tab bar occupies the first cell row, vertically centered in it.
-        if y < 0.0 || y >= self.cell_h as f64 || x < 6.0 {
+        if y < 0.0 || y >= self.chrome_top() as f64 || x < 6.0 {
+            return None;
+        }
+        // Prefer the rects recorded by the last paint so hit-testing matches the visible bar
+        // exactly (badges/busy spin included); fall back to the cheap geometric estimate below
+        // before the first frame is drawn.
+        if self.tab_rects.len() == self.app.tabs.len() && !self.tab_rects.is_empty() {
+            for (i, &(x0, x1)) in self.tab_rects.iter().enumerate() {
+                let fx = x as usize;
+                if fx >= x0 && fx < x1 {
+                    return Some(i);
+                }
+            }
             return None;
         }
         let mut cx = 6i64;
@@ -4550,6 +5328,24 @@ impl Application {
             }
         }
         None
+    }
+
+    /// Is the pointer over a tab's close × (the rightmost ~14px of a hovered tab's painted rect)?
+    /// Returns the tab index. `tab_at` has already decided the pointer is in the tab bar.
+    fn tab_close_at(&self, x: f64, y: f64) -> Option<usize> {
+        let hi = self.hover_tab?;
+        // The close × only lives inside the tab bar's own row; a click lower in the window must
+        // never be treated as a tab close even if the tracker still holds a stale hover tab.
+        if y < 0.0 || y >= self.chrome_top() as f64 {
+            return None;
+        }
+        let (_, x1) = *self.tab_rects.get(hi)?;
+        let fx = x as usize;
+        if fx >= x1.saturating_sub(14) && fx < x1 {
+            Some(hi)
+        } else {
+            None
+        }
     }
 
     /// Does a URL begin/overlap the cell at framebuffer (x, y)? Used to show the hand cursor over
@@ -4789,6 +5585,375 @@ impl Application {
             let _ = cb.set_text(text);
         }
     }
+
+    /// Open the right-click context menu at the pointer, populated contextually for the current
+    /// tab (plus "Open Link" / "Search for Selection" only when they apply).
+    fn open_context_menu(&mut self, x: f64, y: f64) {
+        if self.app.active_session().is_none() {
+            return;
+        }
+        let sel = self.selected_text();
+        let over_link = self.cell_has_link(x, y);
+        let mut items = Vec::new();
+        items.push(CtxAction::Copy);
+        items.push(CtxAction::Paste);
+        if over_link {
+            items.push(CtxAction::OpenLink);
+        }
+        items.push(CtxAction::SelectAll);
+        if !sel.is_empty() {
+            items.push(CtxAction::SearchSelection);
+        }
+        items.push(CtxAction::Separator);
+        items.push(CtxAction::NewSession);
+        items.push(CtxAction::CloseTab);
+
+        let row_h = (self.cell_h as usize).max(20);
+        let sep_h = row_h / 2;
+        let pad = 12;
+        // Panel width = widest label + padding; height = one row per action + a half-row per divider.
+        let mut w = 0usize;
+        let mut h = 0usize;
+        let mut first_sel = None;
+        for (i, &a) in items.iter().enumerate() {
+            if a == CtxAction::Separator {
+                h += sep_h;
+            } else {
+                let lw = text_width(&mut self.cache, ctx_label(a), self.font_px);
+                w = w.max(lw);
+                h += row_h;
+                if first_sel.is_none() {
+                    first_sel = Some(i);
+                }
+            }
+        }
+        w += pad * 2;
+        let vw = self.size.width as usize;
+        let vh = self.size.height as usize;
+        let px = (x as usize).saturating_sub(4).min(vw.saturating_sub(w));
+        let py = (y as usize).saturating_sub(4).min(vh.saturating_sub(h));
+        self.ctx = Some(CtxMenu {
+            px,
+            py,
+            w,
+            items,
+            sel: first_sel.unwrap_or(0),
+            mx: x,
+            my: y,
+        });
+    }
+
+    /// The active session's current text selection ("" when none / empty).
+    fn selected_text(&self) -> String {
+        let Some(active) = self.app.active_session() else {
+            return String::new();
+        };
+        let g = active.term.lock();
+        g.selection_to_string().unwrap_or_default()
+    }
+
+    /// Move the context-menu keyboard selection by `delta` (±1), skipping divider rows.
+    fn ctx_navigate(&mut self, delta: isize) {
+        let Some(menu) = self.ctx.as_ref() else {
+            return;
+        };
+        let n = menu.items.len() as isize;
+        if n == 0 {
+            return;
+        }
+        let mut i = menu.sel as isize;
+        for _ in 0..n {
+            i = (i + delta).rem_euclid(n);
+            if menu.items[i as usize] != CtxAction::Separator {
+                self.ctx.as_mut().unwrap().sel = i as usize;
+                return;
+            }
+        }
+    }
+
+    /// Return the action whose row contains the given pixel position, or None.
+    fn ctx_action_at(&self, x: f64, y: f64) -> Option<CtxAction> {
+        let menu = self.ctx.as_ref()?;
+        let row_h = (self.cell_h as usize).max(20);
+        let sep_h = row_h / 2;
+        let (px, py) = (menu.px as i64, menu.py as i64);
+        let (mx, my) = (x as i64, y as i64);
+        if mx < px || mx >= px + menu.w as i64 || my < py {
+            return None;
+        }
+        let mut yy = py;
+        for &a in &menu.items {
+            if a == CtxAction::Separator {
+                yy += sep_h as i64;
+                continue;
+            }
+            if my >= yy && my < yy + row_h as i64 {
+                return Some(a);
+            }
+            yy += row_h as i64;
+        }
+        None
+    }
+
+    /// Run a context-menu action. "Close Tab" mirrors the `prefix+x` handler so pin-guarding and
+    /// persistence behave identically.
+    fn run_ctx_action(&mut self, a: CtxAction) {
+        match a {
+            CtxAction::Copy => {
+                self.copy_selection();
+                self.flash = Some(("copied selection".to_string(), std::time::Instant::now()));
+            }
+            CtxAction::Paste => self.paste_clipboard(),
+            CtxAction::OpenLink => {
+                let (mx, my) = self
+                    .ctx
+                    .as_ref()
+                    .map(|c| (c.mx, c.my))
+                    .unwrap_or((0.0, 0.0));
+                self.mouse_open(mx, my);
+            }
+            CtxAction::SelectAll => {
+                self.select_all();
+            }
+            CtxAction::SearchSelection => self.search_selection(),
+            CtxAction::Separator => {}
+            CtxAction::NewSession => {
+                self.app.overlay = Overlay::NewSession;
+            }
+            CtxAction::CloseTab => {
+                let pin = self.pinned.get(self.app.active).copied().unwrap_or(false);
+                let closed = self.app.active;
+                if !close_tab(&mut self.app, pin) && pin {
+                    self.flash = Some((
+                        "🔒 pinned — prefix A to unpin first".to_string(),
+                        std::time::Instant::now(),
+                    ));
+                } else if self.native_tabs {
+                    self.native_remove_host(closed);
+                }
+                self.save_pin_state();
+            }
+        }
+    }
+
+    /// Select the entire scrollback (history + visible) as one terminal selection, then copy it —
+    /// the standard "Select All" terminal gesture. No visible motion cue beyond the highlight.
+    fn select_all(&mut self) {
+        let Some(active) = self.app.active_session() else {
+            return;
+        };
+        use alacritty_terminal::index::{Column, Point, Side};
+        use alacritty_terminal::selection::{Selection, SelectionType};
+        let (top, bottom) = {
+            let g = active.term.lock();
+            let grid = g.grid();
+            (grid.topmost_line(), grid.bottommost_line())
+        };
+        let cols_last = {
+            let g = active.term.lock();
+            Column(g.columns().saturating_sub(1))
+        };
+        let mut g = active.term.lock();
+        let mut sel = Selection::new(
+            SelectionType::Simple,
+            Point::new(top, Column(0)),
+            Side::Left,
+        );
+        sel.update(Point::new(bottom, cols_last), Side::Right);
+        g.selection = Some(sel);
+        drop(g);
+        self.copy_selection();
+        self.flash = Some((
+            "selected + copied entire scrollback".to_string(),
+            std::time::Instant::now(),
+        ));
+    }
+
+    /// Open the search overlay with the current selection as the query, jumping to the first match.
+    fn search_selection(&mut self) {
+        let sel = self.selected_text();
+        if sel.is_empty() {
+            return;
+        }
+        self.find_query = sel;
+        self.find_hit = None;
+        self.find_all = Vec::new();
+        self.app.selected = 0;
+        self.app.overlay = Overlay::Find;
+        self.find_recompute(None);
+    }
+
+    /// Drop tab-parallel bookkeeping for index `i` before the tab itself is removed, so every
+    /// vector that's indexed by tab stays in lockstep with `tabs` (a later frame's `resize(n, …)`
+    /// only truncates the tail and would otherwise leave a shifted stale flag at `i`).
+    fn forget_tab(&mut self, i: usize) {
+        // Drop the slot from every tab-parallel vector, split by element type (Rust arrays are
+        // homogeneous, so each type is removed in its own pass).
+        if i < self.seen_history.len() {
+            self.seen_history.remove(i);
+        }
+        if i < self.grew_delta.len() {
+            self.grew_delta.remove(i);
+        }
+        for v in [
+            &mut self.notified,
+            &mut self.muted,
+            &mut self.pinned,
+            &mut self.grid_marks,
+            &mut self.broadcast_targets,
+            &mut self.was_down,
+        ] {
+            if i < v.len() {
+                v.remove(i);
+            }
+        }
+        for v in [&mut self.bell_until, &mut self.recover_until] {
+            if i < v.len() {
+                v.remove(i);
+            }
+        }
+        if i < self.last_output.len() {
+            self.last_output.remove(i);
+        }
+        // Stale pointer state referencing the removed slot is reset so it can't dangle.
+        self.hover_tab = None;
+        self.drag_tab = None;
+        self.tooltip_box = None;
+    }
+
+    /// Close the tab at an arbitrary index (not just the active one), used by the tab-bar close ×.
+    /// Honors the pin guard, stashes an undo spec, and keeps every parallel bookkeeping vector in
+    /// sync. Returns true when a tab was actually closed.
+    fn close_tab_at(&mut self, i: usize) -> bool {
+        if i >= self.app.tabs.len() {
+            return false;
+        }
+        if self.pinned.get(i).copied().unwrap_or(false) {
+            self.flash = Some((
+                "🔒 pinned — prefix A to unpin first".to_string(),
+                std::time::Instant::now(),
+            ));
+            return false;
+        }
+        if let Some(s) = self.app.tabs.get(i) {
+            self.app.last_closed = Some(crate::restore::TabSpec {
+                kind: s.kind().to_string(),
+                host: s.meta.host.clone(),
+                engine: s.meta.engine.clone(),
+                port: None,
+                session: s.attach_session.clone(),
+                name: s.meta.name.clone(),
+            });
+        }
+        self.forget_tab(i);
+        self.app.tabs.remove(i);
+        if self.app.active == i {
+            self.app.active = self.app.active.min(self.app.tabs.len().saturating_sub(1));
+        } else if self.app.active > i {
+            self.app.active -= 1;
+        }
+        self.save_pin_state();
+        crate::restore::save(&self.app.tab_specs());
+        true
+    }
+
+    /// Keyboard handling while the context menu is open: Escape dismisses, Enter runs, j/k/arrows
+    /// navigate, and any other key dismisses the menu and lets the keystroke fall through.
+    fn handle_ctx_key(&mut self, key: &Key, mods: &ModifiersState) -> bool {
+        if self.app.overlay != Overlay::None || self.ctx.is_none() {
+            return false;
+        }
+        let mut handled = true;
+        match key {
+            Key::Named(winit::keyboard::NamedKey::Escape) => {
+                self.ctx = None;
+            }
+            Key::Named(winit::keyboard::NamedKey::Enter) => {
+                let act = self.ctx.as_ref().and_then(|m| m.items.get(m.sel).copied());
+                if let Some(a) = act {
+                    self.run_ctx_action(a);
+                }
+                self.ctx = None;
+            }
+            Key::Named(winit::keyboard::NamedKey::ArrowUp) => self.ctx_navigate(-1),
+            Key::Named(winit::keyboard::NamedKey::ArrowDown) => self.ctx_navigate(1),
+            Key::Character(c) if c == "k" => self.ctx_navigate(-1),
+            Key::Character(c) if c == "j" => self.ctx_navigate(1),
+            _ => {
+                // Any other key: dismiss the menu so normal typing / shortcut flow resumes.
+                self.ctx = None;
+                handled = false;
+            }
+        }
+        let _ = mods;
+        handled
+    }
+
+    /// Draw the right-click context menu popover on top of everything.
+    fn render_ctx_menu(&mut self, fb: &mut Framebuffer) {
+        let Some(menu) = self.ctx.as_ref() else {
+            return;
+        };
+        let row_h = (self.cell_h as usize).max(20);
+        let sep_h = row_h / 2;
+        let (px, py, w) = (menu.px, menu.py, menu.w);
+        // Compute panel height to know where to stop the backdrop.
+        let mut ph = 0usize;
+        for &a in &menu.items {
+            ph += if a == CtxAction::Separator {
+                sep_h
+            } else {
+                row_h
+            };
+        }
+        // Backdrop + 1px border (slightly lighter than the tab bar so it floats above the grid).
+        fill_rect(fb, px, py, w, ph, CHROME_BG);
+        let border = (0x3a, 0x3a, 0x44);
+        for dx in 0..w {
+            fb.set(px + dx, py, argb(255, border.0, border.1, border.2));
+            if ph > 1 {
+                fb.set(
+                    px + dx,
+                    py + ph - 1,
+                    argb(255, border.0, border.1, border.2),
+                );
+            }
+        }
+        for dy in 0..ph {
+            fb.set(px, py + dy, argb(255, border.0, border.1, border.2));
+            if w > 1 {
+                fb.set(px + w - 1, py + dy, argb(255, border.0, border.1, border.2));
+            }
+        }
+        let mut yy = py;
+        let text_pad = 12;
+        for (i, &a) in menu.items.iter().enumerate() {
+            if a == CtxAction::Separator {
+                // Divider: a mid-gray hairline inset from the panel edges.
+                let ly = yy + sep_h / 2;
+                for xx in (px + 4)..(px + w - 4) {
+                    fb.set(xx, ly, argb(255, 0x33, 0x33, 0x3d));
+                }
+                yy += sep_h;
+                continue;
+            }
+            let sel = i == menu.sel;
+            if sel {
+                fill_rect(fb, px, yy, w, row_h, CHROME_ACTIVE_BG);
+            }
+            let color = if sel { WHITE } else { CHROME_FG };
+            draw_text(
+                fb,
+                &mut self.cache,
+                ctx_label(a),
+                px + text_pad,
+                yy + row_h / 2,
+                self.font_px,
+                color,
+            );
+            yy += row_h;
+        }
+    }
 }
 
 /// A stable accent color for a host string, so every tab pointing at the same machine (and the
@@ -4899,10 +6064,171 @@ fn ctrl_byte(c: &str) -> Option<u8> {
     }
 }
 
+fn broadcast_bytes(q: &str) -> Vec<u8> {
+    if q.is_empty() {
+        Vec::new()
+    } else {
+        format!("{}\n", q).into_bytes()
+    }
+}
+
+fn fmt_duration(d: std::time::Duration) -> String {
+    let secs = d.as_secs();
+    if secs < 60 {
+        format!("{secs}s")
+    } else if secs < 3600 {
+        format!("{}m", secs / 60)
+    } else if secs < 86400 {
+        format!("{}h", secs / 3600)
+    } else {
+        format!("{}d", secs / 86400)
+    }
+}
+
+fn recall_index(n: usize, delta: isize, cur: Option<usize>) -> usize {
+    match cur {
+        Some(i) => (i as isize + delta).rem_euclid(n as isize) as usize,
+        None => {
+            if delta < 0 {
+                n - 1
+            } else {
+                0
+            }
+        }
+    }
+}
+
+fn collect_fleet_matches(
+    terms: &[Arc<
+        alacritty_terminal::sync::FairMutex<
+            alacritty_terminal::term::Term<crate::session::Listener>,
+        >,
+    >],
+    query_lower: &str,
+) -> Vec<FleetMatch> {
+    let mut out = Vec::new();
+    for (tab, term) in terms.iter().enumerate() {
+        let g = term.lock();
+        // Reuse the public `all_matches` per-tab, tagging each hit with its tab index.
+        for (line, col, _) in crate::render::all_matches(&g, query_lower) {
+            out.push(FleetMatch { tab, line, col });
+        }
+    }
+    out.sort_by(|a, b| (a.tab, a.line, a.col).cmp(&(b.tab, b.line, b.col)));
+    out
+}
+
+/// The macOS menu-style Cmd shortcuts we intercept before forwarding anything to the session.
+/// Kept as a pure (key, mods) → action decision so the behavior is unit-testable without a window,
+/// and so `forward_key` only executes the chosen action.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+enum CmdShortcut {
+    /// Cmd+T / Cmd+N — open the New-Session picker (mirrors prefix+n).
+    NewSession,
+    /// Cmd+W — close the active tab / document window.
+    CloseActive,
+    /// Cmd+Q — quit (same save-then-exit dance as prefix+q).
+    Quit,
+    /// Cmd+Shift+] — next tab.
+    NextTab,
+    /// Cmd+Shift+[ — previous tab.
+    PrevTab,
+    /// Cmd+Shift+P — open the command palette (VS Code / iTerm muscle memory).
+    CommandPalette,
+    /// Cmd+1..9 — jump straight to that tab (1-based); Cmd+0 jumps to the last. The universal
+    /// macOS/browser/iTerm way to page between many agent sessions without cycling.
+    GotoTab(usize),
+    /// Not a Cmd shortcut we own (forward as normal).
+    None,
+}
+
+fn cmd_shortcut(key: &Key, mods: &ModifiersState) -> CmdShortcut {
+    use CmdShortcut::*;
+    if !mods.super_key() {
+        return None;
+    }
+    match key {
+        Key::Character(c) => match c.as_str() {
+            "t" | "n" => NewSession,
+            "w" => CloseActive,
+            "q" => Quit,
+            // On a real US keyboard, holding Shift transforms the bracket into `}` / `{`, so we
+            // match both the un-shifted and shifted glyphs: Cmd+Shift+] / Cmd+Shift+[ switch tabs no
+            // matter how winit reports the produced character. Plain Cmd+] / Cmd+[ stay with the shell.
+            "]" | "}" if mods.shift_key() => NextTab,
+            "[" | "{" if mods.shift_key() => PrevTab,
+            // Cmd+Shift+P is the (uppercase, shift-held) P — the conventional command palette.
+            "P" if mods.shift_key() => CommandPalette,
+            // Cmd+number jumps to a tab: 1..9 are 1-based indexes, 0 wraps to the last. Standard
+            // iTerm/browser muscle memory for fast switching between many agent windows.
+            "0" => GotoTab(usize::MAX),
+            d if d.len() == 1 && d.as_bytes()[0].is_ascii_digit() => {
+                GotoTab(d.as_bytes()[0] as usize - b'1' as usize)
+            }
+            // Plain Cmd+[ is left to the shell; only the Shift variant switches tabs.
+            _ => None,
+        },
+        _ => None,
+    }
+}
+
+pub(crate) fn close_tab(app: &mut App, pinned: bool) -> bool {
+    if app.tabs.is_empty() {
+        return false;
+    }
+    if app.active < app.tabs.len() && pinned {
+        return false;
+    }
+    // Stash the closed tab's spec so prefix+u can undo a mistaken close. Kind + host + engine
+    // are enough to re-spawn the same identity (TMUX/etc. re-attach to the same pane@host).
+    if let Some(s) = app.tabs.get(app.active) {
+        app.last_closed = Some(crate::restore::TabSpec {
+            kind: s.kind().to_string(),
+            host: s.meta.host.clone(),
+            engine: s.meta.engine.clone(),
+            port: None,
+            name: s.meta.name.clone(),
+            session: s.attach_session.clone(),
+        });
+    }
+    app.tabs.remove(app.active);
+    if app.active >= app.tabs.len() {
+        app.active = app.tabs.len().saturating_sub(1);
+    }
+    crate::restore::save(&app.tab_specs());
+    true
+}
+
+fn scroll_active(app: &Application, delta: i32) {
+    use alacritty_terminal::grid::Scroll;
+    if let Some(active) = app.app.active_session() {
+        let mut g = active.term.lock();
+        g.grid_mut().scroll_display(Scroll::Delta(delta));
+    }
+}
+
 impl ApplicationHandler for Application {
     fn resumed(&mut self, event_loop: &ActiveEventLoop) {
         if self.window.is_some() {
             return;
+        }
+        // Native-tab mode: every session is its own real window, grouped into AppKit's title-bar
+        // tab bar. `sync_hosts` creates the windows, splices them into one tab group, and points the
+        // shared window alias at the first. A total creation failure falls back to single-window.
+        if self.native_tabs {
+            self.sync_hosts(event_loop);
+            if self.hosts.is_empty() {
+                self.native_tabs = false;
+            } else {
+                self.metrics_from_scale();
+                if let Some(w) = &self.window {
+                    w.request_redraw();
+                }
+                if let Some(first) = self.hosts.first() {
+                    first.window.focus_window();
+                }
+                return;
+            }
         }
         let size = crate::restore::load_geometry()
             .map(|(w, h)| Size::Physical(PhysicalSize::new(w, h)))
@@ -4925,6 +6251,12 @@ impl ApplicationHandler for Application {
                     .and_then(|c| Surface::new(c, Rc::clone(&w)).ok());
                 self.size = w.inner_size();
                 self.metrics_from_scale();
+                // Ask macOS to treat this window as natively tabbable (system title-bar tab bar).
+                // This is the OS-level hook; grouping multiple real windows into a tab set is done
+                // per-session as those windows come up (see `macos::tabs`).
+                if self.native_tabs {
+                    crate::macos::tabs::enable_tabbing(&w);
+                }
                 w.request_redraw();
             }
             Err(e) => {
@@ -4934,9 +6266,40 @@ impl ApplicationHandler for Application {
         }
     }
 
-    fn window_event(&mut self, event_loop: &ActiveEventLoop, _id: WindowId, event: WindowEvent) {
+    fn window_event(&mut self, event_loop: &ActiveEventLoop, id: WindowId, event: WindowEvent) {
+        // Native-tab mode routing: resolve which host this event belongs to, and if it isn't the
+        // window the user was last looking at, adopt it so the shared handlers below (keyboard,
+        // mouse, overlay) operate on the right session. Closing/resizing additionally need the host
+        // index, which `hidx` carries.
+        let hidx = if self.native_tabs {
+            self.hosts.iter().position(|h| h.window.id() == id)
+        } else {
+            None
+        };
+        if let Some(hi) = hidx {
+            // Don't steal focus from a mouse hover over a background native tab (cursor tracking
+            // shouldn't flip which session is active); real intent to switch arrives via
+            // `Focused(true)` or an actual key/click.
+            let hover_only = matches!(event, WindowEvent::CursorMoved { .. });
+            if !hover_only && !matches!(event, WindowEvent::CloseRequested) {
+                self.focus_host(hi);
+            }
+        }
         match event {
+            WindowEvent::Focused(focused) => {
+                if self.native_tabs && focused {
+                    if let Some(hi) = hidx {
+                        self.focus_host(hi);
+                    }
+                }
+            }
             WindowEvent::CloseRequested => {
+                if self.native_tabs {
+                    if let Some(hi) = hidx {
+                        self.close_native_tab(hi, event_loop);
+                    }
+                    return;
+                }
                 // Persist open tabs so they come back on the next launch; keep the window size too.
                 self.app.save_all_scrollbacks();
                 crate::restore::save(&self.app.tab_specs());
@@ -4945,18 +6308,33 @@ impl ApplicationHandler for Application {
                 event_loop.exit();
             }
             WindowEvent::Resized(size) => {
-                self.size = size;
+                if self.native_tabs {
+                    if let Some(hi) = hidx {
+                        self.hosts[hi].size = size;
+                    }
+                    self.alias_active();
+                    if size.width > 0 && size.height > 0 {
+                        crate::restore::save_geometry(size.width, size.height);
+                    }
+                } else {
+                    self.size = size;
+                    if size.width > 0 && size.height > 0 {
+                        crate::restore::save_geometry(size.width, size.height);
+                    }
+                }
                 if size.width > 0 && size.height > 0 {
-                    crate::restore::save_geometry(size.width, size.height);
                     if let Some(w) = &self.window {
                         w.request_redraw();
                     }
                 }
             }
             WindowEvent::Moved(pos) => {
-                // Persist the window's top-left so a relaunch returns to the same spot on screen
-                // (complements the size persistence; both are best-effort).
-                crate::restore::save_position(pos.x, pos.y);
+                // Persist the primary (or only) window's top-left so a relaunch returns to the same
+                // spot; sibling windows are offset for the native tab fan-out and shouldn't clobber
+                // where the user parks the main window.
+                if !self.native_tabs || hidx == Some(0) {
+                    crate::restore::save_position(pos.x, pos.y);
+                }
             }
             WindowEvent::ScaleFactorChanged { .. } => {
                 self.metrics_from_scale();
@@ -5027,6 +6405,18 @@ impl ApplicationHandler for Application {
                 if mag == 0.0 {
                     return;
                 }
+                // Scrolling over the tab bar cycles tabs instead of scrolling the pane (iTerm2 /
+                // Chrome-style): wheel up steps left, down steps right, wrapping at the edges.
+                if self.cursor.1 < self.chrome_top() as f64 && self.app.tabs.len() > 1 {
+                    let n = self.app.tabs.len() as isize;
+                    let dir = if mag > 0.0 { -1 } else { 1 };
+                    let next = ((self.app.active as isize + dir).rem_euclid(n)) as usize;
+                    self.set_active(next);
+                    if let Some(w) = &self.window {
+                        w.request_redraw();
+                    }
+                    return;
+                }
                 // Positive magnitude = scroll up (into history), negative = down (toward live).
                 let lines = (mag * 3.0) as i32;
                 scroll_active(self, lines);
@@ -5044,6 +6434,35 @@ impl ApplicationHandler for Application {
                     return;
                 }
                 let (x, y) = self.cursor;
+                // Right-click opens the contextual menu; a second right-click (or one outside) while
+                // it is open dismisses it. Only the press matters.
+                if button == MouseButton::Right {
+                    if state == ElementState::Pressed {
+                        if self.ctx.is_some() {
+                            self.ctx = None;
+                        } else {
+                            self.open_context_menu(x, y);
+                        }
+                        if let Some(w) = &self.window {
+                            w.request_redraw();
+                        }
+                    }
+                    return;
+                }
+                // A left click while the context menu is open runs the row under the pointer (or
+                // dismisses the menu when it lands outside), then suppresses normal selection.
+                if self.ctx.is_some() {
+                    if state == ElementState::Pressed {
+                        if let Some(a) = self.ctx_action_at(x, y) {
+                            self.run_ctx_action(a);
+                        }
+                        self.ctx = None;
+                        if let Some(w) = &self.window {
+                            w.request_redraw();
+                        }
+                    }
+                    return;
+                }
                 // Middle-click = paste the system clipboard (X11 muscle memory). Only the press
                 // matters; the release is discarded.
                 if button == MouseButton::Middle {
@@ -5068,6 +6487,30 @@ impl ApplicationHandler for Application {
                         if self.mods.control_key() || self.mods.super_key() {
                             // Cmd/Ctrl+click opens the URL/path under the cursor.
                             self.mouse_open(x, y);
+                            return;
+                        }
+                        // Pressing the "+" at the strip's right edge opens the New-Session picker
+                        // (native tab-strip behavior — same path prefix+n and the context menu use).
+                        if let Some((bx, by, bw, bh)) = self.newtab_btn {
+                            let (mx, my) = (x as usize, y as usize);
+                            if mx >= bx && mx < bx + bw && my >= by && my < by + bh {
+                                self.app.overlay = Overlay::NewSession;
+                                self.ctx = None;
+                                if let Some(w) = &self.window {
+                                    w.request_redraw();
+                                }
+                                return;
+                            }
+                        }
+                        // A press on a hovered tab's right-edge close × closes that tab (pinned
+                        // tabs refuse with a flash). Handled before drag-to-reorder so the × is a
+                        // dedicated hit target.
+                        if let Some(ci) = self.tab_close_at(x, y) {
+                            self.close_tab_at(ci);
+                            self.ctx = None;
+                            if let Some(w) = &self.window {
+                                w.request_redraw();
+                            }
                             return;
                         }
                         // Pressing on a tab starts a drag-reorder (or a click-to-switch); pressing
@@ -5118,18 +6561,57 @@ impl ApplicationHandler for Application {
     }
 
     fn about_to_wait(&mut self, event_loop: &ActiveEventLoop) {
-        // A quit request (prefix+q or the palette's Quit action) is honored here, after the key
-        // handler's borrows have ended.
+        // A quit request (prefix+q, the palette's Quit action, or Cmd+Q) is honored here, after the
+        // key handler's borrows have ended.
         if self.quit_requested {
             event_loop.exit();
             return;
         }
+        // Cmd+W: close the active tab. In native mode we close the focused host's window (which
+        // closes that session); otherwise we close the in-app tab. Needs `event_loop`, hence here.
+        if self.close_active_requested {
+            self.close_active_requested = false;
+            if self.native_tabs && !self.hosts.is_empty() {
+                self.close_native_tab(self.active_host, event_loop);
+            } else if !self.app.tabs.is_empty() {
+                self.close_tab_at(self.app.active);
+            }
+            if let Some(w) = &self.window {
+                w.request_redraw();
+            }
+            return;
+        }
+        // Native-tab mode: reconcile hosts with the session set (a new tab from the New-Session /
+        // palette / undo path gets its own window here), then drive focus aliasing.
+        self.sync_hosts(event_loop);
         // Reconnect_sweep is throttled internally, so piggyback a cheap link-health refresh on it:
         // a periodic ping to the local harness daemon keeps the status-line tunnel badge current.
         self.app.reconnect_sweep_refresh();
-        if let Some(w) = &self.window {
-            w.request_redraw();
+        // A soft-present loop pumps at ~60fps only while something is visibly alive (a tab pouring
+        // output this frame, a fading bell/recovery badge, an open overlay/tooltip, copy mode,
+        // hover). Otherwise it sleeps on a slow ~8fps idle tick and skips the full-frame present, so
+        // a quiet terminal doesn't peg a whole core on re-uploading the framebuffer via QuartzCore
+        // every 16ms. While idle, a cheap content-length detector still wakes the loop the moment any
+        // pane produces output (and the fast pump resumes), so fresh output is never left un-drawn.
+        let hot = self.has_live_animation();
+        let dirty = hot || self.detect_content_change();
+        if dirty {
+            if self.native_tabs {
+                // Repaint every session window so output landing in a backgrounded tab shows up
+                // immediately in that window's own surface.
+                self.request_redraw();
+            } else if let Some(w) = &self.window {
+                // Full-rate while live; otherwise a single repaint to show newly-arrived output,
+                // then back to sleep.
+                w.request_redraw();
+            }
         }
+        let wait = if hot {
+            std::time::Duration::from_millis(16)
+        } else {
+            std::time::Duration::from_millis(120)
+        };
+        event_loop.set_control_flow(ControlFlow::WaitUntil(std::time::Instant::now() + wait));
     }
 }
 
@@ -5144,6 +6626,36 @@ fn notify_simple(title: &str, body: &str) {
         .stdout(std::process::Stdio::null())
         .stderr(std::process::Stdio::null())
         .spawn();
+}
+
+/// Parse the remote-attach overlay's `host[:port][/session]` input into `(addr, attach)`. A `/`
+/// names an existing remote tmux session to attach to (no spawn/kill); without one the input is a
+/// plain `host[:port]` for a fresh engine spawn. Pure so it's unit-testable.
+pub(crate) fn parse_remote_attach(raw: &str) -> (String, Option<String>) {
+    match raw.split_once('/') {
+        Some((a, s)) if !s.trim().is_empty() => (a.trim().to_string(), Some(s.trim().to_string())),
+        _ => (raw.to_string(), None),
+    }
+}
+
+/// Case-insensitive fuzzy (subsequence) matcher for palette filtering: every query character must
+/// appear in `hay`, in order, but not necessarily contiguously. So `crd` matches "cursor codex",
+/// `fleet` matches "fleet grid", and a blank query matches everything. Pure, so it's unit-testable.
+pub(crate) fn fuzzy_match(query: &str, hay: &str) -> bool {
+    if query.is_empty() {
+        return true;
+    }
+    let q: Vec<char> = query.chars().collect();
+    let mut qi = 0;
+    for ch in hay.chars() {
+        if ch.to_ascii_lowercase() == q[qi].to_ascii_lowercase() {
+            qi += 1;
+            if qi == q.len() {
+                return true;
+            }
+        }
+    }
+    false
 }
 
 /// Group queued (kind, tab) notifications into coalesced batches: one batch per kind, in queued
@@ -5171,6 +6683,15 @@ fn join_labels(labels: &[String]) -> String {
     } else {
         format!("all {} sessions", labels.len())
     }
+}
+
+/// Behind the selected row of a list overlay, fill a full-width highlight pill in the chrome's
+/// active-tab color so the selected entry reads at a glance (the same affordance as the context
+/// menu). Free function so overlay renderers that borrow `self.app` can still call it.
+fn overlay_row_sel(fb: &mut Framebuffer, y_center: usize, line_px: usize, margin: usize) {
+    let top = y_center.saturating_sub(line_px / 2);
+    let w = fb.width.saturating_sub(margin * 2);
+    fill_rect(fb, margin, top, w, line_px, CHROME_ACTIVE_BG);
 }
 
 /// Entry point: create the native window and run the event loop.
@@ -5215,12 +6736,61 @@ fn next_host_index(hosts: &[&str], active: usize) -> Option<usize> {
 #[cfg(test)]
 mod tests {
     use super::{
-        argb_to_rgb, broadcast_bytes, collect_fleet_matches, engine_accent, expand_click_word,
-        fmt_duration, group_notifications, host_color, join_labels, next_host_index, recall_index,
-        FleetMatch,
+        argb_to_rgb, broadcast_bytes, cmd_shortcut, collect_fleet_matches, engine_accent,
+        expand_click_word, fmt_duration, fuzzy_match, group_notifications, host_color, join_labels,
+        next_host_index, parse_remote_attach, recall_index, CmdShortcut, FleetMatch,
     };
 
     use std::sync::Arc;
+
+    /// The macOS Cmd shortcuts map to the right actions, and crucially do NOT fire without the
+    /// Cmd (super) modifier or with a modifier they don't own (so plain typing is never hijacked).
+    #[test]
+    fn cmd_shortcut_routes_native_shortcuts_only() {
+        use winit::keyboard::{Key, ModifiersState};
+        let mut s = ModifiersState::empty();
+        s.insert(ModifiersState::SUPER);
+        let mut sc = ModifiersState::empty();
+        sc.insert(ModifiersState::SUPER | ModifiersState::SHIFT);
+        let mut no_cmd = ModifiersState::empty();
+        no_cmd.insert(ModifiersState::SHIFT);
+
+        let chars = |c: &str, m: ModifiersState| {
+            cmd_shortcut(&Key::Character(c.to_string().into()), &m)
+        };
+
+        // Cmd+T / Cmd+N open the New-Session picker.
+        assert_eq!(chars("t", s), CmdShortcut::NewSession);
+        assert_eq!(chars("n", s), CmdShortcut::NewSession);
+        // Cmd+W closes, Cmd+Q quits.
+        assert_eq!(chars("w", s), CmdShortcut::CloseActive);
+        assert_eq!(chars("q", s), CmdShortcut::Quit);
+        // With Shift they switch tabs; without Shift they're left alone. Accept both the
+        // un-shifted (`]`/`[`) and shifted (`}`/`{`) glyphs a real US-layout Shift+[/] produces.
+        assert_eq!(chars("]", sc), CmdShortcut::NextTab);
+        assert_eq!(chars("}", sc), CmdShortcut::NextTab, "shifted ] glyph");
+        assert_eq!(chars("[", sc), CmdShortcut::PrevTab);
+        assert_eq!(chars("{", sc), CmdShortcut::PrevTab, "shifted [ glyph");
+        // Cmd+Shift+P opens the command palette; plain Cmd+P is left alone.
+        assert_eq!(chars("P", sc), CmdShortcut::CommandPalette);
+        assert_eq!(chars("p", sc), CmdShortcut::None, "plain Cmd+P is not hijacked");
+        assert_eq!(chars("]", s), CmdShortcut::None, "plain Cmd+] is not a shortcut");
+        assert_eq!(chars("[", s), CmdShortcut::None, "plain Cmd+[ stays with the shell");
+        // Cmd+number jumps to a tab: 1..9 are 1-based, 0 is the last tab (usize::MAX sentinel).
+        assert_eq!(chars("1", s), CmdShortcut::GotoTab(0));
+        assert_eq!(chars("5", s), CmdShortcut::GotoTab(4));
+        assert_eq!(chars("9", s), CmdShortcut::GotoTab(8));
+        assert_eq!(chars("0", s), CmdShortcut::GotoTab(usize::MAX));
+        // Shifted digits ("!") are NOT tab jumps — they fall through to None.
+        assert_eq!(chars("!", sc), CmdShortcut::None);
+        // No Cmd at all: nothing is a shortcut (typing flows through).
+        assert_eq!(chars("t", no_cmd), CmdShortcut::None);
+        assert_eq!(cmd_shortcut(&Key::Named(winit::keyboard::NamedKey::Enter), &s), CmdShortcut::None);
+        // Cmd+C / Cmd+V are copy/paste, handled elsewhere — not a tab shortcut.
+        assert_eq!(chars("c", s), CmdShortcut::None);
+        assert_eq!(chars("v", s), CmdShortcut::None);
+    }
+
 
     /// Fleet search spans multiple sessions and is sorted by tab then line. Build two real emulator
     /// Terms (no PTY needed), seed each with distinct text, and assert the collected matches are
@@ -5340,6 +6910,60 @@ mod tests {
         let batches = group_notifications(&pending);
         assert_eq!(batches.len(), 1);
         assert_eq!(batches[0], ("busy".to_string(), vec![7]));
+    }
+
+    /// `host[:port][/session]` parses into (addr, optional attach-session). A bare host or host:port
+    /// means a fresh spawn; `host:port/session` means attach to that existing named session.
+    #[test]
+    fn parse_remote_attach_modes() {
+        // Fresh spawn: plain host, host:port, and blank all yield no attach target.
+        assert_eq!(
+            parse_remote_attach("build.example.com"),
+            ("build.example.com".to_string(), None)
+        );
+        assert_eq!(
+            parse_remote_attach("10.0.0.4:18473"),
+            ("10.0.0.4:18473".to_string(), None)
+        );
+        assert_eq!(parse_remote_attach(""), ("".to_string(), None));
+        // Attach-existing: host/session and host:port/session, with whitespace trimmed.
+        assert_eq!(
+            parse_remote_attach("build.example.com/agent-runs"),
+            (
+                "build.example.com".to_string(),
+                Some("agent-runs".to_string())
+            )
+        );
+        assert_eq!(
+            parse_remote_attach("10.0.0.4:18473/agent-runs"),
+            ("10.0.0.4:18473".to_string(), Some("agent-runs".to_string()))
+        );
+        assert_eq!(
+            parse_remote_attach(" host / my-session "),
+            ("host".to_string(), Some("my-session".to_string()))
+        );
+        // A trailing slash with an empty session is not an attach (falls back to fresh host).
+        assert_eq!(
+            parse_remote_attach("build.example.com/"),
+            ("build.example.com/".to_string(), None)
+        );
+    }
+
+    /// Fuzzy palette matching: subsequence (not just substring), case-insensitive, blank matches all.
+    #[test]
+    fn fuzzy_match_is_subsequence_and_case_insensitive() {
+        // Subsequence: "crd" spans "cursor codex" out of order.
+        assert!(fuzzy_match("crd", "cursor codex"));
+        // Case-insensitive.
+        assert!(fuzzy_match("FLEET", "fleet grid"));
+        assert!(fuzzy_match("fleet", "Fleet Grid"));
+        // Contiguous + word-ish matches work naturally.
+        assert!(fuzzy_match("bro", "broadcast a line"));
+        // Blank query matches everything.
+        assert!(fuzzy_match("", "anything"));
+        // Out-of-order / missing characters do NOT match.
+        assert!(!fuzzy_match("xyz", "qwerty"));
+        assert!(!fuzzy_match("crd", "codex")); // r before c? no: c,o,d,e,x → c,d match but r never
     }
 
     /// The recover kind is its own bucket (distinct from busy/bell), so several panes reconnecting

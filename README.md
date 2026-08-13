@@ -51,7 +51,7 @@ same command mode:
 | `Ctrl+H` `/` | palette: fuzzy-jump to any session |
 | `Ctrl+H` `;` | command palette: run any action by name |
 | `Ctrl+H` `n` | new session (engine picker; type a working dir) |
-| `Ctrl+H` `r` | attach to remote `pane@host` (add `:port` for a non-default harness daemon) |
+| `Ctrl+H` `r` | attach to remote `pane@host` (add `:port` for a non-default harness daemon; pre-fills the last host) |
 | `Ctrl+H` `s` | fleet status (Up/Down + Enter to dive into a session) |
 | `Ctrl+H` `f` | search scrollback |
 | `Ctrl+H` `h` | search all sessions (fleet-wide) |
@@ -97,6 +97,8 @@ same command mode:
 | `Ctrl+H` `p` | paste clipboard (bracketed) |
 | Middle-click | paste clipboard (raw) |
 
+Native macOS menu shortcuts also work without an AppKit menu installed — `Cmd+T`/`Cmd+N` open
+
 Backgrounded tabs that keep producing output are flagged with a magnitude badge in the tab bar
 (e.g. `!43` — how many new lines since you last looked). Muted tabs show a dim `M` instead.
 A tab that rings its terminal bell (a long agent run finishing) shows a short-lived `🔔` badge and
@@ -105,6 +107,15 @@ so a fleet diver reads where each session runs without hovering. A down pane wit
 while it was dead shows `⏳N` (bytes staged to flush on reconnect). The tab bar's right edge shows a
 fleet-triage count (`↓2` panes down/reconnecting in red, `!3` busy, `⌛2` quiet/done agents, `⏳N`
 queued) when any is non-zero, so a quiet fleet still advertises that something needs attention.
+The tab strip is drawn as a raised native-style bar (Safari/Chrome silhouette on the active tab,
+hairline divider above the grid), and a `+` at its right edge opens the New-Session picker like any
+idle-native terminal. When nothing is visible-changing the app idles at ~0% CPU, only pumping
+full-rate while a pane is producing, a badge is fading, or an overlay/tooltip is up.
+
+**Native macOS window-level tabs (opt-in).** Set `native_tabs = true` in `config.toml` and relaunch:
+every session becomes a real `NSWindow`, and AppKit's system title-bar tab bar (OS traffic lights,
+Cmd+Tab tab picker, drag-a-tab-out, `Ctrl+H n`/`+` opening a new tab in the same group) replaces the
+in-app strip. The OS tab bar owns switching; the in-app strip stays when the switch is off.
 
 ## Config
 
@@ -123,6 +134,7 @@ start_cwd = ""              # dir new local tabs open in
 quiet_after_secs = 120      # silent this long (backgrounded, live) -> counted quiet/"awaiting-you"
 
 [theme]                     # optional: entries overrides, the rest keep defaults
+preset = "tokyo-night"      # base palette: tokyo-night | gruvbox-dark | solarized-dark | nord | dracula | github-dark
 foreground = [234, 234, 234]
 background = [0, 0, 0]
 cursor = [234, 234, 234]    # underline/beam cursor

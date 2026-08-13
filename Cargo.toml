@@ -23,6 +23,11 @@ winit = "0.30"            # native window + event loop
 softbuffer = "0.4"        # CPU framebuffer surface
 ab_glyph = "0.2"          # glyph rasterization (system font -> bitmap)
 arboard = "3.4"           # system clipboard (OSC 52 store/load)
+# True macOS window-level tabs (system title-bar tabbing): AppKit via the same objc2 stack winit
+# already pins (0.6.x). Lets the app group its real `NSWindow`s into a native tabbed window set.
+objc2 = "0.6"
+objc2-app-kit = "0.3"
+objc2-foundation = "0.3"
 
 [dev-dependencies]
 serde_json = "1"

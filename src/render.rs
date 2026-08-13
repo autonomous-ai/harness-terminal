@@ -5,7 +5,7 @@
 //! `ab_glyph` into a cache. Everything here is a pure function over a buffer, so the whole render
 //! path is unit-testable headlessly (no window, no GPU).
 
-use std::collections::HashMap;
+use std::{collections::HashMap, path::Path};
 
 use crate::links::{self, UrlSpan};
 use ab_glyph::{Font as _, FontArc, Glyph as AbsGlyph, PxScale, ScaleFont as _};
@@ -47,6 +47,22 @@ impl Framebuffer {
             self.pixels[y * self.width + x] = p;
         }
     }
+
+    /// Darken every pixel toward black by `f` (1.0 = unchanged, 0.0 = black). Used behind modal
+    /// overlays so the terminal content recedes and the overlay's own text reads clearly instead of
+    /// being swallowed by bright agent output beneath it.
+    pub fn dim(&mut self, f: f64) {
+        for p in self.pixels.iter_mut() {
+            let a = (*p >> 24) & 0xff;
+            let r = (*p >> 16) & 0xff;
+            let g = (*p >> 8) & 0xff;
+            let b = *p & 0xff;
+            let nr = ((r as f64) * f) as u32 & 0xff;
+            let ng = ((g as f64) * f) as u32 & 0xff;
+            let nb = ((b as f64) * f) as u32 & 0xff;
+            *p = (a << 24) | (nr << 16) | (ng << 8) | nb;
+        }
+    }
 }
 
 /// Term cell color. API-stable copy of `vte::ansi::Color` variants we use — the enum's fields are
@@ -75,28 +91,28 @@ impl Default for PaletteColor {
 
 /// Default theme foreground (light) and background (black), matching alacritty's default so the
 /// native surface stays consistent with the local-PTY default Config.
-const DEFAULT_FG: (u8, u8, u8) = (0xea, 0xea, 0xea);
-const DEFAULT_BG: (u8, u8, u8) = (0, 0, 0);
+const DEFAULT_FG: (u8, u8, u8) = (0xc0, 0xca, 0xf5);
+const DEFAULT_BG: (u8, u8, u8) = (0x1a, 0x1b, 0x26);
 
 /// Classic 16-color ANSI palette. Matches the terminal's default Config::default() colors so we
 /// stay consistent with the local PTY tabs. A config theme can override individual entries.
 const ANSI: [(u8, u8, u8); 16] = [
-    (0, 0, 0),       // black
-    (205, 49, 49),   // red
-    (13, 188, 121),  // green
-    (229, 229, 16),  // yellow
-    (36, 114, 200),  // blue
-    (188, 63, 188),  // magenta
-    (17, 168, 205),  // cyan
-    (229, 229, 229), // white
-    (102, 102, 102), // bright black
-    (241, 76, 76),   // bright red
-    (35, 209, 139),  // bright green
-    (245, 245, 67),  // bright yellow
-    (59, 142, 234),  // bright blue
-    (214, 112, 214), // bright magenta
-    (41, 184, 219),  // bright cyan
-    (255, 255, 255), // bright white
+    (0x15, 0x16, 0x1e), // black
+    (0xf7, 0x76, 0x8e), // red
+    (0x9e, 0xce, 0x6a), // green
+    (0xe0, 0xaf, 0x68), // yellow
+    (0x7a, 0xa2, 0xf7), // blue
+    (0xbb, 0x9a, 0xf7), // magenta
+    (0x7d, 0xcf, 0xff), // cyan
+    (0xa9, 0xb1, 0xd6), // white
+    (0x41, 0x48, 0x68), // bright black
+    (0xff, 0x7a, 0x93), // bright red
+    (0xb9, 0xf2, 0x7c), // bright green
+    (0xff, 0x9e, 0x64), // bright yellow
+    (0x7d, 0xa6, 0xff), // bright blue
+    (0xbb, 0x9a, 0xf7), // bright magenta
+    (0x2a, 0xc3, 0xde), // bright cyan
+    (0xc0, 0xca, 0xf5), // bright white
 ];
 
 /// The resolved runtime palette the renderer actually paints with, built from an optional
@@ -127,17 +143,178 @@ impl Default for Colors {
             fg: DEFAULT_FG,
             bg: DEFAULT_BG,
             cursor: DEFAULT_FG,
-            selection: (0x26, 0x4f, 0x8c),
-            copy_cursor: (0x1e, 0xff, 0x8a),
+            selection: (0x33, 0x46, 0x7c),
+            copy_cursor: (0x9e, 0xce, 0x6a),
             ansi: ANSI,
             accents: std::collections::BTreeMap::new(),
         }
     }
 }
 
+/// Build a palette from its core fields (fg, bg, selection, cursor, copy cursor, 16-color ANSI).
+fn pal(
+    fg: (u8, u8, u8),
+    bg: (u8, u8, u8),
+    selection: (u8, u8, u8),
+    cursor: (u8, u8, u8),
+    copy_cursor: (u8, u8, u8),
+    ansi: [(u8, u8, u8); 16],
+) -> Colors {
+    Colors {
+        fg,
+        bg,
+        cursor,
+        selection,
+        copy_cursor,
+        ansi,
+        accents: std::collections::BTreeMap::new(),
+    }
+}
+
+impl Colors {
+    /// A named preset palette. `tokyo-night` is the built-in default; the others are popular
+    /// high-contrast dark themes (gruvbox, solarized, nord, dracula, github-dark). Unknown or blank
+    /// names fall back to the default palette. Individual `[theme]` fields layer on top afterwards.
+    pub fn preset(name: &str) -> Colors {
+        match name.trim().to_ascii_lowercase().as_str() {
+            "gruvbox-dark" => pal(
+                (0xeb, 0xdb, 0xb2),
+                (0x28, 0x28, 0x28),
+                (0x50, 0x49, 0x45),
+                (0xeb, 0xdb, 0xb2),
+                (0xb8, 0xbb, 0x26),
+                [
+                    (0x28, 0x28, 0x28),
+                    (0xcc, 0x24, 0x1d),
+                    (0x98, 0x97, 0x1a),
+                    (0xd7, 0x99, 0x21),
+                    (0x45, 0x85, 0x88),
+                    (0xb1, 0x62, 0x86),
+                    (0x68, 0x9d, 0x6a),
+                    (0xa8, 0x99, 0x84),
+                    (0x92, 0x83, 0x74),
+                    (0xfb, 0x49, 0x34),
+                    (0xb8, 0xbb, 0x26),
+                    (0xfa, 0xbd, 0x2f),
+                    (0x83, 0xa5, 0x98),
+                    (0xd3, 0x86, 0x9b),
+                    (0x8e, 0xc0, 0x7c),
+                    (0xeb, 0xdb, 0xb2),
+                ],
+            ),
+            "solarized-dark" => pal(
+                (0x83, 0x94, 0x96),
+                (0x00, 0x2b, 0x36),
+                (0x07, 0x36, 0x42),
+                (0x83, 0x94, 0x96),
+                (0x2a, 0xa1, 0x98),
+                [
+                    (0x07, 0x36, 0x42),
+                    (0xdc, 0x32, 0x2f),
+                    (0x85, 0x99, 0x00),
+                    (0xb5, 0x89, 0x00),
+                    (0x26, 0x8b, 0xd2),
+                    (0xd3, 0x36, 0x82),
+                    (0x2a, 0xa1, 0x98),
+                    (0xee, 0xe8, 0xd5),
+                    (0x00, 0x2b, 0x36),
+                    (0xcb, 0x4b, 0x16),
+                    (0x58, 0x6e, 0x75),
+                    (0x65, 0x7b, 0x83),
+                    (0x83, 0x94, 0x96),
+                    (0x6c, 0x71, 0xc4),
+                    (0x93, 0xa1, 0xa1),
+                    (0xfd, 0xf6, 0xe3),
+                ],
+            ),
+            "nord" => pal(
+                (0xd8, 0xde, 0xe9),
+                (0x2e, 0x34, 0x40),
+                (0x43, 0x48, 0x98),
+                (0xd8, 0xde, 0xe9),
+                (0x88, 0xc0, 0xd0),
+                [
+                    (0x3b, 0x42, 0x52),
+                    (0xbf, 0x61, 0x6a),
+                    (0xa3, 0xbe, 0x8c),
+                    (0xeb, 0xcb, 0x8b),
+                    (0x81, 0xa1, 0xc1),
+                    (0xb4, 0x8e, 0xad),
+                    (0x88, 0xc0, 0xd0),
+                    (0xe5, 0xe9, 0xf0),
+                    (0x4c, 0x56, 0x6a),
+                    (0xbf, 0x61, 0x6a),
+                    (0xa3, 0xbe, 0x8c),
+                    (0xeb, 0xcb, 0x8b),
+                    (0x81, 0xa1, 0xc1),
+                    (0xb4, 0x8e, 0xad),
+                    (0x8f, 0xbc, 0xbb),
+                    (0xec, 0xef, 0xf4),
+                ],
+            ),
+            "dracula" => pal(
+                (0xf8, 0xf8, 0xf2),
+                (0x28, 0x2a, 0x36),
+                (0x44, 0x47, 0x5a),
+                (0xf8, 0xf8, 0xf2),
+                (0x50, 0xfa, 0x7b),
+                [
+                    (0x21, 0x22, 0x2c),
+                    (0xff, 0x55, 0x55),
+                    (0x50, 0xfa, 0x7b),
+                    (0xf1, 0xfa, 0x8c),
+                    (0xbd, 0x93, 0xf9),
+                    (0xff, 0x79, 0xc6),
+                    (0x8b, 0xe9, 0xfd),
+                    (0xf8, 0xf8, 0xf2),
+                    (0x62, 0x72, 0xa4),
+                    (0xff, 0x6e, 0x6e),
+                    (0x69, 0xff, 0x94),
+                    (0xff, 0xff, 0xa5),
+                    (0xd6, 0xac, 0xff),
+                    (0xff, 0x92, 0xdf),
+                    (0xa4, 0xff, 0xff),
+                    (0xff, 0xff, 0xff),
+                ],
+            ),
+            "github-dark" => pal(
+                (0xc9, 0xd1, 0xd9),
+                (0x0d, 0x11, 0x17),
+                (0x1f, 0x6f, 0xeb),
+                (0xc9, 0xd1, 0xd9),
+                (0x3f, 0xb9, 0x50),
+                [
+                    (0x48, 0x4f, 0x58),
+                    (0xff, 0x7b, 0x72),
+                    (0x3f, 0xb9, 0x50),
+                    (0xd2, 0x99, 0x22),
+                    (0x58, 0xa6, 0xff),
+                    (0xbc, 0x8c, 0xff),
+                    (0x39, 0xc5, 0xcf),
+                    (0xb1, 0xba, 0xc4),
+                    (0x6e, 0x76, 0x81),
+                    (0xff, 0xa1, 0x98),
+                    (0x56, 0xd3, 0x64),
+                    (0xe3, 0xb3, 0x41),
+                    (0x79, 0xc0, 0xff),
+                    (0xd2, 0xa8, 0xff),
+                    (0x56, 0xd4, 0xdd),
+                    (0xff, 0xff, 0xff),
+                ],
+            ),
+            // "tokyo-night" and anything unknown/blank → the built-in default.
+            _ => Colors::default(),
+        }
+    }
+}
+
 impl From<&crate::config::Theme> for Colors {
     fn from(t: &crate::config::Theme) -> Self {
-        let c = Colors::default();
+        // Base = the named preset (or the built-in default when absent/unknown).
+        let c = match t.preset.as_deref() {
+            Some(p) if !p.trim().is_empty() => Colors::preset(p),
+            _ => Colors::default(),
+        };
         let set = |v: Option<[u8; 3]>, def: (u8, u8, u8)| match v {
             Some([r, g, b]) => (r, g, b),
             None => def,
@@ -313,40 +490,130 @@ fn paint_bg(
     }
 }
 
-/// Glyph cache: one 8-bit alpha bitmap per (font-key, char, pixel-size).
+/// Fill a solid rectangle of `w`×`h` pixels at origin (x0,y0) with an opaque RGB color. Used by the
+/// native chrome (tab-bar / status-line panels, active-tab pill) so panels read as designed surfaces
+/// rather than text floating on the grid background.
+pub fn fill_rect(
+    buf: &mut Framebuffer,
+    x0: usize,
+    y0: usize,
+    w: usize,
+    h: usize,
+    color: (u8, u8, u8),
+) {
+    let p = argb(255, color.0, color.1, color.2);
+    for dy in 0..h {
+        for dx in 0..w {
+            buf.set(x0 + dx, y0 + dy, p);
+        }
+    }
+}
+
+/// Fill a rectangle whose top corners are rounded by `r` px while the bottom edge stays square —
+/// the silhouette of a raised native tab (Safari/Chrome-style) that visually connects to the content
+/// beneath it. Only writes pixels that are inside the shape, so the previously-painted chrome panel
+/// shows through the cut corners instead of leaving a transparent hole.
+pub fn filled_round_top(
+    buf: &mut Framebuffer,
+    x0: usize,
+    y0: usize,
+    w: usize,
+    h: usize,
+    r: usize,
+    color: (u8, u8, u8),
+) {
+    if w == 0 || h == 0 {
+        return;
+    }
+    let r = r.min(h).min(w / 2);
+    let p = argb(255, color.0, color.1, color.2);
+    let rr = (r * r) as i64;
+    // Corner centers relative to the shape origin (left and right top corners).
+    let (ccxl, ccy) = (r as i64, r as i64);
+    let ccxr = (w as i64 - 1) - r as i64;
+    for dy in 0..h {
+        let y = y0 + dy;
+        let col = y as i64 - y0 as i64;
+        for dx in 0..w {
+            let row = dx as i64;
+            let inside = if col < r as i64 && (row < r as i64 || row > ccxr) {
+                // Top corner band: keep a pixel only if it sits inside its rounded corner.
+                let (cx, cy) = if row < r as i64 {
+                    (ccxl, ccy)
+                } else {
+                    (ccxr, ccy)
+                };
+                let dxx = row - cx;
+                let dyy = col - cy;
+                dxx * dxx + dyy * dyy <= rr
+            } else {
+                true
+            };
+            if inside {
+                buf.set(x0 + dx, y, p);
+            }
+        }
+    }
+}
+
+/// Glyph cache: one 8-bit alpha bitmap per (style, char, pixel-size). Rasterizes with `ab_glyph`
+/// into an 8-bit coverage bitmap (grayscale anti-aliasing), with a matching italic face when one
+/// ships alongside the primary font, and a synthetic 1px bold smear for `BOLD` cells.
 pub struct GlyphCache {
     font: FontArc,
+    /// Optional matching italic face (SF Mono ships `SFNSMonoItalic.ttf`). SGR italic falls back to
+    /// the upright face when no italic file is available.
+    italic: Option<FontArc>,
     /// cache key -> (w, h, bitmap u8 alpha).
-    map: HashMap<(u32, char, u32), (u32, u32, Vec<u8>)>,
+    map: HashMap<(u32, u32, u32, u32), (u32, u32, Vec<u8>)>,
 }
 
 impl GlyphCache {
-    /// Load a TTF/OTF font. Falls back to macOS SF Mono, then fails if that's absent.
+    /// Load a TTF/OTF font (or macOS SF Mono) plus a best-effort matching italic face.
     pub fn load() -> Self {
         let data = std::fs::read(font_path()).expect("system mono font not found");
+        let font = FontArc::try_from_vec(data).expect("font bytes invalid");
+        let italic = load_italic().and_then(|d| FontArc::try_from_vec(d).ok());
         GlyphCache {
-            font: FontArc::try_from_vec(data).expect("font bytes invalid"),
+            font,
+            italic,
             map: HashMap::new(),
         }
     }
 
-    /// Rasterize (or recall) `ch` at `px` pixels height. Returns (w, h, alpha bitmap).
+    /// Rasterize (or recall) `ch` at `px` pixels height, upright (used by the chrome text).
     pub fn glyph(&mut self, ch: char, px: u32, bold: bool) -> (u32, u32, Vec<u8>) {
-        let key = (if bold { 1 } else { 0 }, ch, px);
+        self.glyph_styled(ch, px, bold, false)
+    }
+
+    /// Rasterize (or recall) `ch` at `px` pixels height with the terminal's SGR style flags
+    /// (`bold` / `italic`). Returns (w, h, 8-bit alpha bitmap).
+    pub fn glyph_styled(
+        &mut self,
+        ch: char,
+        px: u32,
+        bold: bool,
+        italic: bool,
+    ) -> (u32, u32, Vec<u8>) {
+        let key = (
+            if bold { 1 } else { 0 },
+            if italic { 1 } else { 0 },
+            ch as u32,
+            px,
+        );
         if let Some(v) = self.map.get(&key) {
             return v.clone();
         }
-        let font = if bold {
-            // Bold: we don't have an SF Mono Bold file handy; simulate via heavier weight where
-            // the face supports it is complex — for now bold uses the same weight (alacritty cells
-            // mostly read the same). This is a TWEAK POINT.
-            &self.font
+        // Upright vs italic face. When the terminal asked for italic but no italic face loaded,
+        // silently fall back to upright rather than inventing an oblique.
+        let face = if italic {
+            self.italic.as_ref().unwrap_or(&self.font)
         } else {
             &self.font
         };
         let scale = PxScale::from(px as f32);
-        let scaled = font.as_scaled(scale);
-        let id = font.glyph_id(ch);
+        let scaled = face.as_scaled(scale);
+        let id = face.glyph_id(ch);
         let advance = scaled.h_advance(id);
         // Height from ascent/descent so all glyphs share the same line box.
         let height = (scaled.ascent() - scaled.descent()).round() as u32;
@@ -377,9 +644,53 @@ impl GlyphCache {
                 let _ = (bw, bh);
             });
         }
+        // Synthetic bold: no system bold mono face is guaranteed, so thicken the stroke by piping
+        // each column's coverage one pixel to the right (rooted in the original coverage so strokes
+        // stay crisp rather than smearing into a solid block).
+        if bold && w > 1 && height > 0 {
+            let (bw, bh) = (w as usize, height as usize);
+            let src = bmp.clone();
+            for y in 0..bh {
+                for x in (1..bw).rev() {
+                    let idx = y * bw + x;
+                    bmp[idx] = src[idx].max(src[idx - 1]);
+                }
+            }
+        }
         self.map.insert(key, (w, height, bmp.clone()));
         (w, height, bmp)
     }
+}
+
+/// Best-effort path to an italic sibling face for `font_path()`. The known macOS default
+/// (`SFNSMono.ttf`) has a fixed `SFNSMonoItalic.ttf` neighbor; other fonts try `<stem>-Italic<ext>`
+/// and `<stem>Italic<ext>`. Returns None when no candidate exists so italic simply falls back.
+fn italic_candidate(font: &str) -> Option<String> {
+    if font == "/System/Library/Fonts/SFNSMono.ttf" {
+        return Some("/System/Library/Fonts/SFNSMonoItalic.ttf".into());
+    }
+    let p = Path::new(font);
+    let dir = p.parent()?.to_string_lossy().into_owned();
+    let stem = p.file_stem()?.to_string_lossy().into_owned();
+    let ext = p
+        .extension()
+        .map(|e| format!(".{}", e.to_string_lossy()))
+        .unwrap_or_default();
+    for cand in [
+        format!("{dir}/{stem}-Italic{ext}"),
+        format!("{dir}/{stem}Italic{ext}"),
+    ] {
+        if Path::new(&cand).exists() {
+            return Some(cand);
+        }
+    }
+    None
+}
+
+/// Read the italic sibling bytes, or None when no italic face is present/readable.
+fn load_italic() -> Option<Vec<u8>> {
+    let cand = italic_candidate(&font_path())?;
+    std::fs::read(cand).ok()
 }
 
 /// A search highlight: a match given as (absolute line, column, width).
@@ -594,7 +905,8 @@ pub fn draw_grid(
             b = (b as u16 / 2) as u8;
         }
         let bold = cell.flags.contains(Flags::BOLD);
-        let (gw, gh, alpha) = cache.glyph(cell.c, font_px, bold);
+        let italic = cell.flags.contains(Flags::ITALIC);
+        let (gw, gh, alpha) = cache.glyph_styled(cell.c, font_px, bold, italic);
         // Draw glyph alpha over bg at baseline; clamp to the cell box.
         let gx = x0 as usize;
         let top = y0 as usize + cell_h as usize - gh as usize;
@@ -754,6 +1066,20 @@ pub fn count_matches(term: &Term<Listener>, query: &str) -> usize {
     all_matches(term, query).len()
 }
 
+/// Measure the pixel width `draw_text` would consume for `text` at `font_px`, without drawing.
+/// Uses the same per-glyph advances as the paint path so chrome hit-testing and layout agree.
+pub fn text_width(cache: &mut GlyphCache, text: &str, font_px: u32) -> usize {
+    let mut w = 0usize;
+    for ch in text.chars() {
+        if ch == '\n' {
+            continue;
+        }
+        let (gw, _, _) = cache.glyph(ch, font_px, false);
+        w += gw as usize;
+    }
+    w
+}
+
 /// Draw a line of text at pixel origin (x0,y0 baseline) with the given color/size. Used for the
 /// native chrome (tab bar, status line). Returns the pixel width consumed.
 pub fn draw_text(
@@ -852,29 +1178,29 @@ mod tests {
         assert_eq!(argb(255, 10, 20, 30), 0xff0a141e);
     }
 
-    /// The default theme reproduces the exact pre-theming colors, so behavior is unchanged when no
-    /// `[theme]` block is configured.
+    /// The default theme (a modern Tokyo Night-inspired dark palette) is what renders when no
+    /// `[theme]` block is configured; a config theme still overrides individual entries.
     #[test]
     fn default_theme_matches_built_in_colors() {
         let c = Colors::default();
-        assert_eq!(c.fg, (0xea, 0xea, 0xea));
-        assert_eq!(c.bg, (0, 0, 0));
-        assert_eq!(c.selection, (0x26, 0x4f, 0x8c));
-        assert_eq!(c.copy_cursor, (0x1e, 0xff, 0x8a));
-        assert_eq!(c.ansi[1], (205, 49, 49)); // red
-        assert_eq!(c.ansi[9], (241, 76, 76)); // bright red
-        assert_eq!(c.ansi[15], (255, 255, 255)); // bright white
-                                                 // Spec and index lookups yield the exact palette colors.
+        assert_eq!(c.fg, (0xc0, 0xca, 0xf5));
+        assert_eq!(c.bg, (0x1a, 0x1b, 0x26));
+        assert_eq!(c.selection, (0x33, 0x46, 0x7c));
+        assert_eq!(c.copy_cursor, (0x9e, 0xce, 0x6a));
+        assert_eq!(c.ansi[1], (0xf7, 0x76, 0x8e)); // red
+        assert_eq!(c.ansi[9], (0xff, 0x7a, 0x93)); // bright red
+        assert_eq!(c.ansi[15], (0xc0, 0xca, 0xf5)); // bright white
+                                                    // Spec and index lookups yield the exact palette colors.
         let named = PaletteColor::Named {
             bright: false,
             index: 2,
         };
-        assert_eq!(named.to_rgb(&c), (13, 188, 121)); // green
+        assert_eq!(named.to_rgb(&c), (0x9e, 0xce, 0x6a)); // green
         let named_bright = PaletteColor::Named {
             bright: true,
             index: 2,
         };
-        assert_eq!(named_bright.to_rgb(&c), (35, 209, 139)); // bright green
+        assert_eq!(named_bright.to_rgb(&c), (0xb9, 0xf2, 0x7c)); // bright green
     }
 
     /// A configured theme overrides foreground/background and individual ANSI entries; unset ones
@@ -896,8 +1222,8 @@ mod tests {
         assert_eq!(c.fg, (240, 240, 240));
         assert_eq!(c.bg, (5, 5, 5));
         assert_eq!(c.ansi[1], (200, 0, 0)); // overridden
-        assert_eq!(c.ansi[2], (13, 188, 121)); // untouched built-in green
-                                               // Dim red folds to the themed foreground.
+        assert_eq!(c.ansi[2], (0x9e, 0xce, 0x6a)); // untouched built-in green
+                                                   // Dim red folds to the themed foreground.
         let dim = cell_color(&ansi::Color::Named(ansi::NamedColor::DimRed), &c);
         assert_eq!(dim.to_rgb(&c), (240, 240, 240));
     }
@@ -913,8 +1239,47 @@ mod tests {
 
     #[test]
     fn color256_map() {
-        assert_eq!(color256(0, &Colors::default()), (0, 0, 0));
-        assert_eq!(color256(15, &Colors::default()), (255, 255, 255));
+        assert_eq!(color256(0, &Colors::default()), (0x15, 0x16, 0x1e));
+        assert_eq!(color256(15, &Colors::default()), (0xc0, 0xca, 0xf5));
+    }
+
+    /// Each named preset resolves to a distinct background and first ANSI color; unknown/blank
+    /// names fall back to the built-in default.
+    #[test]
+    fn named_presets_resolve_and_unknown_falls_back() {
+        let defaults = Colors::default();
+        let gruv = Colors::preset("gruvbox-dark");
+        let nord = Colors::preset("nord");
+        let solar = Colors::preset("solarized-dark");
+        assert_ne!(gruv.bg, defaults.bg);
+        assert_ne!(nord.bg, defaults.bg);
+        assert_ne!(solar.bg, defaults.bg);
+        // Distinct palettes are mutually different (not all silently defaulting).
+        assert_ne!(gruv.ansi[1], nord.ansi[1]);
+        // Case/whitespace-insensitive, and unknown names fall back to the default.
+        assert_eq!(Colors::preset("Nord"), nord);
+        assert_eq!(Colors::preset("  "), defaults);
+        assert_eq!(Colors::preset("made-up"), defaults);
+        // tokyo-night is the built-in default.
+        assert_eq!(Colors::preset("tokyo-night"), defaults);
+    }
+
+    /// A `[theme]` preset layers: preset supplies the palette, and a field-level override wins for
+    /// just that entry (the rest stay from the preset, not the built-in default).
+    #[test]
+    fn preset_layers_with_field_override() {
+        use crate::config::Theme;
+        let t = Theme {
+            preset: Some("gruvbox-dark".into()),
+            background: Some([10, 20, 30]),
+            ..Default::default()
+        };
+        let c = Colors::from(&t);
+        // Override wins for bg…
+        assert_eq!(c.bg, (10, 20, 30));
+        // …but the rest come from the gruvbox preset (fg + red), not the built-in tokyo-night.
+        assert_eq!(c.fg, (0xeb, 0xdb, 0xb2));
+        assert_eq!(c.ansi[1], (0xcc, 0x24, 0x1d));
     }
 
     /// Full render path, headless: feed a real `Term` ANSI (colors + text), render it into a
@@ -1120,7 +1485,7 @@ mod tests {
         let g = (cell0 >> 8) & 0xff;
         let b = cell0 & 0xff;
         assert!(
-            g > 100 && r < 100 && b < 160,
+            g > 180 && r < 220 && b < 180,
             "inverse cell bg should be green, got rgb({r},{g},{b})"
         );
     }
@@ -1173,10 +1538,12 @@ mod tests {
             "beam cursor should draw a vertical bar at cell's left edge"
         );
         // The bottom-right corner must be background — a block cursor would fill it with the cursor
-        // fg (white) color. Compare RGB only (alpha is always 255 in the framebuffer).
+        // fg color. Compare RGB only (alpha is always 255 in the framebuffer). The background is
+        // the theme bg, not black.
         let corner = fb.pixels[17 * fb.width + (9 - 1)] & 0x00ff_ffff;
+        let bg_rgb = (DEFAULT_BG.0 as u32) << 16 | (DEFAULT_BG.1 as u32) << 8 | DEFAULT_BG.2 as u32;
         assert_eq!(
-            corner, 0,
+            corner, bg_rgb,
             "beam cursor must not fill the cell to its bottom-right corner"
         );
     }
@@ -1213,11 +1580,11 @@ mod tests {
             Some((0, 1)),
         );
         drop(g);
-        // Center pixel of cell (line 0, col 1) should be green (0x1eff8a).
+        // Center pixel of cell (line 0, col 1) should be the copy-cursor green (0x9ece6a).
         let px = fb.pixels[0 * 18 * fb.width + 1 * 9 + 4];
         let (r, gg, b) = ((px >> 16) & 0xff, (px >> 8) & 0xff, px & 0xff);
         assert!(
-            gg > 200 && r < 100,
+            gg > 180 && r < 220 && b < 180,
             "copy cursor should paint the target cell green, got rgb({r},{gg},{b})"
         );
     }

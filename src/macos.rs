@@ -40,7 +40,9 @@ pub fn ctrl_space_claimed() -> bool {
         "AppleEnabledInputSources",
     );
     match (symbolic, hitoolbox) {
-        (Some(hotkey), Some(sources)) => hotkey60_enabled(&hotkey) && selectable_sources(&sources) >= 2,
+        (Some(hotkey), Some(sources)) => {
+            hotkey60_enabled(&hotkey) && selectable_sources(&sources) >= 2
+        }
         _ => false,
     }
 }
@@ -122,7 +124,9 @@ mod tests {
     use super::*;
 
     fn hotkey(enabled: &str) -> String {
-        format!(r#"{{"enabled":{enabled},"value":{{"type":"standard","parameters":[32,49,262144]}}}}"#)
+        format!(
+            r#"{{"enabled":{enabled},"value":{{"type":"standard","parameters":[32,49,262144]}}}}"#
+        )
     }
 
     fn sources(json: &str) -> String {
@@ -161,9 +165,8 @@ mod tests {
 
     #[test]
     fn claim_requires_both_the_hotkey_and_a_second_source() {
-        let two = sources(
-            r#"[{"InputSourceKind":"Keyboard Layout"},{"InputSourceKind":"Input Mode"}]"#,
-        );
+        let two =
+            sources(r#"[{"InputSourceKind":"Keyboard Layout"},{"InputSourceKind":"Input Mode"}]"#);
         let one = sources(r#"[{"InputSourceKind":"Keyboard Layout"}]"#);
         // The real machine shape: hotkey on + two sources = claimed.
         let claimed = hotkey60_enabled(&hotkey("true")) && selectable_sources(&two) >= 2;
@@ -181,5 +184,55 @@ mod tests {
         assert!(!hotkey60_enabled("{ not json"));
         assert_eq!(selectable_sources("{ not json"), 0);
         assert_eq!(selectable_sources("{}"), 0);
+    }
+}
+
+// True macOS window-level tabs (system title-bar tabbing).
+//
+// winit has no API for AppKit's native tabbed windows, but every winit window is backed by a real
+// `NSWindow`. We grab that pointer via winit's raw window handle and drive it with objc2 (the same
+// stack winit itself pins). This lets us group multiple real `NSWindow`s into one native tabbed set
+// so the system draws the title-bar tab bar with the OS traffic-light chrome. We only reliably get
+// the `NSView*` from winit, so we ask it for its owning window (`[view window]`).
+// ───────────────────────────────────────────────────────────────────────────
+
+#[cfg(target_os = "macos")]
+pub mod tabs {
+    use objc2::runtime::AnyObject;
+    use winit::raw_window_handle::{HasWindowHandle, RawWindowHandle};
+    use winit::window::Window;
+
+    /// Pull the live `NSWindow*` for a winit window (via its NSView's `window` property). None on
+    /// non-Apple platforms / when there's no window.
+    pub(crate) fn ns_window(w: &Window) -> Option<*mut AnyObject> {
+        let raw = w.window_handle().ok()?.as_raw();
+        let view = match raw {
+            RawWindowHandle::AppKit(h) => h.ns_view.as_ptr().cast::<AnyObject>(),
+            _ => return None,
+        };
+        let wnd: *mut AnyObject = unsafe { objc2::msg_send![view, window] };
+        if wnd.is_null() {
+            None
+        } else {
+            Some(wnd)
+        }
+    }
+
+    /// Advertise native tabbing (`NSTabbingModePreferred` = 1) so macOS offers the system tab bar.
+    pub(crate) fn enable_tabbing(w: &Window) {
+        let Some(obj) = ns_window(w) else { return };
+        unsafe {
+            let _: () = objc2::msg_send![obj, setTabbingMode: 1isize];
+        }
+    }
+
+    /// Splice `sibling` into `primary`'s window group as a tab (`addTabbedWindow:ordered:` with
+    /// `NSWindowAbove` = 1), so macOS draws them as one tabbed window set.
+    pub(crate) fn join_tab_group(primary: &Window, sibling: &Window) {
+        let Some(a) = ns_window(primary) else { return };
+        let Some(b) = ns_window(sibling) else { return };
+        unsafe {
+            let _: () = objc2::msg_send![a, addTabbedWindow: b, ordered: 1isize];
+        }
     }
 }

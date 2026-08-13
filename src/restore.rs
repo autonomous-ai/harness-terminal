@@ -19,6 +19,10 @@ pub struct TabSpec {
     /// Tunnel/remote ports; only meaningful for "tunnel".
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub port: Option<u16>,
+    /// For a tunnel tab opened as "attach an existing session": the remote tmux session name to
+    /// re-attach to. `None` for every other kind (fresh spawns derive their own `auton-<engine>`).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub session: Option<String>,
     /// A user-assigned tab name (prefix+,). None = no custom name, fall back to the engine id.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub name: Option<String>,
@@ -34,6 +38,7 @@ impl App {
                 host: s.meta.host.clone(),
                 engine: s.meta.engine.clone(),
                 port: None,
+                session: s.attach_session.clone(),
                 name: s.meta.name.clone(),
             })
             .collect()
@@ -42,10 +47,31 @@ impl App {
 
 // ── config-file path ───────────────────────────────────────────────────────
 
+// Per-thread override of the config dir, used by the tests so they can isolate the persistence
+// directory WITHOUT mutating the process-global `HARNESS_CONFIG_DIR` env var.
+//
+// The old test approach called `std::env::set_var` to redirect the config dir, which is unsound
+// under parallel test execution: another thread reading `config_dir()` concurrently while the env
+// is being mutated is undefined behavior in Rust 2021, and it made the suite flaky (intermittent
+// panics in the shared file-backed tests). A thread-local override is race-free by construction.
+thread_local! {
+    static CONFIG_OVERRIDE: std::cell::RefCell<Option<std::path::PathBuf>> =
+        const { std::cell::RefCell::new(None) };
+}
+
+// `#[cfg(test)]`-only: set/clear this thread's config-dir override.
+#[cfg(test)]
+fn set_config_override(dir: Option<std::path::PathBuf>) {
+    CONFIG_OVERRIDE.with(|c| *c.borrow_mut() = dir);
+}
+
 /// The config dir for this app: `~/.config/harness-terminal` on Linux/BSD, `~/Library/...` on
 /// macOS — a conventional, per-user location we can write without prompting. An explicit
-/// `HARNESS_CONFIG_DIR` overrides it (used by tests to isolate, handy for portable/CI setups too).
+/// `HARNESS_CONFIG_DIR` overrides it (handy for portable/CI setups too).
 pub fn config_dir() -> std::path::PathBuf {
+    if let Some(dir) = CONFIG_OVERRIDE.with(|c| c.borrow().clone()) {
+        return dir;
+    }
     if let Some(dir) = std::env::var_os("HARNESS_CONFIG_DIR") {
         return std::path::PathBuf::from(dir);
     }
@@ -129,6 +155,28 @@ pub fn save_recent_dirs(dirs: &[String]) {
 /// Load the recent working-directory list (empty on missing file / bad JSON).
 pub fn load_recent_dirs() -> Vec<String> {
     let Ok(raw) = std::fs::read_to_string(recent_dirs_path()) else {
+        return Vec::new();
+    };
+    serde_json::from_str(&raw).unwrap_or_default()
+}
+
+fn recent_hosts_path() -> std::path::PathBuf {
+    config_dir().join("recent-hosts.json")
+}
+
+/// Persist the MRU remote-host list (most-recent first, already capped by the caller), so the
+/// Remote-Attach overlay can pre-fill the last server you attached to. Best-effort like the others.
+pub fn save_recent_hosts(hosts: &[String]) {
+    let _ = std::fs::create_dir_all(config_dir());
+    let _ = std::fs::write(
+        recent_hosts_path(),
+        serde_json::to_string_pretty(hosts).unwrap_or_default(),
+    );
+}
+
+/// Load the recent remote-host list (empty on missing file / bad JSON).
+pub fn load_recent_hosts() -> Vec<String> {
+    let Ok(raw) = std::fs::read_to_string(recent_hosts_path()) else {
         return Vec::new();
     };
     serde_json::from_str(&raw).unwrap_or_default()
@@ -494,9 +542,11 @@ mod tests {
             SEQ.fetch_add(1, std::sync::atomic::Ordering::Relaxed)
         ));
         let _ = std::fs::remove_dir_all(&dir);
-        std::env::set_var("HARNESS_CONFIG_DIR", &dir);
+        // Thread-local, not env: avoids the unsound concurrent `set_var` that made these tests race
+        // (and intermittent panics) under parallel execution.
+        set_config_override(Some(dir.clone()));
         let r = std::panic::catch_unwind(|| f(&dir));
-        std::env::remove_var("HARNESS_CONFIG_DIR");
+        set_config_override(None);
         let _ = std::fs::remove_dir_all(&dir);
         assert!(r.is_ok());
     }
@@ -510,6 +560,7 @@ mod tests {
                 host: "this-host".into(),
                 engine: "shell".into(),
                 port: None,
+                session: None,
                 name: None,
             },
             TabSpec {
@@ -517,6 +568,7 @@ mod tests {
                 host: "10.0.0.4".into(),
                 engine: "codex".into(),
                 port: Some(4321),
+                session: Some("agent-runs".into()),
                 name: Some("db-migrate".into()),
             },
         ];
@@ -527,6 +579,7 @@ mod tests {
         assert_eq!(back[1].kind, "tunnel");
         assert_eq!(back[1].host, "10.0.0.4");
         assert_eq!(back[1].port, Some(4321));
+        assert_eq!(back[1].session.as_deref(), Some("agent-runs"));
         assert_eq!(back[0].name, None);
         assert_eq!(back[1].name.as_deref(), Some("db-migrate"));
     }
@@ -553,6 +606,26 @@ mod tests {
             assert_eq!(still, 1.7);
         });
     }
+
+    /// Recent remote hosts round-trip through their file in MRU order; missing file -> empty.
+    #[test]
+    fn recent_hosts_roundtrip_in_order() {
+        with_isolated_dir(|_| {
+            assert!(load_recent_hosts().is_empty(), "no file yet");
+            save_recent_hosts(&[
+                "10.0.0.4:18473/claude".to_string(),
+                "builder".to_string(),
+            ]);
+            assert_eq!(
+                load_recent_hosts(),
+                vec![
+                    "10.0.0.4:18473/claude".to_string(),
+                    "builder".to_string(),
+                ]
+            );
+        });
+    }
+
 
     /// Window geometry round-trips through its own file; a zero size is refused/tolerated.
     #[test]
@@ -616,6 +689,7 @@ mod tests {
                     host: "build-host".into(),
                     engine: "claude".into(),
                     port: None,
+                    session: None,
                     name: None,
                 },
                 TabSpec {
@@ -623,6 +697,7 @@ mod tests {
                     host: "10.0.0.9".into(),
                     engine: "opencode".into(),
                     port: Some(7000),
+                    session: None,
                     name: Some("staging-deploy".into()),
                 },
             ];

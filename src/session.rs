@@ -183,6 +183,10 @@ pub struct SessionMeta {
 /// A single terminal session: emulator surface + transport for I/O.
 pub struct Session {
     pub meta: SessionMeta,
+    /// The remote tmux session name this pane attaches to, when it was opened via remote-attach as
+    /// "attach an existing session" (rather than a fresh engine spawn). `None` for every other kind.
+    /// Persisted in the tab spec so a relaunch re-attaches to the same named session.
+    pub attach_session: Option<String>,
     pub term: Arc<FairMutex<Term<Listener>>>,
     transport: Box<dyn Transport>,
     /// Echo cancellation for remote-byte transports (ssh/tunnel); None for local ones.
@@ -280,6 +284,7 @@ impl Session {
             LocalPtyTransport::spawn(program, args, size, working_dir, Arc::clone(&term))?;
         Ok(Session {
             meta,
+            attach_session: None,
             term,
             transport: Box::new(transport),
             echo: None,
@@ -305,6 +310,7 @@ impl Session {
         let transport = crate::transport::TmuxTransport::spawn(program, size, Arc::clone(&term))?;
         Ok(Session {
             meta,
+            attach_session: None,
             term,
             transport: Box::new(transport),
             echo: None,
@@ -347,6 +353,50 @@ impl Session {
         )?;
         Ok(Session {
             meta,
+            attach_session: None,
+            term,
+            transport: Box::new(transport),
+            echo: Some(echo),
+            title,
+            bell,
+            retry: Mutex::new(RetryState::new()),
+            scrolled: Arc::new(std::sync::atomic::AtomicBool::new(false)),
+            pending: Mutex::new(Vec::new()),
+            born: Instant::now(),
+        })
+    }
+
+    /// Attach to an EXISTING named tmux session on `host` through the harness pane-relay tunnel.
+    /// Unlike [`Session::tunnel`] this does NOT spawn/restart an engine — it resumes whatever is
+    /// already running in that session (attach-or-create, no kill) and replays the pane's screen.
+    pub fn tunnel_attach(
+        meta: SessionMeta,
+        host: &str,
+        port: u16,
+        session: &str,
+        size: TermSize,
+    ) -> io::Result<Session> {
+        let title = Arc::new(Mutex::new(None));
+        let listener = Listener::with_title(Arc::clone(&title));
+        let bell = listener.bell_flag();
+        let term = Arc::new(FairMutex::new(Term::new(
+            Config::default(),
+            &size,
+            listener,
+        )));
+        // Attaching to a live pane is a latency cross too — same echo-cancellation setup as tunnel.
+        let echo = Arc::new(EchoCanceller::default());
+        let transport = crate::transport::TunnelTransport::spawn_attach(
+            host,
+            port,
+            session,
+            size,
+            Arc::clone(&term),
+            Arc::clone(&echo),
+        )?;
+        Ok(Session {
+            meta,
+            attach_session: Some(session.to_string()),
             term,
             transport: Box::new(transport),
             echo: Some(echo),
@@ -381,6 +431,7 @@ impl Session {
         )?;
         Ok(Session {
             meta,
+            attach_session: None,
             term,
             transport: Box::new(transport),
             echo: Some(echo),
@@ -744,6 +795,7 @@ mod tests {
                 title: "e @ h".into(),
                 name: None,
             },
+            attach_session: None,
             term,
             transport: Box::new(fake),
             echo: None,
@@ -809,7 +861,6 @@ mod tests {
     /// captured snapshot can be replayed to a fresh emulator and reconstruct the same history.
     #[test]
     fn capture_returns_scrollback_text_in_order() {
-        use alacritty_terminal::grid::Dimensions;
 
         let size = TermSize {
             lines: 24,
@@ -887,10 +938,20 @@ mod tests {
     /// The retry backoff ladder grows exponentially and caps at 60s, so a dead daemon is probed on
     /// a sane schedule (5s, 10s, 20s, 40s, 60s, 60s, …) rather than hammered every sweep tick.
     #[test]
+    fn retry_backoff_ladder_caps_at_60() {
+        assert_eq!(RetryState::backoff_seconds(0), 5);
+        assert_eq!(RetryState::backoff_seconds(1), 10);
+        assert_eq!(RetryState::backoff_seconds(2), 20);
+        assert_eq!(RetryState::backoff_seconds(3), 40);
+        assert_eq!(RetryState::backoff_seconds(4), 60);
+        assert_eq!(RetryState::backoff_seconds(9), 60, "must cap, not overflow");
+    }
+
     /// `tail` returns the newest visible rows first, never walking history, and strips the grid's
     /// right-padding so the preview reads as plain lines (not a fixed-width block).
+    #[test]
     fn tail_returns_newest_screen_rows_first() {
-        use alacritty_terminal::{grid::Dimensions, vte::ansi::Processor};
+        use alacritty_terminal::vte::ansi::Processor;
 
         let size = TermSize {
             lines: 24,
@@ -909,15 +970,6 @@ mod tests {
         }
         let tail = tail_to_string(term.lock().grid(), 3);
         assert_eq!(tail, vec!["last-c", "last-b", "last-a"]);
-    }
-
-    fn retry_backoff_ladder_caps_at_60() {
-        assert_eq!(RetryState::backoff_seconds(0), 5);
-        assert_eq!(RetryState::backoff_seconds(1), 10);
-        assert_eq!(RetryState::backoff_seconds(2), 20);
-        assert_eq!(RetryState::backoff_seconds(3), 40);
-        assert_eq!(RetryState::backoff_seconds(4), 60);
-        assert_eq!(RetryState::backoff_seconds(9), 60, "must cap, not overflow");
     }
 
     /// The bell flag is set when the emulator fires the bell event, and `take_bell` is reset-on-read

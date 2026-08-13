@@ -37,6 +37,8 @@ default_engine = "claude"
 # Optional color theme. Every entry is optional — unset values keep the built-in
 # palette, so a partial block works. Colors are [r, g, b], each 0-255.
 # [theme]
+# preset = "tokyo-night"       # base palette: tokyo-night | gruvbox-dark |
+#                              #   solarized-dark | nord | dracula | github-dark
 # foreground = [234, 234, 234]
 # background = [0, 0, 0]
 # cursor = [234, 234, 234]          # underline/beam cursor
@@ -78,3 +80,11 @@ default_engine = "claude"
 # new_session = "N"     # prefix+Shift+n -> new session (capital is a distinct key)
 # search = "f"          # keep default
 # copy_mode = "["       # keep default
+
+# macOS native window-level tabs (true title-bar tab bar) instead of the in-app
+# framebuffer tab strip. When on, each session gets its own real NSWindow and they're
+# grouped into AppKit's native tab set (drag a tab out, Cmd+Tab picker, OS traffic-light
+# chrome; Ctrl+H n / + opens a new tab in the same group). Default (absent) = false:
+# the in-app tab strip. Switch config `native_tabs = true`, relaunch, and the system
+# tab bar takes over.
+native_tabs = false

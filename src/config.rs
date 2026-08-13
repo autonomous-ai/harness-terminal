@@ -56,6 +56,12 @@ pub struct Config {
     /// (or an empty block) = today's exact keybindings. See `crate::keys`.
     #[serde(default)]
     pub keybindings: Option<BTreeMap<String, String>>,
+    /// Opt into macOS native window-level tabs (the system title-bar tab bar) instead of the
+    /// framebuffer-drawn tab strip. When enabled, each session gets its own real `NSWindow` and they
+    /// are grouped into AppKit's native tab set. Absent defaults to `false` — the in-app tab strip —
+    /// which is the always-works fallback.
+    #[serde(default)]
+    pub native_tabs: Option<bool>,
 }
 
 /// A user-configurable color theme. Every field is optional; unset entries keep the built-in
@@ -63,6 +69,11 @@ pub struct Config {
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(default)]
 pub struct Theme {
+    /// A named preset palette to start from (`tokyo-night`, `gruvbox-dark`, `solarized-dark`,
+    /// `nord`, `dracula`, `github-dark`). Any field set below (foreground/background/ansi/…) layers
+    /// on top of the preset; absent/unknown falls back to the built-in `tokyo-night` defaults.
+    #[serde(default)]
+    pub preset: Option<String>,
     /// Default foreground (normal text). Falls back to the light `0xEAEAEA`.
     pub foreground: Option<[u8; 3]>,
     /// Default background. Falls back to black.
@@ -134,6 +145,7 @@ where
 impl Default for Theme {
     fn default() -> Self {
         Theme {
+            preset: None,
             foreground: None,
             background: None,
             cursor: None,
@@ -157,6 +169,7 @@ impl Default for Config {
             theme: None,
             keybindings: None,
             prefix_key: None,
+            native_tabs: None,
         }
     }
 }
