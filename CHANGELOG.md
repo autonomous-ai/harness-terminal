@@ -21,6 +21,12 @@ entries record user-visible and architectural changes since the last tagged mile
   reconnect.
 
 ### Fixed
+- **`prefix+l` (back to previous tab) no longer jumps to the wrong session after a close or
+  reorder.** The "previous tab" index was only re-recorded on focus switches and never invalidated
+  when tabs were closed or dragged into a new order, so after removing/reordering a tab the stored
+  pointer silently named a *different* session and `prefix+l` landed you somewhere unexpected. The
+  pointer is now cleared on every close and reorder (and re-recorded on the next focus switch), so
+  flip-back always returns to the tab you were actually on.
 - **Cmd+click opens URLs without a trailing sentence period.** A scheme URL that ended in
   punctuation (``Read https://…/foo.``) included the trailing period and opened a 404; the docs
   claimed it was stripped but the code kept it. A single trailing period is now trimmed, while an

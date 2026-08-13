@@ -866,6 +866,9 @@ impl Application {
         let a = self.app.active;
         self.app.move_tab(delta);
         if self.app.active != a {
+            // A structural move shifts every index, so the tmux-style "previous" pointer would
+            // silently point at a different session; forget it (see `forget_tab`).
+            self.last_active = None;
             self.swap_parallel(a, self.app.active);
         }
     }
@@ -893,6 +896,9 @@ impl Application {
     /// vector, so each session's pin/mute/busy/quiet/badge state follows it to its new slot on a
     /// drag-to-reorder.
     fn reorder_parallel(&mut self, from: usize, to: usize) {
+        // Drag-reordering shifts every index, so the "previous tab" pointer no longer names the
+        // session it was recorded for; drop it rather than jump to the wrong tab on `prefix+l`.
+        self.last_active = None;
         move_slot(&mut self.muted, from, to);
         move_slot(&mut self.pinned, from, to);
         move_slot(&mut self.seen_history, from, to);
@@ -6598,6 +6604,12 @@ impl Application {
     /// vector that's indexed by tab stays in lockstep with `tabs` (a later frame's `resize(n, …)`
     /// only truncates the tail and would otherwise leave a shifted stale flag at `i`).
     fn forget_tab(&mut self, i: usize) {
+        // Closing/reordering any tab shifts the remaining indices, so the stored tmux-style
+        // "previous tab" index (`prefix+l`) would silently point at a different session after the
+        // removal. Drop it here — every close path funnels through this method — and let the next
+        // `set_active` re-record which tab was actually current. A plain focus switch never calls
+        // this, so the flip-back feature is unaffected.
+        self.last_active = None;
         // Drop the slot from every tab-parallel vector, split by element type (Rust arrays are
         // homogeneous, so each type is removed in its own pass).
         if i < self.seen_history.len() {
