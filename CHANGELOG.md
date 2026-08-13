@@ -6,6 +6,10 @@ entries record user-visible and architectural changes since the last tagged mile
 ## Unreleased / 0.1.0 (in progress)
 
 ### Fixed
+- **Native-mode Cmd+W clamps its focused window index.** The close path indexes
+  `hosts[active_host]` to honor the pin guard; if a window was dropped without the index being
+  re-derived, an unclamped index could panic. It now clamps `active_host` into range before use,
+  matching the other guards scattered across native mode.
 - **Bulk-close marked panes from the fleet grid.** `X` prunes every marked tile at once (high→low,
   honoring the pin guard + per-tab undo) — the bulk sibling of the single-tile `x`. Unlike
   `b`/`C`/`R` it requires explicit marks (no "close everything" fallback), so a stray press can

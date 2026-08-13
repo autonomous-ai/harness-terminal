@@ -8754,7 +8754,10 @@ impl ApplicationHandler for Application {
                 // session any more than the in-app `x` does. The OS traffic-light close is a separate
                 // deliberate gesture on the window (handled via CloseRequested, not here) and is not
                 // blocked — but our own close stays honest to the shield.
-                let tab = self.hosts[self.active_host].tab;
+                // Clamp active_host defensively: if a window was dropped without the index being
+                // re-derived (e.g. a session closed under a race), an unclamped index would panic.
+                let hi = self.active_host.min(self.hosts.len() - 1);
+                let tab = self.hosts[hi].tab;
                 if self.pinned.get(tab).copied().unwrap_or(false) {
                     self.flash = Some((
                         "🔒 pinned — prefix A to unpin first".to_string(),
@@ -8763,7 +8766,7 @@ impl ApplicationHandler for Application {
                     self.request_redraw();
                     return;
                 }
-                self.close_native_tab(self.active_host, event_loop);
+                self.close_native_tab(hi, event_loop);
             } else if !self.app.tabs.is_empty() {
                 self.close_tab_at(self.app.active);
             }
