@@ -279,6 +279,9 @@ struct Application {
     peek_scroll: usize,
     /// Selected row in the host-overview overlay (`Overlay::Hosts`), an index into `host_tally`.
     hosts_sel: usize,
+    /// When `Some`, the host-overview is drilled into that host, listing its sessions (this is the
+    /// sub-list you navigate to land on a specific agent run instead of the first tab of the host).
+    hosts_host: Option<String>,
     /// Command-palette filter text (the prefix+; palette). Typing narrows `palette_filtered`.
     palette_q: String,
     /// The full, static list of (label, action) rows the palette filters over.
@@ -578,6 +581,7 @@ impl Application {
             peek_sel: 0,
             peek_scroll: 0,
             hosts_sel: 0,
+            hosts_host: None,
             palette_q: String::new(),
             palette_rows: PaletteAction::all_rows(),
             palette_filtered: Vec::new(),
@@ -2823,14 +2827,20 @@ impl Application {
 
     /// Render the host overview: one row per distinct host across open tabs, with its live/total
     /// tally, so a diver sees "which machines are up" at a glance. Enter jumps to that host's first
-    /// tab. Selection is the pure `host_tally` grouping, so the data is unit-tested.
+    /// tab, or `→` drills into the host's sessions (listing them so you can land on a specific one).
+    /// Selection is the pure `host_tally` grouping, so the data is unit-tested.
     fn render_hosts(&mut self, fb: &mut Framebuffer) {
         let (base_y, line_px) = self.overlay_base_y();
+        // Drill-in view: one row per session on the selected host.
+        if let Some(host) = self.hosts_host.clone() {
+            self.render_host_sessions(fb, base_y, line_px, &host);
+            return;
+        }
         let tally = self.owned_host_breakdown();
         draw_text(
             fb,
             &mut self.cache,
-            "  hosts · which machines are up · ↑/↓ select · Enter → first tab · Esc close  ",
+            "  hosts · which machines are up · ↑/↓ select · → drill · Enter → first tab · Esc close  ",
             32,
             base_y,
             self.font_px,
@@ -2896,6 +2906,65 @@ impl Application {
         }
     }
 
+    /// Render the drill-in list of sessions on `host` (the `→` sub-view of the host overview): one
+    /// row per session in tab order, live/quiet marked, so a diver can land on a specific agent run.
+    fn render_host_sessions(
+        &mut self,
+        fb: &mut Framebuffer,
+        base_y: usize,
+        line_px: usize,
+        host: &str,
+    ) {
+        let idxs = self.host_session_indices(host);
+        draw_text(
+            fb,
+            &mut self.cache,
+            &format!("  {host} sessions · ↑/↓ select · Enter → open · ←/Esc back  "),
+            32,
+            base_y,
+            self.font_px,
+            WHITE,
+        );
+        if idxs.is_empty() {
+            draw_text(
+                fb,
+                &mut self.cache,
+                "  no sessions on this host  ",
+                32,
+                base_y + line_px,
+                self.font_px,
+                CHROME_DIM,
+            );
+            return;
+        }
+        self.hosts_sel = self.hosts_sel.min(idxs.len().saturating_sub(1));
+        let top = scroll_top(idxs.len(), self.hosts_sel, 20);
+        for (row, &tab) in idxs.iter().enumerate().skip(top).take(20) {
+            let scr = row - top;
+            let sel = row == self.hosts_sel;
+            if sel {
+                overlay_row_sel(fb, base_y + (scr + 1) * line_px, line_px, 18);
+            }
+            let color = if sel {
+                WHITE
+            } else if self.app.tabs.get(tab).map(|s| s.alive()).unwrap_or(false) {
+                (0x4a, 0xe0, 0x8a)
+            } else {
+                CHROME_DIM
+            };
+            let label = self.session_row_label(tab);
+            draw_text(
+                fb,
+                &mut self.cache,
+                &format!("  {label}{}", if sel { "  ◄" } else { "" }),
+                32,
+                base_y + (scr + 1) * line_px,
+                self.font_px,
+                color,
+            );
+        }
+    }
+
     /// Owned, per-host tally over the open tabs (host as `String`, empty host normalized to
     /// `local`) — the data behind the host-overview overlay. Returns owned values so it can be
     /// called from a `&mut self` render/nav without borrowing the tab list past a mutation.
@@ -2929,6 +2998,43 @@ impl Application {
                 .tabs
                 .iter()
                 .map(|s| (s.meta.host.as_str(), s.alive(), s.meta.engine.as_str())),
+        )
+    }
+
+    /// Tab indices (in tab order) of sessions belonging to `host` (empty host normalized to
+    /// `local`). The drill-in list for the host-overview; the returned order is the tab order.
+    fn host_session_indices(&self, host: &str) -> Vec<usize> {
+        session_indices_for_host(
+            self.app
+                .tabs
+                .iter()
+                .enumerate()
+                .map(|(i, s)| (i, s.meta.host.as_str())),
+            host,
+        )
+    }
+
+    /// A one-line label for a tab in the host drill-in: `● claude (3) · name · osc-title`, where the
+    /// (N) is the 1-based tab number and the trailing part is the session's live title if any.
+    fn session_row_label(&self, tab: usize) -> String {
+        let Some(s) = self.app.tabs.get(tab) else {
+            return String::new();
+        };
+        let head = s.meta.name.clone().unwrap_or_else(|| s.meta.engine.clone());
+        let state = if s.alive() { "●" } else { "○" };
+        let live = s
+            .live_title()
+            .map(|t| format!(" · {t}"))
+            .unwrap_or_default();
+        let where_s = if s.kind() == "pty" {
+            String::new()
+        } else {
+            format!("@{}", s.meta.host)
+        };
+        format!(
+            "{state} {} ({}){where_s} · {head}{live}",
+            s.meta.engine,
+            tab + 1
         )
     }
 
@@ -3936,6 +4042,7 @@ impl Application {
             NextHost => self.next_host(),
             Hosts => {
                 self.hosts_sel = 0;
+                self.hosts_host = None;
                 self.app.overlay = Overlay::Hosts;
             }
             Dnd => self.toggle_dnd(),
@@ -4317,6 +4424,7 @@ impl Application {
                 Some("next_host") => self.next_host(),
                 Some("hosts") => {
                     self.hosts_sel = 0;
+                    self.hosts_host = None;
                     self.app.overlay = Overlay::Hosts;
                 }
                 Some("dnd") => self.toggle_dnd(),
@@ -4800,34 +4908,79 @@ impl Application {
             Overlay::Hosts => {
                 match key {
                     Key::Named(n) => match n {
+                        // In the drill-in sub-list, Esc or Left returns to the host list; in the
+                        // host list, Esc closes the overlay.
                         winit::keyboard::NamedKey::Escape => {
-                            self.app.overlay = Overlay::None;
+                            if self.hosts_host.take().is_some() {
+                                self.hosts_sel = 0;
+                            } else {
+                                self.app.overlay = Overlay::None;
+                            }
+                        }
+                        winit::keyboard::NamedKey::ArrowLeft => {
+                            if self.hosts_host.take().is_some() {
+                                self.hosts_sel = 0;
+                            }
                         }
                         winit::keyboard::NamedKey::ArrowDown => {
-                            let tally = self.owned_host_tally();
-                            if !tally.is_empty() {
-                                self.hosts_sel =
-                                    (self.hosts_sel + 1).min(tally.len().saturating_sub(1));
+                            if let Some(host) = &self.hosts_host {
+                                let n = self.host_session_indices(host).len();
+                                if n > 0 {
+                                    self.hosts_sel = (self.hosts_sel + 1).min(n - 1);
+                                }
+                            } else {
+                                let tally = self.owned_host_tally();
+                                if !tally.is_empty() {
+                                    self.hosts_sel =
+                                        (self.hosts_sel + 1).min(tally.len().saturating_sub(1));
+                                }
                             }
                         }
                         winit::keyboard::NamedKey::ArrowUp => {
                             self.hosts_sel = self.hosts_sel.saturating_sub(1);
                         }
+                        winit::keyboard::NamedKey::ArrowRight => {
+                            // Drill from the host list into the selected host's sessions.
+                            if self.hosts_host.is_none() {
+                                let tally = self.owned_host_tally();
+                                if let Some((host, _, _)) = tally.get(self.hosts_sel) {
+                                    if self.host_session_indices(host).len() > 1 {
+                                        self.hosts_host = Some(host.clone());
+                                        self.hosts_sel = 0;
+                                    }
+                                }
+                            }
+                        }
                         winit::keyboard::NamedKey::Enter => {
-                            let tally = self.owned_host_tally();
-                            if let Some((host, _, _)) = tally.get(self.hosts_sel) {
-                                if let Some(i) = self.app.tabs.iter().position(|s| {
-                                    let h = if s.meta.host.is_empty() {
-                                        "local".to_string()
-                                    } else {
-                                        s.meta.host.clone()
-                                    };
-                                    &h == host
-                                }) {
+                            if let Some(host) = self.hosts_host.clone() {
+                                // Drill view: open the selected session on this host.
+                                let idxs = self.host_session_indices(&host);
+                                if let Some(&i) = idxs.get(self.hosts_sel) {
                                     self.set_active(i);
-                                    self.flash =
-                                        Some((format!("host {host}"), std::time::Instant::now()));
+                                    self.flash = Some((
+                                        format!("{host} · {}", i + 1),
+                                        std::time::Instant::now(),
+                                    ));
                                     self.app.overlay = Overlay::None;
+                                }
+                            } else {
+                                let tally = self.owned_host_tally();
+                                if let Some((host, _, _)) = tally.get(self.hosts_sel) {
+                                    if let Some(i) = self.app.tabs.iter().position(|s| {
+                                        let h = if s.meta.host.is_empty() {
+                                            "local".to_string()
+                                        } else {
+                                            s.meta.host.clone()
+                                        };
+                                        &h == host
+                                    }) {
+                                        self.set_active(i);
+                                        self.flash = Some((
+                                            format!("host {host}"),
+                                            std::time::Instant::now(),
+                                        ));
+                                        self.app.overlay = Overlay::None;
+                                    }
                                 }
                             }
                         }
@@ -6623,6 +6776,7 @@ fn scroll_top(total: usize, selected: usize, rows: usize) -> usize {
 /// Aggregate `(host, alive)` pairs into a per-host tally of `(host, alive_count, total_count)`,
 /// preserving first-seen host order. Pure and unit-tested so the fleet-summary host block and any
 /// future chrome can share one grouping.
+#[cfg(test)]
 fn host_tally<'a>(tabs: impl Iterator<Item = (&'a str, bool)>) -> Vec<(&'a str, usize, usize)> {
     let mut out: Vec<(&str, usize, usize)> = Vec::new();
     for (h, alive) in tabs {
@@ -6710,6 +6864,20 @@ fn fleet_host_line(host: &str, alive: usize, total: usize, mix: &[(String, usize
     } else {
         format!("{mark} {label} · {state} · {mix_s}")
     }
+}
+
+/// Tab indices (in tab order) whose session's host equals `host` (empty host normalized to
+/// `local`). Backs the host-overview drill-in list. Pure so it's unit-testable.
+fn session_indices_for_host<'a>(
+    tabs: impl Iterator<Item = (usize, &'a str)>,
+    host: &str,
+) -> Vec<usize> {
+    tabs.filter(|(_, h)| {
+        let hx = if h.is_empty() { "local" } else { *h };
+        hx == host
+    })
+    .map(|(i, _)| i)
+    .collect()
 }
 
 fn collect_fleet_matches(
@@ -7425,7 +7593,7 @@ mod tests {
         expand_click_word, fleet_host_line, fmt_duration, format_engine_mix, fuzzy_match,
         group_notifications, host_color, host_engine_breakdown, host_tally, join_labels, move_slot,
         next_host_index, parse_remote_attach, reanchor_active_after_batch, recall_index,
-        scroll_top, swap_slot, CmdShortcut, FleetMatch,
+        scroll_top, session_indices_for_host, swap_slot, CmdShortcut, FleetMatch,
     };
 
     use std::sync::Arc;
@@ -8137,5 +8305,31 @@ mod tests {
             fleet_host_line("", 1, 1, &[("claude".into(), 1)]),
             "● local · live · claude"
         );
+    }
+    /// The host-overview drill-in must list exactly the sessions on the selected host, in tab order,
+    /// with the local/empty host normalized — the data the `→` sub-view navigates.
+    #[test]
+    fn session_indices_for_host_lists_that_hosts_sessions_in_tab_order() {
+        let tabs = [
+            (0, ""), // local claude
+            (1, "build02"),
+            (2, "build02"),
+            (3, ""), // local codex
+            (4, "edge1"),
+        ];
+        // Empty host maps to "local".
+        assert_eq!(
+            session_indices_for_host(tabs.into_iter(), "local"),
+            vec![0, 3]
+        );
+        // A specific remote host, in tab order.
+        assert_eq!(
+            session_indices_for_host(tabs.into_iter(), "build02"),
+            vec![1, 2]
+        );
+        assert_eq!(session_indices_for_host(tabs.into_iter(), "edge1"), vec![4]);
+        // A host with no sessions is empty.
+        assert!(session_indices_for_host(tabs.into_iter(), "nope").is_empty());
+        assert!(session_indices_for_host(std::iter::empty(), "local").is_empty());
     }
 }

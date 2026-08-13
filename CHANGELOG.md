@@ -11,6 +11,12 @@ entries record user-visible and architectural changes since the last tagged mile
   claude×2, codex`), so a diver sees the whole fleet's engine spread at a glance. Backed by a pure,
   unit-tested `host_engine_breakdown` helper.
 
+- **Host overview drills into one machine's sessions.** On a host with several agent runs, `→`
+  (or Enter on a single-session host) jumps past the host row into a sub-list of that machine's
+  sessions — each labeled with its engine, tab number, name, and live title — so you can land on a
+  specific agent on a remote box instead of always the first tab. `↑/↓` navigate, `Enter` opens,
+  `←`/`Esc` back to the host list. Backed by a pure, unit-tested `session_indices_for_host` helper.
+
 - **Copied fleet summary now carries each machine's agent mix too.** `prefix+c` (copy fleet
   summary) renders the same per-host status + agent list as the host overview, so a pasted report
   reads `● build02 · live · claude×2, codex` — not just a live/total tally. A shared pure
