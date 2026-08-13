@@ -3698,8 +3698,8 @@ impl Application {
                 "reconnect this host / broadcast to this host",
             ),
             (
-                "Peek · / filter · n down · r reconnect · x close",
-                "narrow by host/engine/name · up/down/busy/quiet (compose: \"build05 down\") · n/r/x",
+                "Peek · / filter · n down · r reconnect · m mute · x close",
+                "narrow by host/engine/name · up/down/busy/quiet (compose: \"build05 down\") · n/r/m/x",
             ),
             (
                 "Broadcast · Space · ⇧Space",
@@ -4589,7 +4589,7 @@ impl Application {
         let rest = if self.peek_filtering {
             "↑/↓ · Enter jump · Esc clear  "
         } else {
-            "↑/↓ preview · n down · r reconnect · x close · Enter jump · Esc close  "
+            "↑/↓ preview · n down · r reconnect · m mute · x close · Enter jump · Esc close  "
         };
         let header = format!("{filter_prefix}{health}{rest}");
         draw_text(
@@ -6121,6 +6121,18 @@ impl Application {
                                             ));
                                         }
                                     }
+                                }
+                            }
+                        } else if c == "m" || c == "M" {
+                            // Toggle mute on the selected pane straight from triage — the per-row
+                            // sibling of prefix mute — so a noisy backgrounded agent is silenced from
+                            // the list without a drill-in. Non-destructive (no pin/undo dance needed).
+                            let shown = self.peek_filtered.len();
+                            if shown > 0 {
+                                let real = self.peek_filtered[self.peek_sel.min(shown - 1)];
+                                if let Some(m) = self.muted.get_mut(real) {
+                                    *m = !*m;
+                                    self.save_muted_state();
                                 }
                             }
                         } else if c == "x" {
