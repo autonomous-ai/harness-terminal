@@ -2681,13 +2681,16 @@ impl Application {
             hdr_color,
         );
 
-        // The list of matches: up to 8 rows, each prefixed with its tab's engine/host label.
-        let list_rows = if self.fleet_q.is_empty() || n == 0 {
+        // The list of matches: up to 8 rows, each prefixed with its tab's engine/host label. A
+        // scrolling viewport keeps the selected match on screen when there are more than 8 hits.
+        let rows = if self.fleet_q.is_empty() || n == 0 {
             0
         } else {
             8.min(n)
         };
-        for row in 0..list_rows {
+        let top = scroll_top(n, self.fleet_sel, rows);
+        for row in top..top + rows {
+            let scr = row - top;
             let m = self.fleet_matches[row];
             let selected = row == self.fleet_sel;
             let color = if selected { WHITE } else { CHROME_DIM };
@@ -2721,7 +2724,7 @@ impl Application {
                 &mut self.cache,
                 &line,
                 32,
-                base_y + (row + 1) * line_px,
+                base_y + (scr + 1) * line_px,
                 self.font_px,
                 color,
             );
