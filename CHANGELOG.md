@@ -6,6 +6,10 @@ entries record user-visible and architectural changes since the last tagged mile
 ## Unreleased / 0.1.0 (in progress)
 
 ### Fixed
+- **No double notification when a remote host reconnects.** A just-recovered pane (down→alive) was
+  getting both a `recover` toast and, in the same frame, a `busy` toast the moment its reconnect
+  produced output. `activity_flags` now skips the redundant `busy` nudge while a tab is still in its
+  recovery window — the `recover` toast already covers that reconnect, so a diver gets exactly one.
 - **Docs: README reflects the fleet features.** The key table now names peek `/` filtering, the
   fleet grid's full action set (`C`/`x`/`X`), per-host broadcast in the hosts drill, and the
   down/reconnected OS notifications and `↓` tab marker, so onboarding matches the implementation.

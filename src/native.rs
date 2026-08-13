@@ -916,8 +916,12 @@ impl Application {
             }
             // Fire a one-shot OS notification the first time a backgrounded agent goes busy, so a
             // diver is nudged without having to watch the badge. Once the tab is looked at (or it
-            // settles), `notified` is reset and the next transition nags again.
-            if grew && !self.notified[i] {
+            // settles), `notified` is reset and the next transition nags again. A tab still inside
+            // its recovery window (down→alive within the last few seconds) is skipped: it just got a
+            // `recover` toast for the same reconnect, so a second `busy` toast would be a double-nag.
+            // Backgrounded-unmuted is the only state that reaches here with a set recovery badge
+            // (active/muted tabs bail earlier), so this exactly cancels the duplicate.
+            if grew && !self.notified[i] && self.recover_until.get(i).copied().flatten().is_none() {
                 self.notified[i] = true;
                 fresh_busy.push(i);
             }
