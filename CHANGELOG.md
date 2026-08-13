@@ -6,6 +6,12 @@ entries record user-visible and architectural changes since the last tagged mile
 ## Unreleased / 0.1.0 (in progress)
 
 ### Fixed
+- **Ctrl/Option-arrow now send word/paragraph-move sequences.** Ctrl+Left/Right in readline/bash
+  previously fell back to a plain character move because the modifier was dropped from the arrow
+  escape sequence. Arrows now honor the xterm modifier encoding (`ESC [ 1;5C/D` = Ctrl, `1;3` =
+  Option, `1;7` = Ctrl+Option), so Ctrl+Left/Right jump by word and Ctrl+Up/Down by paragraph in
+  readline as expected; bare arrows and scrollback-paging arrows are unchanged.
+
 - **Home, End, forward-Delete, Insert, and F1-F12 now actually work in the shell.** These keys fell
   through normal-mode key forwarding into a generic `_ => {}` and were silently dropped, so Home/End
   and forward-delete did nothing in bash/readline/TUIs. They now forward the standard terminal escape

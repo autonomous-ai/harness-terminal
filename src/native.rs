@@ -5484,10 +5484,10 @@ impl Application {
                         winit::keyboard::NamedKey::Tab if mods.shift_key() => s.write(b"\x1b[Z"),
                         winit::keyboard::NamedKey::Tab => s.write(b"\t"),
                         winit::keyboard::NamedKey::Escape => s.write(b"\x1b"),
-                        winit::keyboard::NamedKey::ArrowUp => s.write(b"\x1b[A"),
-                        winit::keyboard::NamedKey::ArrowDown => s.write(b"\x1b[B"),
-                        winit::keyboard::NamedKey::ArrowRight => s.write(b"\x1b[C"),
-                        winit::keyboard::NamedKey::ArrowLeft => s.write(b"\x1b[D"),
+                        winit::keyboard::NamedKey::ArrowUp => s.write(arrow_seq(b'A', mods)),
+                        winit::keyboard::NamedKey::ArrowDown => s.write(arrow_seq(b'B', mods)),
+                        winit::keyboard::NamedKey::ArrowRight => s.write(arrow_seq(b'C', mods)),
+                        winit::keyboard::NamedKey::ArrowLeft => s.write(arrow_seq(b'D', mods)),
                         winit::keyboard::NamedKey::Space => s.write(b" "),
                         other => {
                             // Home/End/forward-Delete/Insert/F-keys aren't used by the app and were
@@ -7046,6 +7046,33 @@ enum CmdShortcut {
 /// handler (they fell into the generic `_ => {}` and were dropped), so Home/End/forward-delete did
 /// nothing in bash/readline/TUIs. Arrows, Tab, PageUp/PageDown, etc. are handled elsewhere by the
 /// app and deliberately return None here. Pure so the portability table is unit-tested.
+/// Arrow-key escape sequence, honoring Ctrl (word/paragraph move) and Option/Alt (object move)
+/// per the xterm modifier encoding (3 = Alt, 5 = Ctrl, 7 = Ctrl+Alt). Bare arrows produce the
+/// plain `ESC [ A-D` sequence. Previously Ctrl+arrow silently dropped the modifier (readline got a
+/// plain char move instead of a word move). Pure so the encoding table is unit-tested.
+fn arrow_seq(letter: u8, mods: &ModifiersState) -> &'static [u8] {
+    let ctrl = mods.control_key();
+    let alt = mods.alt_key();
+    match (ctrl, alt, letter) {
+        (false, false, b'A') => b"\x1b[A",
+        (false, false, b'B') => b"\x1b[B",
+        (false, false, b'C') => b"\x1b[C",
+        (false, false, _) => b"\x1b[D",
+        (false, true, b'A') => b"\x1b[1;3A",
+        (false, true, b'B') => b"\x1b[1;3B",
+        (false, true, b'C') => b"\x1b[1;3C",
+        (false, true, _) => b"\x1b[1;3D",
+        (true, false, b'A') => b"\x1b[1;5A",
+        (true, false, b'B') => b"\x1b[1;5B",
+        (true, false, b'C') => b"\x1b[1;5C",
+        (true, false, _) => b"\x1b[1;5D",
+        (true, true, b'A') => b"\x1b[1;7A",
+        (true, true, b'B') => b"\x1b[1;7B",
+        (true, true, b'C') => b"\x1b[1;7C",
+        (true, true, _) => b"\x1b[1;7D",
+    }
+}
+
 fn extra_named_seq(n: &winit::keyboard::NamedKey) -> Option<&'static [u8]> {
     use winit::keyboard::NamedKey as K;
     Some(match n {
@@ -7725,11 +7752,12 @@ fn move_slot<T>(v: &mut Vec<T>, from: usize, to: usize) {
 #[cfg(test)]
 mod tests {
     use super::{
-        argb_to_rgb, broadcast_bytes, cmd_shortcut, collect_fleet_matches, engine_accent,
-        expand_click_word, extra_named_seq, fleet_host_line, fmt_duration, format_engine_mix,
-        fuzzy_match, group_notifications, host_color, host_engine_breakdown, host_tally,
-        join_labels, move_slot, next_host_index, parse_remote_attach, reanchor_active_after_batch,
-        recall_index, scroll_top, session_indices_for_host, swap_slot, CmdShortcut, FleetMatch,
+        argb_to_rgb, arrow_seq, broadcast_bytes, cmd_shortcut, collect_fleet_matches,
+        engine_accent, expand_click_word, extra_named_seq, fleet_host_line, fmt_duration,
+        format_engine_mix, fuzzy_match, group_notifications, host_color, host_engine_breakdown,
+        host_tally, join_labels, move_slot, next_host_index, parse_remote_attach,
+        reanchor_active_after_batch, recall_index, scroll_top, session_indices_for_host, swap_slot,
+        CmdShortcut, FleetMatch,
     };
 
     use std::sync::Arc;
@@ -7868,6 +7896,28 @@ mod tests {
         assert_eq!(extra_named_seq(&K::PageDown), None);
         assert_eq!(extra_named_seq(&K::Escape), None);
         assert_eq!(extra_named_seq(&K::Enter), None);
+    }
+
+    /// Arrows honor the Ctr/Alt modifier encoding so readline gets word/paragraph moves (Ctrl+Left
+    /// etc.) instead of plain char moves, while bare arrows stay untouched.
+    #[test]
+    fn arrow_seq_honors_ctrl_and_alt_modifiers() {
+        use winit::keyboard::ModifiersState;
+        let ctrl = ModifiersState::CONTROL;
+        let alt = ModifiersState::ALT;
+        let both = ModifiersState::CONTROL | ModifiersState::ALT;
+        let none = ModifiersState::empty();
+        // Bare arrows unchanged.
+        assert_eq!(arrow_seq(b'D', &none), &b"\x1b[D"[..]);
+        assert_eq!(arrow_seq(b'C', &none), &b"\x1b[C"[..]);
+        // Ctrl+arrows → word/paragraph moves (xterm 1;5 encoding).
+        assert_eq!(arrow_seq(b'D', &ctrl), &b"\x1b[1;5D"[..]);
+        assert_eq!(arrow_seq(b'C', &ctrl), &b"\x1b[1;5C"[..]);
+        assert_eq!(arrow_seq(b'A', &ctrl), &b"\x1b[1;5A"[..]);
+        assert_eq!(arrow_seq(b'B', &ctrl), &b"\x1b[1;5B"[..]);
+        // Alt+arrows → object moves (1;3), and Ctrl+Alt → 1;7.
+        assert_eq!(arrow_seq(b'D', &alt), &b"\x1b[1;3D"[..]);
+        assert_eq!(arrow_seq(b'C', &both), &b"\x1b[1;7C"[..]);
     }
 
     /// Fleet search spans multiple sessions and is sorted by tab then line. Build two real emulator
