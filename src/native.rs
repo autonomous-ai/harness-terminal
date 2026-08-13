@@ -2371,21 +2371,16 @@ impl Application {
                 } else {
                     String::new()
                 };
-                let label = format!(
-                    " {}{}{}{}{}{}{} {} {}{}{}{} ",
-                    down,
-                    bell,
-                    recover,
-                    flag,
-                    spin,
-                    pin,
-                    head,
-                    live,
-                    mute,
-                    where_s,
-                    queued_mark,
-                    dot
+                // Split the label so a pane-backed tab's `@host` suffix can be drawn in its own
+                // per-host color (like peek does), letting a multi-machine fleet scan by host across
+                // the whole bar rather than only the active pill. `pre`/`post` keep their engine-
+                // accent color; the `@host` segment is tinted by the same stable `host_color` the
+                // active pill already paints its full label in. Local PTYs have no host to color.
+                let pre = format!(
+                    " {}{}{}{}{}{}{} {}{}",
+                    down, bell, recover, flag, spin, pin, head, live, mute
                 );
+                let post = format!("{queued_mark}{dot} ");
                 // Active tab: tinted by a stable hash of its host (dive context). Inactive tabs fall back
                 // to the engine's own accent color so you can spot the "claude" tab from across the bar.
                 let color = if active {
@@ -2393,7 +2388,14 @@ impl Application {
                 } else {
                     engine_accent(&s.meta.engine, &self.colors.accents)
                 };
-                let label_w = text_width(&mut self.cache, &label, self.font_px);
+                let pre_w = text_width(&mut self.cache, &pre, self.font_px);
+                let host_w = if where_s.is_empty() {
+                    0
+                } else {
+                    text_width(&mut self.cache, &where_s, self.font_px)
+                };
+                let post_w = text_width(&mut self.cache, &post, self.font_px);
+                let label_w = pre_w + host_w + post_w;
                 if active {
                     // Raised native tab: a rounded-top sheet (Safari/Chrome silhouette) with a thin
                     // top bevel and a 2px host-color underline at the strip bottom so the current
@@ -2405,15 +2407,31 @@ impl Application {
                     // Subtle hover chip so the pointer target reads before you commit to a switch.
                     filled_round_top(fb, x, inset_top, label_w, sheet_h, 7, CHROME_HOVER);
                 }
-                draw_text(
-                    fb,
-                    &mut self.cache,
-                    &label,
-                    x,
-                    tab_base,
-                    self.font_px,
-                    color,
-                );
+                if !active && !where_s.is_empty() {
+                    draw_text(fb, &mut self.cache, &pre, x, tab_base, self.font_px, color);
+                    draw_text(
+                        fb,
+                        &mut self.cache,
+                        &where_s,
+                        x + pre_w,
+                        tab_base,
+                        self.font_px,
+                        host_color(&s.meta.host),
+                    );
+                    draw_text(
+                        fb,
+                        &mut self.cache,
+                        &post,
+                        x + pre_w + host_w,
+                        tab_base,
+                        self.font_px,
+                        color,
+                    );
+                } else {
+                    // Active pill (already host-tinted) or a local tab with no host: one color.
+                    let full = format!("{pre}{where_s}{post}");
+                    draw_text(fb, &mut self.cache, &full, x, tab_base, self.font_px, color);
+                }
                 // The tab's full hit region is its label plus the inter-tab spacing; record it so
                 // hover/close hit-testing tracks exactly what was painted.
                 let x_end = x + label_w + 12;

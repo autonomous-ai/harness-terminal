@@ -6,6 +6,13 @@ entries record user-visible and architectural changes since the last tagged mile
 ## Unreleased / 0.1.0 (in progress)
 
 ### Fixed
+- **Every tab's `@host` suffix is now tinted by its machine's color, not just the active pill.**
+  Previously the tab bar painted the whole inactive-tab label (including `@host`) in the engine's
+  accent, so a session on `build05` and one on `edge1` of the *same engine* scanned identically.
+  Now each pane-backed tab's `@host` is drawn in the stable per-host color (the same `host_color`
+  the active pill already uses), so a multi-server fleet groups visually by machine across the whole
+  bar — consistent with the peek list, which already tinted hosts. Local PTY tabs have no host and
+  are unchanged, as is the active pill's look. Pure rendering change; idle CPU unaffected.
 - **War-room and peek now show the same lingering unread count as the tab bar.** Previously the
   fleet grid (`Ctrl+H e`) and peek (`Ctrl+H y`) only surfaced an agent's `!N` while it was producing
   output *that very frame*, so a settled agent with output you hadn't seen vanished from the triage
