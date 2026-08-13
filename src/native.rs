@@ -3699,7 +3699,7 @@ impl Application {
             ),
             (
                 "Peek · / filter · n down · r reconnect",
-                "narrow by host/engine/name · up/down/busy/quiet · n next down · r reconnect",
+                "narrow by host/engine/name · up/down/busy/quiet (compose: \"build05 down\") · n/r",
             ),
             (
                 "Broadcast · Space · ⇧Space",
@@ -4518,20 +4518,26 @@ impl Application {
     /// before; a query that matches nothing clamps to an empty list (no rows, never a panic).
     fn peek_refresh_filter(&mut self) {
         let n = self.app.tabs.len();
-        // The `/` filter understands a few live keywords on top of plain substring matching: `up`
-        // / `down` (remote alive/dead), and — since peek triage is about *who needs attention* — a
-        // `busy` (just produced output) or `quiet` (parked past the threshold, waiting on you)
-        // row. `busy`/`quiet` need native per-tab sampling (`grew_delta`/`quiet_for`), so they are
-        // resolved here rather than in the session's own `matches_filter`.
+        // The `/` filter understands live keywords (up/down/busy/quiet) plus plain substring
+        // matching, and composes them: multiple space-separated tokens must ALL match (`build05
+        // down`, `claude quiet`), so a diver can ask "which agents are down on this host?" in one
+        // query. `busy`/`quiet` need native per-tab sampling (`grew_delta`/`quiet_for`), so they
+        // are resolved here rather than in the session's own `matches_filter`. A blank query shows
+        // every session (backward-compatible with single-token substring queries).
         let q = self.peek_q.trim().to_lowercase();
+        let tokens: Vec<&str> = q.split_whitespace().collect();
         let mut filtered = Vec::with_capacity(n);
         for i in 0..n {
-            let keep = if q == "busy" {
-                self.grew_delta.get(i).copied().unwrap_or(0) > 0
-            } else if q == "quiet" {
-                self.quiet_for(i)
+            let keep = if tokens.is_empty() {
+                true
             } else {
-                self.app.tabs[i].matches_filter(&self.peek_q)
+                tokens.iter().all(|tok| match *tok {
+                    "down" => self.app.tabs[i].kind() != "pty" && !self.app.tabs[i].alive(),
+                    "up" => self.app.tabs[i].kind() != "pty" && self.app.tabs[i].alive(),
+                    "busy" => self.grew_delta.get(i).copied().unwrap_or(0) > 0,
+                    "quiet" => self.quiet_for(i),
+                    _ => self.app.tabs[i].matches_filter(tok),
+                })
             };
             if keep {
                 filtered.push(i);
