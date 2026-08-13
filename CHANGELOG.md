@@ -86,6 +86,11 @@ entries record user-visible and architectural changes since the last tagged mile
   a bulk close — defeating the "marks required so a stray press is never destructive" guard. Marks
   now clear on grid close, matching the broadcast overlay's fresh-reset behavior.
 ### Added
+- **Fleet search rows now show the matched line centered on the hit.** A long agent line whose
+  match sits mid-line used to display only the line's head, so the reason it matched was often
+  off-screen. Each row now shows a `…`-clipped window around the match (short lines pass through
+  whole), so scanning `Cmd+Shift+F` results reads like grep with context. The snippet geometry is
+  a pure `focus_snippet` helper, unit-tested.
 - **Find-in-session remembers your case / whole-word toggles across restarts** (iTerm2-style
   state memory, the same way query history is remembered). Toggle `c` / `w` in the find bar once
   and the `[Aa]` / `[whole-word]` flags come back on next launch; no re-toggling each session.

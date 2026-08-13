@@ -3414,16 +3414,19 @@ impl Application {
                         .collect()
                 }
             };
-            let text = if raw.trim().is_empty() {
+            let snippet = if raw.trim().is_empty() {
                 "(blank line)".to_string()
             } else {
-                raw.trim_end().to_string()
+                let budget = ((fb.width.saturating_sub(48)) / (self.cell_w.max(1) as usize))
+                    .saturating_sub(label.chars().count() + 7)
+                    .max(8);
+                focus_snippet(raw.trim_end(), m.col, budget)
             };
             let line = format!(
                 "  [{}] {}  {}",
                 label,
                 if selected { "◄" } else { " " },
-                text
+                snippet
             );
             draw_text(
                 fb,
@@ -9030,6 +9033,35 @@ fn collect_fleet_matches(
     out
 }
 
+/// A window of `row` centered on byte `col` (the match start), at most `max` characters with `…`
+/// on the cut side(s). Used by the fleet-search rows so a long agent line shows the region AROUND
+/// the hit instead of the line head — a match mid-line would otherwise sit off-screen. Short lines
+/// (that already fit) pass through whole. Pure; unit-tested.
+pub(crate) fn focus_snippet(row: &str, col: usize, max: usize) -> String {
+    let chars: Vec<char> = row.chars().collect();
+    if chars.len() <= max || max == 0 {
+        return row.chars().take(max).collect();
+    }
+    let col = col.min(chars.len().saturating_sub(1));
+    let window = max.saturating_sub(2);
+    let half = window / 2;
+    let mut start = col.saturating_sub(half);
+    let mut end = start + window;
+    if end > chars.len() {
+        end = chars.len();
+        start = end.saturating_sub(window);
+    }
+    let mut s = String::new();
+    if start > 0 {
+        s.push('…');
+    }
+    s.extend(&chars[start..end]);
+    if end < chars.len() {
+        s.push('…');
+    }
+    s
+}
+
 /// The macOS menu-style Cmd shortcuts we intercept before forwarding anything to the session.
 /// Kept as a pure (key, mods) → action decision so the behavior is unit-testable without a window,
 /// and so `forward_key` only executes the chosen action.
@@ -10048,13 +10080,14 @@ mod tests {
     use super::{
         argb_to_rgb, arrow_seq, broadcast_bytes, clip_dots, cmd_shortcut, collect_fleet_matches,
         copy_no_match_flash, engine_accent, expand_click_word, extra_named_seq, first_down_session,
-        fleet_host_line, fmt_duration, fmt_reconnect_summary, format_engine_mix, fuzzy_match,
-        grid_targets, grid_tile_at, group_notifications, host_color, host_engine_breakdown,
-        host_tally, join_labels, move_slot, next_host_index, next_trouble_index,
-        parse_remote_attach, prepend_capped, prev_trouble_index, reanchor_active_after_batch,
-        recall_index, scroll_top, session_indices_for_host, sgr_button_code, sgr_motion_code,
-        sgr_mouse, sgr_wheel_code, should_busy_nudge, status_accent, swap_slot, CmdShortcut,
-        FleetMatch, CHROME_BUSY, CHROME_ERR, CHROME_QUIET, CHROME_RECOVER,
+        fleet_host_line, fmt_duration, fmt_reconnect_summary, focus_snippet, format_engine_mix,
+        fuzzy_match, grid_targets, grid_tile_at, group_notifications, host_color,
+        host_engine_breakdown, host_tally, join_labels, move_slot, next_host_index,
+        next_trouble_index, parse_remote_attach, prepend_capped, prev_trouble_index,
+        reanchor_active_after_batch, recall_index, scroll_top, session_indices_for_host,
+        sgr_button_code, sgr_motion_code, sgr_mouse, sgr_wheel_code, should_busy_nudge,
+        status_accent, swap_slot, CmdShortcut, FleetMatch, CHROME_BUSY, CHROME_ERR, CHROME_QUIET,
+        CHROME_RECOVER,
     };
 
     use winit::event::{ElementState, MouseButton};
@@ -10351,6 +10384,33 @@ mod tests {
         // Alt+arrows → object moves (1;3), and Ctrl+Alt → 1;7.
         assert_eq!(arrow_seq(b'D', &alt), &b"\x1b[1;3D"[..]);
         assert_eq!(arrow_seq(b'C', &both), &b"\x1b[1;7C"[..]);
+    }
+
+    /// The fleet-search row snippet centers on the match so a long line's hit is on screen.
+    #[test]
+    fn focus_snippet_centers_on_the_match_and_clips() {
+        // A short line already fits whole.
+        assert_eq!(focus_snippet("fix here", 0, 40), "fix here");
+        // Empty / max-0 are safe.
+        assert_eq!(focus_snippet("", 0, 10), "");
+        assert_eq!(focus_snippet("abc", 0, 0), "");
+        // A long line clips to <= budget and keeps the match near the middle.
+        let long = "a".repeat(50) + "HIT" + &"b".repeat(50);
+        let s = focus_snippet(&long, 51, 24);
+        assert!(s.chars().count() <= 24, "snippet {s:?} exceeds budget");
+        assert!(
+            s.contains("HIT"),
+            "match must be in the centered snippet: {s:?}"
+        );
+        // The match sits within the window (not at the very edge) when there's room on both sides.
+        assert!(s.starts_with('…') && s.ends_with('…'));
+        // A line whose match is near the end still contains it and stays in budget.
+        let tail_line = "x".repeat(10) + "MATCH";
+        let st = focus_snippet(&tail_line, 10, 16);
+        assert!(st.contains("MATCH") && st.chars().count() <= 16);
+        // A match near the very start stays in budget with a trailing ellipsis.
+        let st2 = focus_snippet(&("HIT".to_string() + &"z".repeat(60)), 0, 20);
+        assert!(st2.contains("HIT") && st2.chars().count() <= 20);
     }
 
     /// Fleet search spans multiple sessions and is sorted by tab then line. Build two real emulator
