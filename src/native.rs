@@ -2841,7 +2841,7 @@ impl Application {
     /// tab. Selection is the pure `host_tally` grouping, so the data is unit-tested.
     fn render_hosts(&mut self, fb: &mut Framebuffer) {
         let (base_y, line_px) = self.overlay_base_y();
-        let tally = self.owned_host_tally();
+        let tally = self.owned_host_breakdown();
         draw_text(
             fb,
             &mut self.cache,
@@ -2866,7 +2866,7 @@ impl Application {
         // A tab can close while the overlay is open; re-clamp like the other overlays.
         self.hosts_sel = self.hosts_sel.min(tally.len().saturating_sub(1));
         let top = scroll_top(tally.len(), self.hosts_sel, 20);
-        for (row, (host, alive, total)) in tally.iter().enumerate().skip(top).take(20) {
+        for (row, (host, alive, total, mix)) in tally.iter().enumerate().skip(top).take(20) {
             let scr = row - top;
             let sel = row == self.hosts_sel;
             let label = host.as_str();
@@ -2885,6 +2885,7 @@ impl Application {
                 "live".to_string()
             };
             let sess = if *total == 1 { "session" } else { "sessions" };
+            let mix_s = format_engine_mix(mix);
             if sel {
                 overlay_row_sel(fb, base_y + (scr + 1) * line_px, line_px, 18);
             }
@@ -2899,7 +2900,7 @@ impl Application {
                 fb,
                 &mut self.cache,
                 &format!(
-                    "  {mark} {label} · {state} · {total} {sess}{}",
+                    "  {mark} {label} · {state} · {total} {sess} · {mix_s}{}",
                     if sel { "  ◄" } else { "" }
                 ),
                 32,
@@ -2932,6 +2933,18 @@ impl Application {
             }
         }
         out
+    }
+
+    /// Owned per-host breakdown (host, alive, total, agent mix) over the open tabs, normalized like
+    /// [`owned_host_tally`] — the display data for the host-overview. Owned so it can be called from
+    /// a `&mut self` render without borrowing the tab list past a mutation.
+    fn owned_host_breakdown(&self) -> Vec<(String, usize, usize, Vec<(String, usize)>)> {
+        host_engine_breakdown(
+            self.app
+                .tabs
+                .iter()
+                .map(|s| (s.meta.host.as_str(), s.alive(), s.meta.engine.as_str())),
+        )
     }
 
     /// Keybinding reference overlay. Static list; dismiss on any key.
@@ -6641,6 +6654,52 @@ fn host_tally<'a>(tabs: impl Iterator<Item = (&'a str, bool)>) -> Vec<(&'a str, 
     out
 }
 
+/// Per-host aggregate with the agent mix, in first-seen host and engine order. Each entry is
+/// `(host, alive, total, Vec<(engine, count)>)`, with an empty host normalized to `local` and an
+/// engine counted once per session. Pure so it's unit-testable.
+fn host_engine_breakdown<'a>(
+    tabs: impl Iterator<Item = (&'a str, bool, &'a str)>,
+) -> Vec<(String, usize, usize, Vec<(String, usize)>)> {
+    let mut out: Vec<(String, usize, usize, Vec<(String, usize)>)> = Vec::new();
+    for (h, alive, engine) in tabs {
+        let host = if h.is_empty() { "local" } else { h };
+        match out.iter_mut().find(|(hh, _, _, _)| *hh == host) {
+            Some((_, a, t, mix)) => {
+                *t += 1;
+                if alive {
+                    *a += 1;
+                }
+                match mix.iter_mut().find(|(e, _)| e == engine) {
+                    Some((_, c)) => *c += 1,
+                    None => mix.push((engine.to_string(), 1)),
+                }
+            }
+            None => out.push((
+                host.to_string(),
+                if alive { 1 } else { 0 },
+                1,
+                vec![(engine.to_string(), 1)],
+            )),
+        }
+    }
+    out
+}
+
+/// Format an engine mix like `claude`×`2, codex` for a host row's trailing label (compact: a
+/// single agent is just its name; multiples carry a ×count). Pure so it's unit-testable.
+fn format_engine_mix(mix: &[(String, usize)]) -> String {
+    mix.iter()
+        .map(|(e, c)| {
+            if *c == 1 {
+                e.clone()
+            } else {
+                format!("{e}×{c}")
+            }
+        })
+        .collect::<Vec<_>>()
+        .join(", ")
+}
+
 fn collect_fleet_matches(
     terms: &[Arc<
         alacritty_terminal::sync::FairMutex<
@@ -7351,9 +7410,10 @@ fn move_slot<T>(v: &mut Vec<T>, from: usize, to: usize) {
 mod tests {
     use super::{
         argb_to_rgb, broadcast_bytes, cmd_shortcut, collect_fleet_matches, engine_accent,
-        expand_click_word, fmt_duration, fuzzy_match, group_notifications, host_color, host_tally,
-        join_labels, move_slot, next_host_index, parse_remote_attach, reanchor_active_after_batch,
-        recall_index, scroll_top, swap_slot, CmdShortcut, FleetMatch,
+        expand_click_word, fmt_duration, format_engine_mix, fuzzy_match, group_notifications,
+        host_color, host_engine_breakdown, host_tally, join_labels, move_slot, next_host_index,
+        parse_remote_attach, reanchor_active_after_batch, recall_index, scroll_top, swap_slot,
+        CmdShortcut, FleetMatch,
     };
 
     use std::sync::Arc;
@@ -7994,5 +8054,46 @@ mod tests {
         let mut u = (0..3).collect::<Vec<_>>();
         move_slot(&mut u, 1, 99); // to beyond length -> appends at the end
         assert_eq!(u, vec![0, 2, 1]);
+    }
+    /// Per-host aggregation keeps alive/total AND the agent mix split by machine, in first-seen
+    /// host and engine order, with an empty host normalized to `local` — the data behind the
+    /// host-overview rows (prefix+.).
+    #[test]
+    fn host_engine_breakdown_groups_by_machine_with_agent_mix() {
+        let tabs = [
+            ("", true, "claude"),
+            ("build02", true, "claude"),
+            ("build02", false, "codex"),
+            ("build02", true, "claude"),
+            ("edge1", true, "codex"),
+        ];
+        let out = host_engine_breakdown(tabs.iter().copied());
+        // First-seen host order, local empty host normalized.
+        assert_eq!(out.len(), 3);
+        // local: 1 alive / 1 session, one claude.
+        assert_eq!(out[0], ("local".into(), 1, 1, vec![("claude".into(), 1)]));
+        // build02: 2 alive / 3 sessions, claude×2 + codex×1.
+        assert_eq!(out[1].0, "build02");
+        assert_eq!((out[1].1, out[1].2), (2, 3));
+        assert_eq!(
+            out[1].3,
+            vec![("claude".to_string(), 2), ("codex".to_string(), 1)]
+        );
+        // edge1: 1/1, one codex.
+        assert_eq!(out[2], ("edge1".into(), 1, 1, vec![("codex".into(), 1)]));
+        // Empty iter yields nothing.
+        assert!(host_engine_breakdown(std::iter::empty()).is_empty());
+    }
+
+    /// The hosted mix renders compactly: a lone agent is just its name; repeats fold to a ×count.
+    #[test]
+    fn format_engine_mix_is_compact() {
+        assert_eq!(format_engine_mix(&[("claude".into(), 1)]), "claude");
+        assert_eq!(format_engine_mix(&[]), "");
+        assert_eq!(
+            format_engine_mix(&[("claude".into(), 2), ("codex".into(), 1)]),
+            "claude\u{00d7}2, codex"
+        );
+        assert_eq!(format_engine_mix(&[("codex".into(), 3)]), "codex\u{00d7}3");
     }
 }

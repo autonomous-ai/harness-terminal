@@ -6,6 +6,10 @@ entries record user-visible and architectural changes since the last tagged mile
 ## Unreleased / 0.1.0 (in progress)
 
 ### Added
+- **Host overview shows each machine's agent mix.** `prefix+.` now lists not just how many
+  sessions are up per host but which agents are running there (`● build02 · live · 2 sessions ·
+  claude×2, codex`), so a diver sees the whole fleet's engine spread at a glance. Backed by a pure,
+  unit-tested `host_engine_breakdown` helper.
 - **Native macOS menu bar.** winit 0.30 ships no menu API, so the app previously had a bare
   menu-less bar. A real AppKit main menu is now installed at launch with the File, Tab, and Window
   menus: `Cmd+T` new tab, `Cmd+W` close tab, `Cmd+Q` quit, `Cmd+Shift+[` / `Cmd+Shift+]` previous /
