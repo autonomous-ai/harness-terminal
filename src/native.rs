@@ -995,8 +995,13 @@ impl Application {
         if text.trim().is_empty() {
             return;
         }
+        let n = text.len();
         if let Ok(mut cb) = arboard::Clipboard::new() {
             let _ = cb.set_text(text);
+            self.flash = Some((
+                format!("copied {n} chars of scrollback"),
+                std::time::Instant::now(),
+            ));
         }
     }
 
