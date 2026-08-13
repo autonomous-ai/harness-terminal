@@ -17,6 +17,15 @@ entries record user-visible and architectural changes since the last tagged mile
   config degrades rather than panics) — 114→116 unit tests.
 
 ### Fixed
+- **Native-tab mode now runs the per-frame activity pass (notifications + 60fps pump).** With
+  `native_tabs = true`, the in-app chrome is hidden, so the busy/bell/recover activity pass only ran
+  on demand (prefix+o) — native mode never fired the coalesced "agent went busy / your run finished
+  (🔔 bell) / a host came back" OS notifications, and `live_busy` was never set, so streaming agent
+  output was pumped at only ~8fps instead of the smooth 60fps the single-window path uses. The
+  per-frame activity pass now runs in `redraw_hosts`, restoring notifications and the fast pump in
+  the native-tab mode the app actually runs.
+
+### Fixed
 - **In-place terminal redraws no longer freeze the display.** The idle loop only woke when a pane's
   *scrollback* grew (`history_len`), so any output that redraws the screen without scrolling — a vim
   cursor move, an htop/top refresh, a TUI pane, a spinner/progress line, an agent updating in place —

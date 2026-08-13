@@ -5069,6 +5069,13 @@ impl Application {
         if n == 0 {
             return;
         }
+        // Native mode has no in-app chrome, so the per-frame activity pass (busy/bell/recover
+        // detection + coalesced OS notifications + grew_delta/last_output sampling) must run here —
+        // the single-window `render()` is what runs it when the in-app strip is shown. It also
+        // updates `live_busy`, which drives the fast 60fps pump while an agent streams output
+        // (without it native mode would pump at only ~8fps and fire no "done" notifications).
+        let activity = self.activity_flags();
+        self.live_busy = activity.iter().any(|&b| b);
         let active = self.active_host.min(n - 1);
         for i in 0..n {
             self.render_host_window(i, i == active);
