@@ -6,6 +6,10 @@ entries record user-visible and architectural changes since the last tagged mile
 ## Unreleased / 0.1.0 (in progress)
 
 ### Fixed
+- **Broadcast to one whole host from the hosts drill-in.** In the hosts overview (`prefix+.` →
+  `→`), `b` opens the broadcast overlay pre-scoped to every session on that machine — the fanned-out
+  sibling of `r` (reconnect this host). A "redeploy / git pull / restart every agent on build05"
+  command now needs no hand-marking of tiles.
 - **The fleet tab bar marks panes that are currently down.** Each down (non-PTY) pane's tab now
   carries a persistent `↓` glyph — the in-bar counterpart to the transient `↻` recovery badge — so
   a dead pane reads at a glance instead of only surfacing in the status count or peek.

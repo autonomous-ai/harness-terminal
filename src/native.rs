@@ -1093,6 +1093,24 @@ impl Application {
         self.app.overlay = Overlay::Broadcast;
     }
 
+    /// `b` (hosts drill-in): fan a line out to every session on the selected host — the per-machine
+    /// cousin of `grid_broadcast_marked`. Opens the broadcast overlay pre-scoped to exactly this
+    /// host's panes, so a command to "all of build05" (git pull, restart the agent, redeploy)
+    /// doesn't require hand-marking tiles. The diver can still toggle targets off / Space before
+    /// Enter, exactly like the fleet-grid broadcast.
+    fn host_broadcast(&mut self, host: &str) {
+        let n = self.app.tabs.len();
+        self.broadcast_targets = vec![false; n];
+        for i in self.host_session_indices(host) {
+            if i < n {
+                self.broadcast_targets[i] = true;
+            }
+        }
+        self.broadcast_query = self.last_broadcast.clone();
+        self.broadcast_sel = 0;
+        self.app.overlay = Overlay::Broadcast;
+    }
+
     /// `prefix+l`: flip to the tab that was active just before this one (tmux last-window).
     /// Repeated presses ping-pong, since swapping focus swaps `last_active`.
     fn last_window(&mut self) {
@@ -3243,7 +3261,7 @@ impl Application {
             fb,
             &mut self.cache,
             &format!(
-                "  {host} sessions · ↑/↓ select · Enter → open · r reconnect host · ←/Esc back  "
+                "  {host} sessions · ↑/↓ select · Enter → open · r reconnect · b broadcast · ←/Esc back  "
             ),
             32,
             base_y,
@@ -3550,6 +3568,10 @@ impl Application {
             ("Cmd+Shift+P", "command palette"),
             ("Cmd+Shift+F", "search all sessions (fleet)"),
             ("Cmd+Shift+R", "force-reconnect ALL down panes"),
+            (
+                "Hosts drill · r / b",
+                "reconnect this host / broadcast to this host",
+            ),
         ] {
             all.push((k.to_string(), d.to_string()));
         }
@@ -5680,6 +5702,13 @@ impl Application {
                                 },
                                 std::time::Instant::now(),
                             ));
+                        }
+                        // `b` in the drill-in broadcasts one line to every session on this host —
+                        // the fanned-out sibling of `r` (reconnect this host). Handy for "same
+                        // command, every agent on build05".
+                        if (c == "b" || c == "B") && self.hosts_host.is_some() {
+                            let host = self.hosts_host.clone().unwrap_or_default();
+                            self.host_broadcast(&host);
                         }
                     }
                     _ => {}
