@@ -13,6 +13,14 @@ entries record user-visible and architectural changes since the last tagged mile
   still bounded separately by ``scrollback_cap``.
 
 ### Performance
+- **The per-frame render path no longer heap-allocates a whole new framebuffer every frame.** Both the
+  single-window redraw and native-tab mode (every session window) previously built a fresh
+  `Framebuffer` (≈7MB at a 1909×955 window, ×N windows in native mode) on every redraw. The scratch
+  buffer is now kept across frames and reused via a capacity-preserving `resize`, so streaming output
+  across several agent sessions allocates once instead of continuously — a real win under the 60fps
+  pump with many tabs open.
+
+### Performance
 - **The fleet's quiet detector no longer reads the config file on every frame.** `quiet_flags`
   (the per-frame triage count and status line) plus the fleet-grid and `prefix+z` quiet checks each
   called `Config::load()` — a disk read + TOML parse — up to twice per rendered frame. The

@@ -375,6 +375,10 @@ struct Application {
     /// Index into `hosts` of the window the user is currently looking at (the focused one). Its
     /// session is `app.active`.
     active_host: usize,
+    /// Reusable render scratch buffer, kept across frames so the hot per-frame path (single-window
+    /// or per-host in native mode) doesn't heap-allocate a whole new framebuffer every frame under
+    /// streaming. Resized (capacity-preserving) to whatever window is being rendered at the time.
+    scratch_fb: crate::render::Framebuffer,
 }
 
 /// One real macOS window backing a session in native-tab mode. Each session gets its own `NSWindow`;
@@ -588,6 +592,7 @@ impl Application {
             frame: 0,
             hosts: Vec::new(),
             active_host: 0,
+            scratch_fb: crate::render::Framebuffer::new(1, 1),
             grid_sel: 0,
             grid_marks: vec![false; tab_count],
             ctx: None,
@@ -1538,8 +1543,11 @@ impl Application {
         }
         // 0x00RRGGBB (softbuffer's native format). Start from the resolved theme background so the
         // margins around the grid (and any uncovered pixels) read as the theme's canvas rather
-        // than a hard black frame — the grid, chrome panels, and overlays paint over it.
-        let mut fb = Framebuffer::new(width, height);
+        // than a hard black frame — the grid, chrome panels, and overlays paint over it. The buffer
+        // is the kept-across-frames scratch (capacity reused), so streaming doesn't heap-allocate a
+        // whole new framebuffer every frame.
+        let mut fb = std::mem::take(&mut self.scratch_fb);
+        fb.resize(width, height);
         let fbargb = argb(255, self.colors.bg.0, self.colors.bg.1, self.colors.bg.2);
         for p in fb.pixels.iter_mut() {
             *p = fbargb;
@@ -1566,15 +1574,18 @@ impl Application {
 
         // Then present it via the softbuffer surface.
         let Some(surface) = &mut self.surface else {
+            self.scratch_fb = fb;
             return;
         };
         let Ok(mut buffer) = surface.buffer_mut() else {
+            self.scratch_fb = fb;
             return;
         };
         for (dst, src) in buffer.iter_mut().zip(fb.pixels.iter()) {
             *dst = *src;
         }
         let _ = buffer.present();
+        self.scratch_fb = fb;
     }
 
     /// Render the whole frame into the framebuffer.
@@ -5077,16 +5088,22 @@ impl Application {
         let activity = self.activity_flags();
         self.live_busy = activity.iter().any(|&b| b);
         let active = self.active_host.min(n - 1);
+        // Reuse one scratch framebuffer across every host this frame (resized per window), so
+        // streaming with several sessions doesn't heap-allocate a fresh ~7MB buffer per window per
+        // frame.
+        let mut fb = std::mem::take(&mut self.scratch_fb);
         for i in 0..n {
-            self.render_host_window(i, i == active);
+            self.render_host_window(i, i == active, &mut fb);
         }
+        self.scratch_fb = fb;
         self.alias_active();
     }
 
     /// Render one session window: its own session's grid full-bleed (no in-app chrome), plus the
     /// app-global overlays when this is the focused window. Presents into the host's own softbuffer
-    /// surface.
-    fn render_host_window(&mut self, i: usize, focused: bool) {
+    /// surface. Renders into the shared `fb` (resized to this window) so the hot path reuses one
+    /// allocation across all hosts.
+    fn render_host_window(&mut self, i: usize, focused: bool, fb: &mut Framebuffer) {
         let (width, height) = {
             let h = &self.hosts[i];
             (h.size.width as usize, h.size.height as usize)
@@ -5097,7 +5114,7 @@ impl Application {
         ) else {
             return;
         };
-        let mut fb = Framebuffer::new(width, height);
+        fb.resize(width, height);
         let bg = argb(255, self.colors.bg.0, self.colors.bg.1, self.colors.bg.2);
         for p in fb.pixels.iter_mut() {
             *p = bg;
@@ -5107,7 +5124,7 @@ impl Application {
         let tab = self.hosts[i].tab.min(self.app.tabs.len().saturating_sub(1));
         let prev = self.app.active;
         self.app.active = tab;
-        self.render_host_grid(&mut fb, width, height, focused);
+        self.render_host_grid(fb, width, height, focused);
         self.app.active = prev;
 
         // Sync the OS window title to its session's live OSC title, only when it changed (each

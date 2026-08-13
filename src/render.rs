@@ -25,6 +25,7 @@ pub const fn argb(a: u8, r: u8, g: u8, b: u8) -> Pixel {
 }
 
 /// A CPU framebuffer. `[y*width + x]`.
+#[derive(Default)]
 pub struct Framebuffer {
     pub width: usize,
     pub height: usize,
@@ -38,6 +39,15 @@ impl Framebuffer {
             height,
             pixels: vec![0; width * height],
         }
+    }
+
+    /// Re-point this framebuffer at a new size, reusing the existing pixel allocation when it is
+    /// already big enough (so the hot per-frame render path doesn't heap-allocate a whole new
+    /// buffer every frame under streaming). New/extra cells are zero-filled; callers overwrite them.
+    pub fn resize(&mut self, width: usize, height: usize) {
+        self.pixels.resize(width * height, 0);
+        self.width = width;
+        self.height = height;
     }
 
     /// Set one pixel at (x, y); silently ignores out-of-bounds.
@@ -1289,6 +1299,31 @@ fn color256(i: u8, colors: &Colors) -> (u8, u8, u8) {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// `resize` reuses the existing pixel allocation when it's already big enough (the hot per-frame
+    /// render path must not reallocate a whole new buffer every frame under streaming), and
+    /// zero-fills any newly-grown cells.
+    #[test]
+    fn resize_reuses_capacity_and_zeroes_new_cells() {
+        let mut f = Framebuffer::new(10, 10);
+        let cap = f.pixels.capacity();
+        f.pixels.fill(0x12345678);
+        // Shrink then grow back within the original capacity — no reallocation.
+        f.resize(4, 4);
+        assert_eq!(f.width, 4);
+        assert_eq!(f.height, 4);
+        assert_eq!(f.pixels.len(), 16);
+        assert_eq!(
+            f.pixels.capacity(),
+            cap,
+            "capacity must be preserved by resize"
+        );
+        // Growing beyond the current capacity zero-fills the freshly-added cells.
+        f.resize(6, 6);
+        assert_eq!(f.pixels.len(), 36);
+        assert_eq!(f.pixels[16], 0, "new cell must be zero-filled");
+        assert_eq!(f.pixels[35], 0, "new cell must be zero-filled");
+    }
 
     #[test]
     fn argb_packing() {
