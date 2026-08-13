@@ -5625,6 +5625,16 @@ impl Application {
                         winit::keyboard::NamedKey::ArrowUp => {
                             self.app.selected = self.app.selected.saturating_sub(1)
                         }
+                        // Tab moves down / Shift+Tab up through the filtered list, so keyboard-only
+                        // divers can page sessions without the arrows, matching the peek/palette
+                        // conventions.
+                        winit::keyboard::NamedKey::Tab if mods.shift_key() => {
+                            self.app.selected = self.app.selected.saturating_sub(1);
+                        }
+                        winit::keyboard::NamedKey::Tab => {
+                            self.app.selected = (self.app.selected + 1)
+                                .min(self.app.filtered.len().saturating_sub(1));
+                        }
                         // PgDn/PgUp page the jump list by a full window (the same 12-row slice the
                         // renderer shows), so a large fleet isn't browsed one row at a time —
                         // mirroring the fleet/broadcast/peek list overlays.

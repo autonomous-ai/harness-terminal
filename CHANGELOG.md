@@ -11,6 +11,9 @@ entries record user-visible and architectural changes since the last tagged mile
   a bulk close — defeating the "marks required so a stray press is never destructive" guard. Marks
   now clear on grid close, matching the broadcast overlay's fresh-reset behavior.
 ### Added
+- **Session-jump palette accepts Tab/Shift+Tab.** `prefix+/` moves the selection down/up through the
+  filtered sessions with Tab (Shift+Tab up), so keyboard-only divers can browse without the arrows —
+  matching the peek/command-palette conventions.
 - **Session-jump palette pages with PgUp/PgDn.** `prefix+/` (jump to any session) now moves the
   selection a full 12-row window per keypress, so a large fleet is browsed without arrowing one row
   at a time — mirroring the other list overlays.
