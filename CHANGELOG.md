@@ -5,6 +5,13 @@ entries record user-visible and architectural changes since the last tagged mile
 
 ## Unreleased / 0.1.0 (in progress)
 
+### Performance
+- **The fleet's quiet detector no longer reads the config file on every frame.** `quiet_flags`
+  (the per-frame triage count and status line) plus the fleet-grid and `prefix+z` quiet checks each
+  called `Config::load()` — a disk read + TOML parse — up to twice per rendered frame. The
+  `quiet_after_secs` threshold is now resolved once at startup and cached, eliminating all
+  hot-path config I/O.
+
 ### Fixed
 - **`retry_backoff_ladder_caps_at_60` silently wasn't running.** A stray `#[test]` attribute had
   been misplaced onto the next function, so the unit test guarding the reconnect backoff ladder

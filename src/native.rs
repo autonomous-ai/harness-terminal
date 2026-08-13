@@ -164,6 +164,10 @@ struct Application {
     /// One-shot: once the Ctrl+Space-claimed explanation has flashed (on the first Ctrl+\
     /// prefix press), don't repeat it every single time the fallback chord is used.
     prefix_alt_notice: bool,
+    /// Resolved `quiet_after_secs` threshold (default 120), cached once at startup. The quiet
+    /// detector (triage count, fleet grid, `prefix+z`) runs every frame; re-reading the config file
+    /// from disk each time would be wasteful, so the threshold is resolved here instead.
+    quiet_secs: u64,
     /// The tab that was active before the current one, so prefix+l can flip back to it (tmux
     /// last-window muscle memory). Cleared to None when tabs get rearranged out from under it.
     last_active: Option<usize>,
@@ -452,6 +456,7 @@ impl Application {
         let prefix_claimed = crate::macos::ctrl_space_claimed();
         let prefix_key = cfg.prefix_key.clone().unwrap_or_else(|| "h".to_string());
         let chord = crate::keys::prefix_label(&prefix_key);
+        let quiet_secs = cfg.quiet_after_secs.unwrap_or(120);
         let tab_count = app.tabs.len();
         let offline = app.startup_offline;
         let seen_history = vec![usize::MAX; tab_count];
@@ -504,6 +509,7 @@ impl Application {
             prefix_claimed,
             prefix_key,
             prefix_alt_notice: false,
+            quiet_secs,
             last_active: None,
             find_query: String::new(),
             rename_query: String::new(),
@@ -1087,11 +1093,7 @@ impl Application {
     /// a tab is only counted once its history has been sampled AND it has actually sat idle.
     fn quiet_flags(&self) -> (bool, usize, std::time::Duration) {
         let present = self.seen_history.len() == self.app.tabs.len();
-        let threshold = std::time::Duration::from_secs(
-            crate::config::Config::load()
-                .quiet_after_secs
-                .unwrap_or(120),
-        );
+        let threshold = std::time::Duration::from_secs(self.quiet_secs);
         let now = std::time::Instant::now();
         let mut any = false;
         let mut count = 0;
@@ -1133,11 +1135,7 @@ impl Application {
         if !(live && !watched && !shielded && sampled) {
             return false;
         }
-        let threshold = std::time::Duration::from_secs(
-            crate::config::Config::load()
-                .quiet_after_secs
-                .unwrap_or(120),
-        );
+        let threshold = std::time::Duration::from_secs(self.quiet_secs);
         let idle = std::time::Instant::now() - self.last_output[i];
         idle >= threshold
     }
@@ -1148,11 +1146,7 @@ impl Application {
     /// "finished/stalled — needs a look". No-op when no tab is quiet.
     fn next_quiet(&mut self) {
         let present = self.seen_history.len() == self.app.tabs.len();
-        let threshold = std::time::Duration::from_secs(
-            crate::config::Config::load()
-                .quiet_after_secs
-                .unwrap_or(120),
-        );
+        let threshold = std::time::Duration::from_secs(self.quiet_secs);
         let n = self.app.tabs.len();
         if n == 0 {
             return;
