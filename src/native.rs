@@ -3843,6 +3843,8 @@ impl Application {
             ("Ctrl+Tab / Ctrl+Shift+Tab", "previous / next tab"),
             ("Cmd+1-9 / 0", "jump straight to that tab (0 = last)"),
             ("Cmd+Shift+P", "command palette"),
+            ("Cmd+F", "find in this session"),
+            ("Cmd+G / Cmd+Shift+G", "next / previous find match"),
             ("Cmd+Shift+F", "search all sessions (fleet)"),
             ("Cmd+Shift+R", "force-reconnect ALL down panes"),
             ("Cmd+Shift+U / Cmd+Shift+M", "pin active tab / mute active tab"),
@@ -4113,6 +4115,16 @@ impl Application {
         let desired = (-l).clamp(0, g.grid().history_size() as i32);
         g.grid_mut()
             .scroll_display(Scroll::Delta(desired - current));
+    }
+
+    /// Open the find-in-session overlay with a fresh query (used by Cmd+F and the palette/prefix
+    /// `search` action). Centralizing the init so a new entry point can't forget to clear state.
+    fn open_find(&mut self) {
+        self.app.overlay = Overlay::Find;
+        self.find_query.clear();
+        self.find_hit = None;
+        self.find_all = Vec::new();
+        self.find_index = 0;
     }
 
     /// Recompute the occurrence list after a query edit; focuses the first match (or the match
@@ -5059,10 +5071,7 @@ impl Application {
                 self.app.refresh_filter();
             }
             FindInTab => {
-                self.app.overlay = Overlay::Find;
-                self.find_query.clear();
-                self.find_hit = None;
-                self.find_all = Vec::new();
+                self.open_find();
             }
             SearchAll => {
                 self.app.overlay = Overlay::FleetSearch;
@@ -5577,12 +5586,7 @@ impl Application {
                     }
                 }
                 Some("scroll_bottom") => self.scroll_to_bottom(),
-                Some("search") => {
-                    self.app.overlay = Overlay::Find;
-                    self.find_query.clear();
-                    self.find_hit = None;
-                    self.find_all = Vec::new();
-                }
+                Some("search") => self.open_find(),
                 Some("search_all") => {
                     self.app.overlay = Overlay::FleetSearch;
                     self.fleet_q.clear();
@@ -5737,6 +5741,9 @@ impl Application {
             // Cmd+G / Cmd+Shift+G cycle through the last search's matches from anywhere. `find_jump`
             // is a no-op when there's no match list yet, and still scrolls + lands the viewport on
             // the new hit; the key handler redraws afterwards.
+            CmdShortcut::Find => {
+                self.open_find();
+            }
             CmdShortcut::FindNext => {
                 self.find_jump(1);
             }
@@ -9002,6 +9009,9 @@ enum CmdShortcut {
     /// Cmd+. — send Ctrl-C to the active session. The macOS "stop the running thing" key, so a
     /// runaway agent is halted with the same reflex you'd use to stop a Python script in Xcode.
     Interrupt,
+    /// Cmd+F — open find-in-session (the universal iTerm/editor muscle memory for searching the
+    /// current pane's scrollback).
+    Find,
     /// Cmd+G — jump to the next find match (the iTerm2 muscle memory for stepping through a search
     /// after the find bar closes).
     FindNext,
@@ -9193,7 +9203,9 @@ fn cmd_shortcut(key: &Key, mods: &ModifiersState) -> CmdShortcut {
             "K" if mods.shift_key() => InterruptAll,
             // Cmd+Shift+Y opens peek — every session's tail in one war-room list.
             "Y" if mods.shift_key() => Peek,
-            // Cmd+G / Cmd+Shift+G: next / previous find match, after a search (iTerm2 habit).
+            // Cmd+F opens find-in-session; Cmd+G / Cmd+Shift+G step to the next / previous match
+            // afterwards (plain iTerm2 muscle memory; F/G are otherwise free).
+            "f" => Find,
             "g" => FindNext,
             "G" if mods.shift_key() => FindPrev,
             // Plain Cmd+[ is left to the shell; only the Shift variant switches tabs.
@@ -9995,13 +10007,12 @@ mod tests {
             CmdShortcut::None,
             "plain Cmd+P is not hijacked"
         );
-        // Cmd+Shift+F opens fleet search; plain Cmd+F is left alone.
+        // Cmd+Shift+F opens fleet search; plain Cmd+F opens find-in-session (both the shifted and
+        // un-shifted `f` glyph route to Find — the uppercase `F` with the shift modifier is the
+        // fleet tag, so Cmd+Shift+F is what must differ, and it does).
         assert_eq!(chars("F", sc), CmdShortcut::FleetSearch);
-        assert_eq!(
-            chars("f", sc),
-            CmdShortcut::None,
-            "plain Cmd+F is not hijacked"
-        );
+        assert_eq!(chars("f", sc), CmdShortcut::Find);
+        assert_eq!(chars("f", s), CmdShortcut::Find);
         // Cmd+Shift+R force-reconnects all down panes; plain Cmd+R is left alone.
         assert_eq!(chars("R", sc), CmdShortcut::ReconnectAll);
         assert_eq!(

@@ -75,6 +75,10 @@ entries record user-visible and architectural changes since the last tagged mile
   a bulk close — defeating the "marks required so a stray press is never destructive" guard. Marks
   now clear on grid close, matching the broadcast overlay's fresh-reset behavior.
 ### Added
+- **Cmd+F now opens find-in-session (and Cmd+G / Cmd+Shift+G step the results).** Previously the
+  universal iTerm/editor find key did nothing special here — search lived only behind the prefix
+  chord. Cmd+F now opens the find bar over the active pane's scrollback (same fresh-state init as
+  the prefix `search`), and the `Find`/`Next`/`Prev` routes are documented in the `?` help overlay.
 - **The status line now shows a fleet-wide health summary at a glance.** When several agents are
   open, a glance at the bottom bar now reads `N ⚠ down` and `N ⚡ busy` (the urgent counts a diver
   needs without opening peek), and a healthy fleet shows `✓ fleet ok`. Derived purely from the
