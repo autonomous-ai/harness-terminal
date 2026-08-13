@@ -1107,7 +1107,7 @@ impl Application {
             let shielded = self.pinned.get(i).copied().unwrap_or(false)
                 || self.muted.get(i).copied().unwrap_or(false);
             let sampled = present && self.seen_history[i] != usize::MAX;
-            if !(live && !watched && !shielded && sampled) {
+            if !live || watched || shielded || !sampled {
                 continue;
             }
             let idle = now - self.last_output[i];
@@ -1135,7 +1135,7 @@ impl Application {
         let shielded = self.pinned.get(i).copied().unwrap_or(false)
             || self.muted.get(i).copied().unwrap_or(false);
         let sampled = present && self.seen_history[i] != usize::MAX;
-        if !(live && !watched && !shielded && sampled) {
+        if !live || watched || shielded || !sampled {
             return false;
         }
         let threshold = std::time::Duration::from_secs(self.quiet_secs);
@@ -1162,7 +1162,7 @@ impl Application {
             let shielded = self.pinned.get(i).copied().unwrap_or(false)
                 || self.muted.get(i).copied().unwrap_or(false);
             let sampled = present && self.seen_history[i] != usize::MAX;
-            if !(live && !watched && !shielded && sampled) {
+            if !live || watched || shielded || !sampled {
                 continue;
             }
             let idle = std::time::Instant::now() - self.last_output[i];
@@ -2939,7 +2939,7 @@ impl Application {
     ) {
         use alacritty_terminal::grid::Scroll;
         let current = g.grid().display_offset() as i32;
-        let desired = (-l as i32).clamp(0, g.grid().history_size() as i32);
+        let desired = (-l).clamp(0, g.grid().history_size() as i32);
         g.grid_mut()
             .scroll_display(Scroll::Delta(desired - current));
     }
@@ -2968,7 +2968,7 @@ impl Application {
         self.find_index = idx;
         self.find_hit = self.find_all.get(idx).copied();
         if let Some((l, _, _)) = self.find_hit {
-            self.find_scroll_to(&mut *g, l);
+            self.find_scroll_to(&mut g, l);
             active.set_scrolled(true);
         }
     }
@@ -3017,7 +3017,7 @@ impl Application {
             // Scroll so the match line is at the top of the viewport.
             use alacritty_terminal::grid::Scroll;
             let current = g.grid().display_offset() as i32;
-            let desired = (-m.line as i32).clamp(0, g.grid().history_size() as i32);
+            let desired = (-m.line).clamp(0, g.grid().history_size() as i32);
             g.grid_mut()
                 .scroll_display(Scroll::Delta(desired - current));
             s.set_scrolled(true);
@@ -3042,7 +3042,7 @@ impl Application {
         };
         if let Some((l, _, _)) = self.find_hit {
             let mut g = active.term.lock();
-            self.find_scroll_to(&mut *g, l);
+            self.find_scroll_to(&mut g, l);
             active.set_scrolled(true);
         }
         true
@@ -3060,7 +3060,7 @@ impl Application {
         }
         // Place the cursor at the first visible (top of viewport) cell.
         let top = g.grid().display_offset();
-        self.copy_pos = ((top as i32 * -1), 0);
+        self.copy_pos = (-(top as i32), 0);
         self.copy_anchor = None;
         self.copy_query.clear();
         self.copy_searching = false;
@@ -3778,7 +3778,7 @@ impl Application {
             .collect();
         let ci = cur.min(line_text.len().saturating_sub(1));
         let bytes = line_text.as_bytes();
-        let is_space_at = |i: usize| bytes.get(i).map_or(true, |b| b.is_ascii_whitespace());
+        let is_space_at = |i: usize| bytes.get(i).is_none_or(|b| b.is_ascii_whitespace());
         if forward {
             // Skip current word (or spaces), land on next word start.
             let mut i = ci;

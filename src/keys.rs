@@ -183,7 +183,7 @@ mod tests {
         assert_eq!(resolved["quit"], "q");
         assert_eq!(binding_for(&cfg, "new_session"), "N");
         let mut seen = std::collections::HashSet::new();
-        for (_, key) in &resolved {
+        for key in resolved.values() {
             assert!(seen.insert(key.clone()));
         }
     }

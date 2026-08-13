@@ -641,29 +641,20 @@ impl TunnelTransport {
         // returning the error (so the in-app toast fires), instead of freezing the UI.
         let addr = format!("{host}:{port}");
         let tcp = std::net::ToSocketAddrs::to_socket_addrs(addr.as_str())
-            .map_err(|e| {
-                io::Error::new(io::ErrorKind::Other, format!("tunnel resolve {addr}: {e}"))
-            })?
+            .map_err(|e| io::Error::other(format!("tunnel resolve {addr}: {e}")))?
             .next()
-            .ok_or_else(|| {
-                io::Error::new(
-                    io::ErrorKind::Other,
-                    format!("tunnel resolve {addr}: no address"),
-                )
-            })
+            .ok_or_else(|| io::Error::other(format!("tunnel resolve {addr}: no address")))
             .and_then(|sa| {
                 std::net::TcpStream::connect_timeout(&sa, std::time::Duration::from_secs(4))
             })
-            .map_err(|e| {
-                io::Error::new(io::ErrorKind::Other, format!("tunnel connect {addr}: {e}"))
-            })?;
+            .map_err(|e| io::Error::other(format!("tunnel connect {addr}: {e}")))?;
         let url = format!("ws://{host}:{port}/api/pane-ws");
         let request = tungstenite::client::IntoClientRequest::into_client_request(url)
-            .map_err(|e| io::Error::new(io::ErrorKind::Other, e.to_string()))?;
+            .map_err(|e| io::Error::other(e.to_string()))?;
         // Handshake BLOCKING first (a nonblocking socket makes the upgrade itself fail), then flip the
         // underlying stream to nonblocking so one connection can both read output and drain keystrokes.
         let (mut ws, _) = tungstenite::client::client(request, tcp)
-            .map_err(|e| io::Error::new(io::ErrorKind::Other, format!("tunnel upgrade: {e}")))?;
+            .map_err(|e| io::Error::other(format!("tunnel upgrade: {e}")))?;
         // With a raw TcpStream the upgrade produces a MaybeTlsStream wrapping it; set the underlying
         // socket nonblocking so the read/write loop below can service both directions on one connection.
         let _ = ws.get_ref().set_nonblocking(true);
@@ -679,13 +670,13 @@ impl TunnelTransport {
                 "new-session -s {} -x {} -y {} {}\n",
                 name, size.cols, size.lines, program,
             )))
-            .map_err(|e| io::Error::new(io::ErrorKind::Other, e.to_string()))?;
+            .map_err(|e| io::Error::other(e.to_string()))?;
         } else {
             ws.send(tungstenite::Message::Text(format!(
                 "new-session -A -s {} -x {} -y {} {}\n",
                 name, size.cols, size.lines, program,
             )))
-            .map_err(|e| io::Error::new(io::ErrorKind::Other, e.to_string()))?;
+            .map_err(|e| io::Error::other(e.to_string()))?;
         }
         // Replay the existing pane's screen into the grid after a reconnect (the grid is stale).
         if capture {
@@ -734,7 +725,7 @@ impl TunnelTransport {
                         }
                         Ok(tungstenite::Message::Binary(b)) => {
                             for line in String::from_utf8_lossy(&b).lines() {
-                                feed(&line, &mut parser);
+                                feed(line, &mut parser);
                             }
                         }
                         Ok(_) => {}
@@ -864,8 +855,8 @@ fn parse_output(line: &str) -> Option<Vec<u8>> {
     // Format:  %output <pane> <data>
     // Data is space-separated escapes: \e for ESC, \n for LF, \t for TAB, \uXXXX for others.
     let rest = line.strip_prefix("%output")?;
-    let rest = rest.splitn(2, ' ').nth(1)?; // pane id
-    let data = rest.splitn(2, ' ').nth(1)?;
+    let rest = rest.split_once(' ')?.1; // pane id
+    let data = rest.split_once(' ')?.1;
     parse_escapes(data.trim_end())
 }
 

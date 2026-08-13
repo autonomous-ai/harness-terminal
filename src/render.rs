@@ -1159,7 +1159,7 @@ fn color256(i: u8, colors: &Colors) -> (u8, u8, u8) {
             if v == 0 {
                 0
             } else {
-                (55 + v * 40) as u8
+                55 + v * 40
             }
         };
         (ramp(r), ramp(g), ramp(b))

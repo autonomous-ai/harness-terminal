@@ -68,6 +68,7 @@ pub struct Config {
 /// default palette, so a partial `[theme]` block works. Colors are `[r, g, b]`, each 0–255.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(default)]
+#[derive(Default)]
 pub struct Theme {
     /// A named preset palette to start from (`tokyo-night`, `gruvbox-dark`, `solarized-dark`,
     /// `nord`, `dracula`, `github-dark`). Any field set below (foreground/background/ansi/…) layers
@@ -100,6 +101,7 @@ pub struct Theme {
 
 /// Deserialize `ansi` from either a sparse map (`0 = [r,g,b]`, `1 = …`, up to 15) or a full
 /// 16-element array. Only present slots are written; the rest stay `None` for the built-in palette.
+#[allow(clippy::type_complexity)]
 fn deserialize_ansi<'de, D>(d: D) -> Result<Option<[Option<[u8; 3]>; 16]>, D::Error>
 where
     D: Deserializer<'de>,
@@ -139,22 +141,7 @@ where
             Ok(Some(arr))
         }
     }
-    Ok(d.deserialize_map(V)?)
-}
-
-impl Default for Theme {
-    fn default() -> Self {
-        Theme {
-            preset: None,
-            foreground: None,
-            background: None,
-            cursor: None,
-            selection: None,
-            copy_cursor: None,
-            accents: std::collections::BTreeMap::new(),
-            ansi: None,
-        }
-    }
+    d.deserialize_map(V)
 }
 
 impl Default for Config {
