@@ -6,6 +6,9 @@ entries record user-visible and architectural changes since the last tagged mile
 ## Unreleased / 0.1.0 (in progress)
 
 ### Added
+- **Down panes are tagged in the peek list.** Rows for down remote panes now render red with a `○`
+  and their reconnect reason, so the diver sees the nature of every outage at a glance alongside the
+  new "land on the first down pane" behavior.
 - **The peek list opens on the first pane that's down.** Previously `prefix+y` (peek) always landed
   on the top of the fleet, so a diver had to page back through live hosts to find the one that
   dropped. It now selects and scrolls to the first still-down remote pane (if any), so trouble is

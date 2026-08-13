@@ -4038,18 +4038,37 @@ impl Application {
             }
             let s = &self.app.tabs[i];
             let sel = i == self.peek_sel;
-            let color = if sel { WHITE } else { CHROME_DIM };
+            // A down remote pane is the row worth noticing: tag it red (unless selected, when the
+            // white highlight already owns it) and surface its reconnect reason so the diver knows
+            // the nature of the outage without even expanding the row.
+            let down = s.kind() != "pty" && !s.alive();
+            let color = if sel {
+                WHITE
+            } else if down {
+                CHROME_ERR
+            } else {
+                CHROME_DIM
+            };
             let name = s.meta.name.clone().unwrap_or_else(|| s.meta.engine.clone());
             let live = s
                 .live_title()
                 .unwrap_or_else(|| s.meta.title.clone())
                 .replace('\n', " ");
+            let reason_tag = if down {
+                let reason = s
+                    .down_reason()
+                    .unwrap_or_else(|| "reconnecting…".to_string());
+                format!(" ○ {}", clip_dots(&reason, 22))
+            } else {
+                String::new()
+            };
             let line = format!(
-                "  {} · {} · {}  {}",
+                "  {} · {} · {}{}{}",
                 s.meta.host,
                 name,
                 live,
-                if sel { "◄" } else { "" }
+                reason_tag,
+                if sel { " ◄" } else { "" }
             );
             let row_y = base_y + (row + 1) * line_px;
             draw_text(fb, &mut self.cache, &line, 32, row_y, self.font_px, color);
