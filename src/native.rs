@@ -3772,6 +3772,7 @@ impl Application {
             ("Cmd+Shift+S", "write scrollback to a .log file"),
             ("Cmd+.", "interrupt the active session (stop the run)"),
             ("Cmd+Shift+J", "jump to the next quiet (awaiting-you) agent"),
+            ("Cmd+Shift+K", "send Ctrl-C to every session (stop the fleet)"),
             (
                 "Hosts drill · r / b",
                 "reconnect this host / broadcast to this host",
@@ -5648,6 +5649,9 @@ impl Application {
             }
             CmdShortcut::NextQuiet => {
                 self.next_quiet();
+            }
+            CmdShortcut::InterruptAll => {
+                self.interrupt_fleet();
             }
             CmdShortcut::GotoTab(i) => {
                 if !self.app.tabs.is_empty() {
@@ -8748,6 +8752,9 @@ enum CmdShortcut {
     /// Cmd+Shift+J — jump to the next quiet (awaiting-you) agent. The shift-guarded J: quicker
     /// than cycling tabs when the fastest thing to do is find who's waiting on input.
     NextQuiet,
+    /// Cmd+Shift+K — send Ctrl-C to every session (stop the whole fleet). The shift-guarded K:
+    /// one reflex to halt every runaway agent at once, like Cmd+. but fleet-wide.
+    InterruptAll,
     /// Cmd+Shift+C — copy the active tab's whole scrollback to the clipboard, the system shortcut
     /// for prefix+copy_scrollback. Grab an agent's full session log fast, without the prefix chord.
     CopyScrollback,
@@ -8871,6 +8878,8 @@ fn cmd_shortcut(key: &Key, mods: &ModifiersState) -> CmdShortcut {
             // Cmd+Shift+J jumps to the next quiet (fellow-agent-waiting) session, shift-guarded so
             // plain Cmd+J stays free.
             "J" if mods.shift_key() => NextQuiet,
+            // Cmd+Shift+K stops the whole fleet — Ctrl-C to every non-muted session.
+            "K" if mods.shift_key() => InterruptAll,
             // Plain Cmd+[ is left to the shell; only the Shift variant switches tabs.
             _ => None,
         },
@@ -9684,6 +9693,13 @@ mod tests {
             chars("j", s),
             CmdShortcut::None,
             "plain Cmd+J is not hijacked"
+        );
+        // Cmd+Shift+K stops the whole fleet (Ctrl-C to all); plain Cmd+K stays free.
+        assert_eq!(chars("K", sc), CmdShortcut::InterruptAll);
+        assert_eq!(
+            chars("k", s),
+            CmdShortcut::None,
+            "plain Cmd+K is not hijacked"
         );
         assert_eq!(
             chars("]", s),

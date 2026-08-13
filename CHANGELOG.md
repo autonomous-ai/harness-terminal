@@ -25,6 +25,10 @@ entries record user-visible and architectural changes since the last tagged mile
   a bulk close — defeating the "marks required so a stray press is never destructive" guard. Marks
   now clear on grid close, matching the broadcast overlay's fresh-reset behavior.
 ### Added
+- **Native Cmd+Shift+K stops the whole fleet.** Sends Ctrl-C to every non-muted session — one
+  reflex to halt every runaway agent at once (the fleet-wide cousin of `Cmd+.`). Non-destructive
+  (a Ctrl-C only stops the current command) and respects muted tabs. Plain Cmd+K stays free. Routes
+  via the pure, unit-tested `cmd_shortcut`.
 - **Session-jump palette rows carry triage status.** `Ctrl+H /` now shows each agent's status next
   to its identity: `○` down, `!` busy (producing now), `⌛` quiet (done / waiting on you), plus the
   existing `🔒`/`M` pin/mute — so you can pick the agent that needs you straight from the jump list.
