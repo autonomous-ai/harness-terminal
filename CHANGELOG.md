@@ -19,6 +19,11 @@ entries record user-visible and architectural changes since the last tagged mile
   see). The header shows `▲N above` / `▼N below` when rows are scrolled out of view.
 
 ### Added
+- **`Cmd+Shift+F` opens fleet search** (search every session's scrollback at once) — the
+  browser/editor "find in all" muscle memory, next to `Cmd+Shift+P` for the palette. Plain `Cmd+F`
+  is left alone (it stays the in-session find). Listed in the help overlay.
+
+### Added
 - **Fleet list shows each agent by name.** The `prefix+s` fleet overlay now surfaces the daemon's
   per-session agent name/task (not just engine glyph + truncated id), so a diver can tell which
   agent each row is at a glance — and the fleet filter now matches by name too, so you can type an

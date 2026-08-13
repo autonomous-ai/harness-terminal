@@ -2841,6 +2841,7 @@ impl Application {
             ("Ctrl+Tab / Ctrl+Shift+Tab", "previous / next tab"),
             ("Cmd+1-9 / 0", "jump straight to that tab (0 = last)"),
             ("Cmd+Shift+P", "command palette"),
+            ("Cmd+Shift+F", "search all sessions (fleet)"),
         ] {
             all.push((k.to_string(), d.to_string()));
         }
@@ -4244,6 +4245,12 @@ impl Application {
                 self.palette_sel = 0;
                 self.palette_rows = PaletteAction::all_rows();
                 self.app.overlay = Overlay::CommandPalette;
+            }
+            CmdShortcut::FleetSearch => {
+                self.app.overlay = Overlay::FleetSearch;
+                self.fleet_q.clear();
+                self.fleet_matches.clear();
+                self.fleet_sel = 0;
             }
             CmdShortcut::ReopenTab => {
                 self.app.reopen_last_closed();
@@ -6349,6 +6356,8 @@ enum CmdShortcut {
     PrevTab,
     /// Cmd+Shift+P — open the command palette (VS Code / iTerm muscle memory).
     CommandPalette,
+    /// Cmd+Shift+F — open the fleet search (search every session's scrollback at once).
+    FleetSearch,
     /// Cmd+1..9 — jump straight to that tab (1-based); Cmd+0 jumps to the last. The universal
     /// macOS/browser/iTerm way to page between many agent sessions without cycling.
     GotoTab(usize),
@@ -6383,6 +6392,8 @@ fn cmd_shortcut(key: &Key, mods: &ModifiersState) -> CmdShortcut {
             "[" | "{" if mods.shift_key() => PrevTab,
             // Cmd+Shift+P is the (uppercase, shift-held) P — the conventional command palette.
             "P" if mods.shift_key() => CommandPalette,
+            // Cmd+Shift+F — search all sessions (the browser/editor "find in all" muscle memory).
+            "F" if mods.shift_key() => FleetSearch,
             // Cmd+number jumps to a tab: 1..9 are 1-based indexes, 0 wraps to the last. Standard
             // iTerm/browser muscle memory for fast switching between many agent windows.
             "0" => GotoTab(usize::MAX),
@@ -7034,6 +7045,13 @@ mod tests {
             chars("p", sc),
             CmdShortcut::None,
             "plain Cmd+P is not hijacked"
+        );
+        // Cmd+Shift+F opens fleet search; plain Cmd+F is left alone.
+        assert_eq!(chars("F", sc), CmdShortcut::FleetSearch);
+        assert_eq!(
+            chars("f", sc),
+            CmdShortcut::None,
+            "plain Cmd+F is not hijacked"
         );
         assert_eq!(
             chars("]", s),
