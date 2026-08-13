@@ -194,6 +194,9 @@ entries record user-visible and architectural changes since the last tagged mile
   drag-reorder paths.
 
 ### Added
+- **Page the fleet list and host overview like the grid.** `PgUp`/`PgDn` step the selection by a
+  10-row slice in the fleet (`prefix+s`) and hosts (`prefix+.`) overlays — including a host's
+  drill-in session list — so long lists don't need one keypress per row.
 - **The fleet grid is mouse-friendly now.** A left click selects the tile under the cursor (arrows
   can still refine), and a double-click dives straight into that session — the war-room finally
   responds to the pointer, not just keys. Hit-testing mirrors the renderer's exact tile layout and

@@ -5426,6 +5426,17 @@ impl Application {
                         winit::keyboard::NamedKey::ArrowUp => {
                             self.app.selected = self.app.selected.saturating_sub(1);
                         }
+                        // PgUp/PgDn page by a fixed slice (the list overlays use a 20-row window)
+                        // so a long fleet list doesn't need one press per row, matching the grid.
+                        winit::keyboard::NamedKey::PageDown => {
+                            if !self.fleet_filtered.is_empty() {
+                                self.app.selected = (self.app.selected + 10)
+                                    .min(self.fleet_filtered.len().saturating_sub(1));
+                            }
+                        }
+                        winit::keyboard::NamedKey::PageUp => {
+                            self.app.selected = self.app.selected.saturating_sub(10);
+                        }
                         winit::keyboard::NamedKey::Enter => {
                             self.fleet_attach_selected();
                         }
@@ -5485,6 +5496,19 @@ impl Application {
                         }
                         winit::keyboard::NamedKey::ArrowUp => {
                             self.hosts_sel = self.hosts_sel.saturating_sub(1);
+                        }
+                        // PgUp/PgDn page through either the host list or a host's drill-in sessions
+                        // by a fixed 10-row slice (host list rows fit in a 20-row window).
+                        winit::keyboard::NamedKey::PageDown => {
+                            let bound = if let Some(host) = &self.hosts_host {
+                                self.host_session_indices(host).len().saturating_sub(1)
+                            } else {
+                                self.owned_host_tally().len().saturating_sub(1)
+                            };
+                            self.hosts_sel = (self.hosts_sel + 10).min(bound);
+                        }
+                        winit::keyboard::NamedKey::PageUp => {
+                            self.hosts_sel = self.hosts_sel.saturating_sub(10);
                         }
                         winit::keyboard::NamedKey::ArrowRight => {
                             // Drill from the host list into the selected host's sessions.
