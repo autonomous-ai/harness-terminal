@@ -5,6 +5,10 @@ entries record user-visible and architectural changes since the last tagged mile
 
 ## Unreleased / 0.1.0 (in progress)
 
+### Added
+- **Reconnect straight from peek triage (`r`).** In the peek overlay (`prefix+s`), `r` reconnects
+  the selected pane immediately — no drill-in needed — and the row stays selected so a down `○` flips
+  to live when the transport comes back. Aimed at the common "one of my hosts dropped" flow.
 ### Fixed
 - **No double notification when a remote host reconnects.** A just-recovered pane (down→alive) was
   getting both a `recover` toast and, in the same frame, a `busy` toast the moment its reconnect

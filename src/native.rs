@@ -4562,7 +4562,7 @@ impl Application {
         let rest = if self.peek_filtering {
             "↑/↓ · Enter jump · Esc clear  "
         } else {
-            "↑/↓ preview · n next down · Enter jump · Esc close  "
+            "↑/↓ preview · n next down · r reconnect · Enter jump · Esc close  "
         };
         let header = format!("{filter_prefix}{health}{rest}");
         draw_text(
@@ -6056,6 +6056,36 @@ impl Application {
                                         // Slide the window so the chosen row is the last visible.
                                         self.peek_scroll = i.saturating_add(1).saturating_sub(10);
                                         break;
+                                    }
+                                }
+                            }
+                        } else if c == "r" || c == "R" {
+                            // Reconnect the selected pane straight from triage — no drill-in needed.
+                            // Aimed at the down row under the cursor; it stays selected so the
+                            // ○→● fix is visible the moment the transport comes back. A live row is
+                            // left alone (nothing to reconnect).
+                            let shown = self.peek_filtered.len();
+                            if shown > 0 {
+                                let real = self.peek_filtered[self.peek_sel.min(shown - 1)];
+                                let down = {
+                                    let s = &self.app.tabs[real];
+                                    !s.alive() && s.kind() != "pty"
+                                };
+                                if down {
+                                    let id = self.tab_identity(real);
+                                    match self.app.tabs[real].reconnect_now() {
+                                        Ok(()) => {
+                                            self.flash = Some((
+                                                format!("reconnecting — {id}"),
+                                                std::time::Instant::now(),
+                                            ));
+                                        }
+                                        Err(_) => {
+                                            self.flash = Some((
+                                                format!("reconnect failed — {id}"),
+                                                std::time::Instant::now(),
+                                            ));
+                                        }
                                     }
                                 }
                             }
