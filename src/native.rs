@@ -957,6 +957,56 @@ impl Application {
     /// Open the broadcast overlay pre-scoped to exactly the tiles marked in the fleet grid (`b`).
     /// If nothing is marked, fall back to opening broadcast on all sessions (safety — you can't
     /// silently broadcast to zero). Marks are consumed (cleared) once applied.
+    /// `R` (fleet grid): force-reconnect every marked tile at once — the war-room cousin of the
+    /// broadcast-`b` action. Mark with Space then `R` to heal several down machines in one sweep;
+    /// if nothing is marked, falls back to every down pane (so a bare `R` is never a silent no-op).
+    fn grid_reconnect_marked(&mut self) {
+        let n = self.app.tabs.len();
+        let mut targets: Vec<usize> = (0..n)
+            .filter(|&i| self.grid_marks.get(i).copied().unwrap_or(false))
+            .collect();
+        self.grid_marks = vec![false; n];
+        if targets.is_empty() {
+            targets = (0..n)
+                .filter(|&i| {
+                    let s = &self.app.tabs[i];
+                    s.kind() != "pty" && !s.alive()
+                })
+                .collect();
+        }
+        if targets.is_empty() {
+            self.flash = Some((
+                "no marked or down panes to reconnect".to_string(),
+                std::time::Instant::now(),
+            ));
+            return;
+        }
+        let mut ok = 0usize;
+        let mut still: Vec<(String, String)> = Vec::new();
+        for i in &targets {
+            match self.app.tabs[*i].reconnect_now() {
+                Ok(()) => ok += 1,
+                Err(e) => {
+                    let host = {
+                        let h = self.app.tabs[*i].meta.host.clone();
+                        if h.is_empty() {
+                            "local".to_string()
+                        } else {
+                            h
+                        }
+                    };
+                    let reason = if e.to_string().is_empty() {
+                        e.kind().to_string()
+                    } else {
+                        e.to_string()
+                    };
+                    still.push((host, reason));
+                }
+            }
+        }
+        self.flash = Some((fmt_reconnect_summary(ok, &still), std::time::Instant::now()));
+    }
+
     fn grid_broadcast_marked(&mut self) {
         let n = self.app.tabs.len();
         let marked: Vec<usize> = (0..n)
@@ -3995,7 +4045,7 @@ impl Application {
             fb,
             &mut self.cache,
             &format!(
-                "  fleet grid · {} session{} · ↑/↓/1-9 select · Space mark · b→broadcast marked · Enter dive · Esc close  ",
+                "  fleet grid · {} session{} · ↑/↓/1-9 select · Space mark · b→broadcast · R→reconnect marked · Enter dive · Esc close  ",
                 n,
                 if n == 1 { "" } else { "s" }
             ),
@@ -5739,6 +5789,10 @@ impl Application {
                             // the letter was swallowed by a stray mark-toggle and broadcast-marked
                             // was unreachable.
                             self.grid_broadcast_marked();
+                        } else if ch == Some('R') {
+                            // `R` force-reconnects every marked tile (falling back to all down) —
+                            // the `b`-style bulk action for healing, complementing broadcast.
+                            self.grid_reconnect_marked();
                         }
                     }
                     _ => {}

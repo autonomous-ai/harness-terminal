@@ -6,6 +6,9 @@ entries record user-visible and architectural changes since the last tagged mile
 ## Unreleased / 0.1.0 (in progress)
 
 ### Added
+- **Reconnect marked tiles straight from the fleet grid.** Mark tiles with Space then hit `R` to
+  force-reconnect every marked session at once (falling back to all-down when nothing is marked) —
+  the healing counterpart to `b` broadcast, so you can bulk-recover several machines in the war-room.
 - **The peek list shows how long a quiet tab has been waiting.** A quiet (awaiting-you) row now
   reads `⌛3m` (or `5s`/`2h`/`1d`), matching the fleet grid — so triaging "which agents are parked
   longest" works from the peek too, not just the war-room grid.
