@@ -6,6 +6,11 @@ entries record user-visible and architectural changes since the last tagged mile
 ## Unreleased / 0.1.0 (in progress)
 
 ### Fixed
+- **Fleet search no longer panics if its targets change mid-search.** `prefix+h` / `Cmd+Shift+F`
+  cached per-session match positions while the overlay was open; if a session closed (`Cmd+W`) or
+  its terminal resized/streamed while searching, `render_fleet_search` could index a stale tab or
+  grid line and crash the app. Matches now skip closed sessions and out-of-range rows instead.
+
 - **Palette, broadcast, and fleet lists all scroll past the visible window.** The same
   invisible-selection bug as the fleet list (`prefix+s`) also affected the palette (`prefix+/`,
   capped at 12 rows), the broadcast target list (`prefix+a`, capped at 20 rows), and the fleet

@@ -2692,6 +2692,12 @@ impl Application {
         for row in top..top + rows {
             let scr = row - top;
             let m = self.fleet_matches[row];
+            // The session this match pointed at may have closed while the search overlay was open
+            // (Cmd+W is handled in `about_to_wait`, outside this key handler). A stale `m.tab` into
+            // `app.tabs` would panic — skip the row instead of crashing.
+            if m.tab >= self.app.tabs.len() {
+                continue;
+            }
             let selected = row == self.fleet_sel;
             let color = if selected { WHITE } else { CHROME_DIM };
             // Tab label: user name → engine id @ host.
@@ -2703,10 +2709,19 @@ impl Application {
                 let g = s.term.lock();
                 let cols = g.columns();
                 use alacritty_terminal::index::{Column, Line};
-                g.grid()[Line(m.line)][Column(0)..Column(cols)]
-                    .iter()
-                    .map(|c| c.c)
-                    .collect()
+                // The matched row may have scrolled out or the grid resized since the match was
+                // collected (e.g. streaming output pushed it off, or the pane shrank); guard with
+                // the current valid display range so a stale line can't panic the renderer.
+                let (top, bottom) = (g.grid().topmost_line().0, g.grid().bottommost_line().0);
+                if m.line < top || m.line > bottom {
+                    String::new()
+                } else {
+                    let row = &g.grid()[Line(m.line)];
+                    row[Column(0)..Column(cols.min(row.len()))]
+                        .iter()
+                        .map(|c| c.c)
+                        .collect()
+                }
             };
             let text = if raw.trim().is_empty() {
                 "(blank line)".to_string()
@@ -3094,6 +3109,11 @@ impl Application {
             self.app.overlay = Overlay::None;
             return;
         };
+        if m.tab >= self.app.tabs.len() {
+            // The session closed under the search overlay; bail without indexing a stale tab.
+            self.app.overlay = Overlay::None;
+            return;
+        }
         let tab = m.tab;
         // Focus the session's tab first so the scroll/copy targets the same session the renderer draws.
         self.app.active = tab.min(self.app.tabs.len().saturating_sub(1));
