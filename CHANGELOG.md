@@ -13,6 +13,9 @@ entries record user-visible and architectural changes since the last tagged mile
   the selected pane immediately — no drill-in needed — and the row stays selected so a down `○` flips
   to live when the transport comes back. Aimed at the common "one of my hosts dropped" flow.
 ### Fixed
+- **Native mode persists which window you last focused.** Clicking/focusing a different native tab
+  window updates the active session but wasn't saved, so a relaunch could reopen on a stale earlier
+  tab. `focus_host` now saves the focused session like `set_active` does.
 - **No double notification when a remote host reconnects.** A just-recovered pane (down→alive) was
   getting both a `recover` toast and, in the same frame, a `busy` toast the moment its reconnect
   produced output. `activity_flags` now skips the redundant `busy` nudge while a tab is still in its

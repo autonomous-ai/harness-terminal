@@ -6569,6 +6569,10 @@ impl Application {
         let tab = self.hosts[idx].tab;
         if tab < self.app.tabs.len() {
             self.app.active = tab;
+            // Persist which session was focused on a real window click/switch, matching
+            // `set_active`, so a relaunch reopens on the tab the user was last actually looking at
+            // (not a stale earlier switch).
+            crate::restore::save_active(self.app.active);
         }
         self.alias_active();
         // Each window may sit on a different display with a different backing scale; recompute the
