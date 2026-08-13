@@ -3841,6 +3841,23 @@ impl Application {
             // Quiet and busy are mutually exclusive; down wins over both. The focused tile is the
             // one you're actively reading, so it's never flagged busy/quiet (same rule as the bar).
             let is_down = !s.alive() && s.kind() != "pty";
+            // A down tile should say *why* in the war-room, not just flash `○`: the reason the
+            // hover tooltip carries (host unreachable / auth rejected / timeout) clipped to the
+            // tile's own width. Local PTYs have no transport to diagnose and are skipped.
+            let down_reason = if is_down {
+                let reason = s
+                    .down_reason()
+                    .unwrap_or_else(|| "reconnecting…".to_string())
+                    .trim()
+                    .to_string();
+                if reason.is_empty() {
+                    String::new()
+                } else {
+                    format!(" ({reason})")
+                }
+            } else {
+                String::new()
+            };
             let busy = activity
                 .get(idx)
                 .copied()
@@ -3876,7 +3893,7 @@ impl Application {
                 format!("{glyph_s} ")
             };
             let header = format!(
-                "  {}{}{}  {head}{} {}",
+                "  {}{}{}  {head}{} {}{}",
                 idx + 1,
                 host,
                 if self.grid_marks.get(idx).copied().unwrap_or(false) {
@@ -3885,8 +3902,12 @@ impl Application {
                     ""
                 },
                 if selected { " ◄" } else { "" },
-                pfx
+                pfx,
+                down_reason,
             );
+            // Keep the header inside the tile's own cell width (a long reason must not spill over
+            // a neighbor tile's border); char-clip reuses the hover-tooltip ellipsis rule.
+            let header = clip_dots(&header, (tw / gcol).saturating_sub(2));
             draw_text(
                 fb,
                 &mut self.cache,

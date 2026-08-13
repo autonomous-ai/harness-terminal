@@ -6,6 +6,10 @@ entries record user-visible and architectural changes since the last tagged mile
 ## Unreleased / 0.1.0 (in progress)
 
 ### Added
+- **The fleet-grid war-room shows *why* a machine is down.** A down tile now carries the reconnect
+  reason (`tunnel connect 10.0.0.4: refused`) right after its `○`, clipped to the tile's own width
+  so it never spills onto a neighbor — so the at-a-glance view of every agent tells you which host
+  is dark AND what knocked it over without hovering each one.
 - **Hovering a down tab says how it's recovering and why.** The tab tooltip now shows the live
   retry state (`reconnect 2 · retry in 5s`) and, when known, the last failure reason (`tunnel
   connect 10.0.0.4: refused`) beneath `○ down` — the roomier hover panel carries the reason the
