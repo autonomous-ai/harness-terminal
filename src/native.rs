@@ -747,11 +747,23 @@ impl Application {
     }
 
     /// Imperatively fire one coalesced notification of `kind` for the given (deduped) tab indices.
+    /// Notification label for a session: `name@host`, falling back to just `name` for local
+    /// (hostless) panes. In a multi-machine fleet a bell/busy/recover is a MACHINE event, so the
+    /// host is what makes "back online" or "produced output" actionable.
+    fn notify_label(s: &crate::session::Session) -> String {
+        let head = s.meta.name.clone().unwrap_or_else(|| s.meta.engine.clone());
+        if s.meta.host.is_empty() {
+            head
+        } else {
+            format!("{head}@{}", s.meta.host)
+        }
+    }
+
     fn fire(&mut self, kind: &str, tabs: &[usize]) {
         let labels: Vec<String> = tabs
             .iter()
             .filter_map(|&i| self.app.tabs.get(i))
-            .map(|s| s.meta.name.clone().unwrap_or_else(|| s.meta.engine.clone()))
+            .map(Self::notify_label)
             .collect();
         let n = labels.len();
         if n == 0 {
@@ -786,31 +798,17 @@ impl Application {
                 notify_simple(&title, &body);
             }
             "recover" => {
-                // A pane coming back is a MACHINE event in a multi-host fleet — name which machine
-                // (`name@host`), not just the session, so "back online" is actionable at a glance.
-                let hl: Vec<String> = tabs
-                    .iter()
-                    .filter_map(|&i| self.app.tabs.get(i))
-                    .map(|s| {
-                        let head = s.meta.name.clone().unwrap_or_else(|| s.meta.engine.clone());
-                        if s.meta.host.is_empty() {
-                            head
-                        } else {
-                            format!("{head}@{}", s.meta.host)
-                        }
-                    })
-                    .collect();
-                let hn = hl.len();
-                let hlist = join_labels(&hl);
-                let title = if hn == 1 {
-                    format!("{hlist} · reconnected")
+                // A pane coming back is a MACHINE event in a multi-host fleet — `list` already
+                // carries `name@host`, so "back online" is actionable at a glance.
+                let title = if n == 1 {
+                    format!("{list} · reconnected")
                 } else {
-                    format!("{hn} sessions reconnected")
+                    format!("{n} sessions reconnected")
                 };
-                let body = if hn == 1 {
-                    format!("{hlist} is back online.")
+                let body = if n == 1 {
+                    format!("{list} is back online.")
                 } else {
-                    format!("Back online: {hlist}.")
+                    format!("Back online: {list}.")
                 };
                 notify_simple(&title, &body);
             }
