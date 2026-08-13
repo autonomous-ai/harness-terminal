@@ -5356,6 +5356,19 @@ impl Application {
         }
     }
 
+    /// Clear the "scrolled into history" pin once the view reaches the live bottom (offset 0), so a
+    /// user who wheel-scrolled down to the latest line is back in live-follow and the status label
+    /// stops claiming the pane is pinned in history. A no-op when the offset can't go lower (already
+    /// at the bottom) or a PgUp/PgDn gesture is still mid-way through history.
+    fn unpin_if_at_bottom(&mut self) {
+        if let Some(active) = self.app.active_session() {
+            let at_bottom = { active.term.lock().grid().display_offset() == 0 };
+            if at_bottom {
+                active.set_scrolled(false);
+            }
+        }
+    }
+
     /// Map a framebuffer pixel position to the terminal-cell it lands on (viewing row 0 = the
     /// visually-top line, which with scrollback is history). Returns None if the point is outside
     /// the grid area (tab/status chrome or the right/left gutter).
@@ -6555,6 +6568,12 @@ impl ApplicationHandler for Application {
                     if let Some(s) = self.app.active_session() {
                         s.set_scrolled(true);
                     }
+                } else {
+                    // Scrolling down to the live bottom un-pins history (mirrors PgDn): once the
+                    // offset can't go lower, the view is live again so new output follows and the
+                    // "scrolled into history" label clears. Without this, wheel-scrolling up then
+                    // back to the bottom left the tab stuck labeled "scrolled" with-follow off.
+                    self.unpin_if_at_bottom();
                 }
                 if let Some(w) = &self.window {
                     w.request_redraw();

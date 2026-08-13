@@ -5,6 +5,14 @@ entries record user-visible and architectural changes since the last tagged mile
 
 ## Unreleased / 0.1.0 (in progress)
 
+### Fixed
+- **Mouse-wheel scroll to the bottom now returns the pane to live-follow.** The keyboard PgDn path
+  cleared the "scrolled into history" pin once the view reached the live bottom, but the wheel path
+  never did — so after wheel-scrolling up into history and back down to the latest line, the tab
+  stayed pinned: it kept the "scrolled into history" label and new output no longer auto-followed.
+  Wheel-scrolling down now un-pins the moment the display offset hits the bottom (mirrors PgDn).
+
+
 ### Added
 - **Browser-style `Ctrl+Tab` / `Ctrl+Shift+Tab` now cycle tabs** (in addition to `Cmd+Shift+[/]`), so
   the Chrome/Firefox/VS-Code muscle memory for jumping between many agent sessions works too. A plain
