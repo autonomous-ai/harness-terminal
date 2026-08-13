@@ -6,6 +6,10 @@ entries record user-visible and architectural changes since the last tagged mile
 ## Unreleased / 0.1.0 (in progress)
 
 ### Fixed
+- **Tab order now persists across restarts.** Re-arranging the fleet with `Ctrl+H {`/`}` or by
+  dragging a tab reordered the bar for the session but the new order was never saved, so on relaunch
+  your arranged fleet (sorted by machine or priority) silently snapped back to the original order.
+  Both reorder paths now persist `tabs.json`, so the order you set is the order you reopen.
 - **A fleet-search jump now surfaces the matching native window.** In `native_tabs` mode, jumping
   to a hit from fleet search (`prefix+h` / `Cmd+Shift+F`) switched the in-app active session but
   never surfaced the matching `NSWindow`, so your focus stayed on the old tab while the content you

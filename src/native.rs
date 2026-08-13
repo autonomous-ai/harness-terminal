@@ -996,6 +996,9 @@ impl Application {
             // silently point at a different session; forget it (see `forget_tab`).
             self.last_active = None;
             self.swap_parallel(a, self.app.active);
+            // Persist the new tab order so a `{`/`}` re-arrangement survives a relaunch — tab order
+            // is part of a diver's arranged fleet (by machine/priority), not a transient layout.
+            self.persist_tabs();
         }
     }
 
@@ -7959,6 +7962,9 @@ impl Application {
                 self.set_active(i);
             }
         }
+        // Persist the (possibly re-arranged) tab order once the drag/click settles, so a
+        // drag-to-reorder survives a relaunch like the `{`/`}` brace path.
+        self.persist_tabs();
     }
 
     /// Copy the active session's text selection to the system clipboard. No-op when empty.
