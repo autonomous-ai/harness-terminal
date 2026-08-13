@@ -6,6 +6,8 @@ entries record user-visible and architectural changes since the last tagged mile
 ## Unreleased / 0.1.0 (in progress)
 
 ### Added
+- **The hosts drill-in names why a pane is down.** Drilling into a host from the hosts overview
+  (`prefix+.` → `→`) now shows each down session's reconnect reason beside it, matching the overview.
 - **The native status bar names which host is down.** When only one or two panes are down, the
   fleet triage reads `↓1 build02` (or `↓2 build02, build05`) instead of a bare count, so a diver
   knows where to look; with more down it falls back to the count.

@@ -3221,8 +3221,22 @@ impl Application {
         } else {
             format!("@{}", s.meta.host)
         };
+        // A down pane should say why in the drill-in too, matching the overview, peek, and status.
+        let reason = if !s.alive() && s.kind() != "pty" {
+            let r = s
+                .down_reason()
+                .unwrap_or_else(|| "reconnecting…".to_string());
+            let r = clip_dots(&r.trim().to_string(), 18);
+            if r.is_empty() {
+                String::new()
+            } else {
+                format!(" ({r})")
+            }
+        } else {
+            String::new()
+        };
         format!(
-            "{state} {} ({}){where_s} · {head}{live}",
+            "{state} {} ({}){where_s} · {head}{reason}{live}",
             s.meta.engine,
             tab + 1
         )
