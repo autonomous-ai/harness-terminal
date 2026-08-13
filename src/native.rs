@@ -6790,6 +6790,13 @@ impl Application {
                 .map(|s| s.scrolled())
                 .unwrap_or(false);
             if scrolled_now || matches!(key, Key::Named(winit::keyboard::NamedKey::PageUp)) {
+                // Only the recognized scroll-navigation keys are consumed while scrolled. Any other
+                // key (a letter, Enter, Space, a Left/Right arrow, Backspace, …) means the user
+                // wants to type at the live cursor, so we jump back to the bottom and fall through
+                // to forward the key below — exactly what Terminal.app / iTerm2 do. Before this, a
+                // stray keypress while scrolled up was silently swallowed and never reached the
+                // shell, so a command typed right after scrolling up simply vanished.
+                let mut consumed = false;
                 match key {
                     Key::Named(n) => match n {
                         winit::keyboard::NamedKey::PageUp => {
@@ -6797,16 +6804,27 @@ impl Application {
                             if let Some(s) = self.app.active_session() {
                                 s.set_scrolled(true);
                             }
+                            consumed = true;
                         }
-                        winit::keyboard::NamedKey::PageDown => scroll_active(self, -20),
+                        winit::keyboard::NamedKey::PageDown => {
+                            scroll_active(self, -20);
+                            consumed = true;
+                        }
                         winit::keyboard::NamedKey::ArrowUp => {
                             scroll_active(self, 1);
                             if let Some(s) = self.app.active_session() {
                                 s.set_scrolled(true);
                             }
+                            consumed = true;
                         }
-                        winit::keyboard::NamedKey::ArrowDown => scroll_active(self, -1),
-                        winit::keyboard::NamedKey::Escape => self.scroll_to_bottom(),
+                        winit::keyboard::NamedKey::ArrowDown => {
+                            scroll_active(self, -1);
+                            consumed = true;
+                        }
+                        winit::keyboard::NamedKey::Escape => {
+                            self.scroll_to_bottom();
+                            consumed = true;
+                        }
                         _ => {}
                     },
                     _ => {}
@@ -6820,7 +6838,11 @@ impl Application {
                         }
                     }
                 }
-                return;
+                if consumed {
+                    return;
+                }
+                // A typing key while scrolled: snap to the live bottom, then forward it below.
+                self.scroll_to_bottom();
             }
 
             if let Some(s) = self.app.active_session_mut() {

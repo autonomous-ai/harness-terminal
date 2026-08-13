@@ -6,6 +6,11 @@ entries record user-visible and architectural changes since the last tagged mile
 ## Unreleased / 0.1.0 (in progress)
 
 ### Fixed
+- **Typing while scrolled up now jumps to the live view and reaches the shell.** Previously, once
+  you scrolled up into scrollback, any key that wasn't Page/Arrow/Escape was silently swallowed —
+  so a command typed right after scrolling up vanished. Now any typing key (letters, Enter, Space,
+  Left/Right arrows, Backspace) snaps back to the bottom and forwards to the session, matching
+  Terminal.app / iTerm2; PageUp/PageDown/Up/Down still scroll and Esc still exits scroll.
 - **Correct the help row for font zoom reset.** The keys overlay claimed `Cmd+0` resets zoom, but
   `Cmd+0` is the native "jump to last tab" binding (it's handled before the zoom path, so only
   `Ctrl+0` actually resets zoom). The row now reads `Ctrl+0` reset / `Cmd+0` = last tab to match
