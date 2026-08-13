@@ -6,6 +6,9 @@ entries record user-visible and architectural changes since the last tagged mile
 ## Unreleased / 0.1.0 (in progress)
 
 ### Added
+- **The broadcast overlay shows where you are in history while recalling.** Shift+Up/Shift+Down
+  now annotate the staged line with a `⇧↑ i/n` position (0 = newest), so before you hit Enter you
+  can see which prior fan-out you recalled instead of only a bare echoed line.
 - **The peek header counts panes that just reconnected too.** Alongside the down count it now reads
   `N reconnected` while the transient `↻` badge is showing, so the header tracks the fleet's recent
   recovery, not just what's still down.

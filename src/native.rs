@@ -3897,12 +3897,20 @@ impl Application {
         } else {
             String::new()
         };
+        // While recalling history (Shift+Up/Down), surface where the cursor sits in the MRU list so
+        // the diver knows which prior fan-out they have staged before hitting Enter. 0 = newest.
+        let hist_tag = match self.hist_sel {
+            Some(i) if !self.broadcast_hist.is_empty() => {
+                format!(" ⇧↑ {}/{}", i + 1, self.broadcast_hist.len())
+            }
+            _ => String::new(),
+        };
         let prompt = if self.broadcast_query.is_empty() {
             format!("  send line to {n} of {} session{}{qtag} (↑/↓ focus · Space=toggle · ⇧↑/⇧↓ history · Enter=broadcast · Esc=cancel)  ",
                 self.app.tabs.len(), if n == 1 { "" } else { "s" })
         } else {
             format!(
-                "  broadcast to {n} session{}{qtag}: {} ▏",
+                "  broadcast to {n} session{}{qtag}{hist_tag}: {} ▏",
                 if n == 1 { "" } else { "s" },
                 self.broadcast_query
             )
