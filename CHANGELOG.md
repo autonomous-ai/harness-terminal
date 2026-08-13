@@ -35,6 +35,10 @@ entries record user-visible and architectural changes since the last tagged mile
   see). The header shows `▲N above` / `▼N below` when rows are scrolled out of view.
 
 ### Added
+- **`Cmd+Shift+R` force-reconnects every down pane at once** (the browser "reload" muscle memory),
+  mirroring the `reconnect_all` prefix action — one key to bring a whole fleet back instead of
+  hopping host by host. Plain `Cmd+R` stays with the shell. Listed in the help overlay.
+
 - **`Cmd+Shift+F` opens fleet search** (search every session's scrollback at once) — the
   browser/editor "find in all" muscle memory, next to `Cmd+Shift+P` for the palette. Plain `Cmd+F`
   is left alone (it stays the in-session find). Listed in the help overlay.

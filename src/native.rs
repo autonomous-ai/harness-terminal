@@ -2857,6 +2857,7 @@ impl Application {
             ("Cmd+1-9 / 0", "jump straight to that tab (0 = last)"),
             ("Cmd+Shift+P", "command palette"),
             ("Cmd+Shift+F", "search all sessions (fleet)"),
+            ("Cmd+Shift+R", "force-reconnect ALL down panes"),
         ] {
             all.push((k.to_string(), d.to_string()));
         }
@@ -4284,6 +4285,9 @@ impl Application {
             CmdShortcut::Duplicate => {
                 self.duplicate_active_preserving_pin();
                 self.flash = Some(("duplicated".to_string(), std::time::Instant::now()));
+            }
+            CmdShortcut::ReconnectAll => {
+                self.reconnect_all_down();
             }
             CmdShortcut::GotoTab(i) => {
                 if !self.app.tabs.is_empty() {
@@ -6391,6 +6395,9 @@ enum CmdShortcut {
     ReopenTab,
     /// Cmd+Shift+D — duplicate the active session (VS Code / iTerm muscle memory).
     Duplicate,
+    /// Cmd+Shift+R — force-reconnect ALL down panes at once (the browser "reload" muscle memory for
+    /// bringing a whole fleet back).
+    ReconnectAll,
     /// Not a Cmd shortcut we own (forward as normal).
     None,
 }
@@ -6432,6 +6439,8 @@ fn cmd_shortcut(key: &Key, mods: &ModifiersState) -> CmdShortcut {
             // Cmd+Shift+D duplicates the active session — the VS Code/iTerm "Duplicate" muscle
             // memory. Plain Cmd+D stays with the session.
             "D" if mods.shift_key() => Duplicate,
+            // Cmd+Shift+R force-reconnects every down pane at once (browser "reload" habit).
+            "R" if mods.shift_key() => ReconnectAll,
             // Plain Cmd+[ is left to the shell; only the Shift variant switches tabs.
             _ => None,
         },
@@ -7078,6 +7087,13 @@ mod tests {
             chars("f", sc),
             CmdShortcut::None,
             "plain Cmd+F is not hijacked"
+        );
+        // Cmd+Shift+R force-reconnects all down panes; plain Cmd+R is left alone.
+        assert_eq!(chars("R", sc), CmdShortcut::ReconnectAll);
+        assert_eq!(
+            chars("r", s),
+            CmdShortcut::None,
+            "plain Cmd+R must not hijack the shell"
         );
         assert_eq!(
             chars("]", s),
