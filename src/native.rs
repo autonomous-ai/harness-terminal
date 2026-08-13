@@ -3706,8 +3706,8 @@ impl Application {
                 "toggle one target · select all / clear all",
             ),
             (
-                "Fleet grid · Space mark · b/C/x/X/R",
-                "mark · broadcast · Ctrl-C · close · bulk-close · reconnect",
+                "Fleet grid · Space mark · b/C/x/X/r/R",
+                "mark · broadcast · Ctrl-C · close · bulk-close · reconnect sel/all down",
             ),
         ] {
             all.push((k.to_string(), d.to_string()));
@@ -4321,7 +4321,7 @@ impl Application {
             fb,
             &mut self.cache,
             &format!(
-                "  fleet grid · {} session{} · ↑/↓/PgUp/PgDn/1-9 select · Space mark · b→broadcast · C→Ctrl-C · x/X→close sel/all · R→reconnect · Enter dive · Esc close  ",
+                "  fleet grid · {} session{} · ↑/↓/PgUp/PgDn/1-9 select · Space mark · b→broadcast · C→Ctrl-C · x/X→close sel/all · r/R→reconnect · Enter dive · Esc close  ",
                 n,
                 if n == 1 { "" } else { "s" }
             ),
@@ -6297,6 +6297,34 @@ impl Application {
                             // the letter was swallowed by a stray mark-toggle and broadcast-marked
                             // was unreachable.
                             self.grid_broadcast_marked();
+                        } else if ch == Some('r') {
+                            // `r` force-reconnects JUST the selected tile — the per-tile sibling of
+                            // bulk `R` (all marked / all down) and of peek's `r`. Lets a war-room
+                            // heal one dropped pane without touching the rest of the fleet.
+                            let sel = self.grid_sel;
+                            let down = self
+                                .app
+                                .tabs
+                                .get(sel)
+                                .map(|s| s.kind() != "pty" && !s.alive())
+                                .unwrap_or(false);
+                            if down {
+                                let id = self.tab_identity(sel);
+                                match self.app.tabs[sel].reconnect_now() {
+                                    Ok(()) => {
+                                        self.flash = Some((
+                                            format!("reconnecting — {id}"),
+                                            std::time::Instant::now(),
+                                        ));
+                                    }
+                                    Err(_) => {
+                                        self.flash = Some((
+                                            format!("reconnect failed — {id}"),
+                                            std::time::Instant::now(),
+                                        ));
+                                    }
+                                }
+                            }
                         } else if ch == Some('R') {
                             // `R` force-reconnects every marked tile (falling back to all down) —
                             // the `b`-style bulk action for healing, complementing broadcast.

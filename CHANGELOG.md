@@ -11,6 +11,9 @@ entries record user-visible and architectural changes since the last tagged mile
   a bulk close — defeating the "marks required so a stray press is never destructive" guard. Marks
   now clear on grid close, matching the broadcast overlay's fresh-reset behavior.
 ### Added
+- **Reconnect one tile straight from the fleet grid (`r`).** The per-tile sibling of bulk `R`
+  (which heals every marked / all-down tile), mirrors peek's `r`: select a down tile and press `r`
+  to heal just that pane without touching the rest of the fleet.
 - **Mute a pane straight from peek (`m`).** The peek triage (`prefix+s`) now toggles mute on the
   selected pane, so a noisy backgrounded agent is silenced from the list without a drill-in — the
   per-row sibling of prefix mute.
