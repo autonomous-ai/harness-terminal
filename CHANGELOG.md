@@ -6,6 +6,13 @@ entries record user-visible and architectural changes since the last tagged mile
 ## Unreleased / 0.1.0 (in progress)
 
 ### Added
+- **Browser-style `Ctrl+Tab` / `Ctrl+Shift+Tab` now cycle tabs** (in addition to `Cmd+Shift+[/]`), so
+  the Chrome/Firefox/VS-Code muscle memory for jumping between many agent sessions works too. A plain
+  `Tab` is untouched (still goes to the shell/app), and the binding is covered by the pure
+  `cmd_shortcut` unit test.
+
+
+### Added
 - **Configurable in-memory scrollback (``config.scrollback_lines``).** Each session's terminal grid
   previously kept the alacritty hardcoded default of 10000 history lines. You can now set how much
   history stays in RAM for scrollback search/find/copy/export — raise it (e.g. 50000+) to carry more

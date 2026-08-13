@@ -2777,6 +2777,7 @@ impl Application {
             ("Cmd+Shift+T", "reopen last-closed tab"),
             ("Cmd+Q", "quit"),
             ("Cmd+Shift+[ / ]", "previous / next tab"),
+            ("Ctrl+Tab / Ctrl+Shift+Tab", "previous / next tab"),
             ("Cmd+1-9 / 0", "jump straight to that tab (0 = last)"),
             ("Cmd+Shift+P", "command palette"),
         ] {
@@ -6256,6 +6257,12 @@ enum CmdShortcut {
 
 fn cmd_shortcut(key: &Key, mods: &ModifiersState) -> CmdShortcut {
     use CmdShortcut::*;
+    // Browser-style Ctrl+Tab / Ctrl+Shift+Tab cycle tabs too (many terminal users expect the
+    // Chrome/Firefox muscle memory, in addition to Cmd+Shift+[/]). Pure and unit-tested like every
+    // other shortcut; Ctrl on its own otherwise never reaches the shell as a 	.
+    if mods.control_key() && matches!(key, Key::Named(winit::keyboard::NamedKey::Tab)) {
+        return if mods.shift_key() { PrevTab } else { NextTab };
+    }
     if !mods.super_key() {
         return None;
     }
@@ -6912,6 +6919,23 @@ mod tests {
             CmdShortcut::None,
             "plain Cmd+[ stays with the shell"
         );
+        // Browser-style Ctrl+Tab / Ctrl+Shift+Tab cycle tabs, independent of the Cmd chord.
+        let ctrl = ModifiersState::CONTROL;
+        let ctrl_shift = ModifiersState::CONTROL | ModifiersState::SHIFT;
+        let tab = Key::Named(winit::keyboard::NamedKey::Tab);
+        assert_eq!(cmd_shortcut(&tab, &ctrl), CmdShortcut::NextTab);
+        assert_eq!(cmd_shortcut(&tab, &ctrl_shift), CmdShortcut::PrevTab);
+        // A bare Tab (no Ctrl) is NOT captured — it must keep going to the session/shell.
+        assert_eq!(
+            cmd_shortcut(&tab, &ModifiersState::empty()),
+            CmdShortcut::None
+        );
+        // And Ctrl+Tab still requires a real Tab key, not a character.
+        assert_eq!(
+            cmd_shortcut(&Key::Character("t".to_string().into()), &ctrl),
+            CmdShortcut::None
+        );
+
         // Cmd+number jumps to a tab: 1..9 are 1-based, 0 is the last tab (usize::MAX sentinel).
         assert_eq!(chars("1", s), CmdShortcut::GotoTab(0));
         assert_eq!(chars("5", s), CmdShortcut::GotoTab(4));
