@@ -3698,8 +3698,8 @@ impl Application {
                 "reconnect this host / broadcast to this host",
             ),
             (
-                "Peek · / filter · n down · r reconnect",
-                "narrow by host/engine/name · up/down/busy/quiet (compose: \"build05 down\") · n/r",
+                "Peek · / filter · n down · r reconnect · x close",
+                "narrow by host/engine/name · up/down/busy/quiet (compose: \"build05 down\") · n/r/x",
             ),
             (
                 "Broadcast · Space · ⇧Space",
@@ -4589,7 +4589,7 @@ impl Application {
         let rest = if self.peek_filtering {
             "↑/↓ · Enter jump · Esc clear  "
         } else {
-            "↑/↓ preview · n next down · r reconnect · Enter jump · Esc close  "
+            "↑/↓ preview · n down · r reconnect · x close · Enter jump · Esc close  "
         };
         let header = format!("{filter_prefix}{health}{rest}");
         draw_text(
@@ -6121,6 +6121,29 @@ impl Application {
                                             ));
                                         }
                                     }
+                                }
+                            }
+                        } else if c == "x" {
+                            // Close the selected pane straight from triage — the per-row sibling of
+                            // the fleet grid's `x`. Honours the pin guard (flashes instead) and
+                            // stashes an undo spec, so a mistaken close is `prefix+u` / Cmd+Shift+T
+                            // away. The row disappears from the list right away.
+                            let shown = self.peek_filtered.len();
+                            if shown > 0 {
+                                let real = self.peek_filtered[self.peek_sel.min(shown - 1)];
+                                self.close_tab_at(real);
+                                if self.app.tabs.is_empty() {
+                                    self.app.overlay = Overlay::None;
+                                } else {
+                                    // Closing shifts the following indices; re-filter from the live
+                                    // tab set and clamp the selection back into range.
+                                    self.peek_refresh_filter();
+                                    self.peek_sel = self
+                                        .peek_sel
+                                        .min(self.peek_filtered.len().saturating_sub(1));
+                                    self.peek_scroll = self
+                                        .peek_scroll
+                                        .min(self.peek_filtered.len().saturating_sub(10));
                                 }
                             }
                         }

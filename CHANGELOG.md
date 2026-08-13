@@ -11,6 +11,9 @@ entries record user-visible and architectural changes since the last tagged mile
   a bulk close — defeating the "marks required so a stray press is never destructive" guard. Marks
   now clear on grid close, matching the broadcast overlay's fresh-reset behavior.
 ### Added
+- **Close a pane straight from peek (`x`).** The peek triage (`prefix+s`) now closes the selected
+  pane in place — the per-row sibling of the fleet grid's `x` — honouring the pin guard and stashing
+  an undo spec, so pruning a dead/finished agent is one key without a drill-in.
 - **Peek `/` filter composes multiple keywords (AND).** Space-separated tokens must all match —
   `build05 down`, `claude quiet` — so a diver can ask "which agents are down on this host?" in one
   query, alongside the existing `up`/`down`/`busy`/`quiet` keywords and substring matching.
