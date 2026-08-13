@@ -4205,6 +4205,40 @@ impl Application {
 
     /// Apply the same save-then-exit dance as a window CloseRequested: persist open tabs, tab list,
     /// and geometry, then flag the loop to exit at the next `about_to_wait`.
+    /// Apply one native-menu-bar command drained in `about_to_wait`. Each maps onto the same
+    /// handler the matching in-app Cmd shortcut uses, so the OS menu and the keyboard stay in sync.
+    fn apply_menu_action(&mut self, a: crate::macos::menu::MenuAction) {
+        use crate::macos::menu::MenuAction as M;
+        match a {
+            M::NewTab => {
+                self.app.overlay = Overlay::NewSession;
+                self.app.select_default_engine();
+                self.new_cwd = self.app.last_dirs.first().cloned().unwrap_or_default();
+            }
+            M::CloseTab => self.close_active_requested = true,
+            M::Quit => self.quit(),
+            M::ReopenTab => self.app.reopen_last_closed(),
+            M::NextTab => {
+                if !self.app.tabs.is_empty() {
+                    let n = self.app.tabs.len();
+                    self.set_active((self.app.active + 1) % n);
+                }
+            }
+            M::PrevTab => {
+                if !self.app.tabs.is_empty() {
+                    let n = self.app.tabs.len();
+                    self.set_active((self.app.active + n - 1) % n);
+                }
+            }
+            M::CommandPalette => {
+                self.palette_q.clear();
+                self.palette_sel = 0;
+                self.palette_rows = PaletteAction::all_rows();
+                self.app.overlay = Overlay::CommandPalette;
+            }
+        }
+    }
+
     fn quit(&mut self) {
         self.app.save_all_scrollbacks();
         crate::restore::save(&self.app.tab_specs());
@@ -7110,6 +7144,14 @@ impl ApplicationHandler for Application {
     }
 
     fn about_to_wait(&mut self, event_loop: &ActiveEventLoop) {
+        // Drain native-menu-bar commands dispatched since the last frame and map them onto the same
+        // handlers the in-app Cmd shortcuts use. The menu's key equivalents consume their chords
+        // before winit, so these never double-fire with `cmd_shortcut` (that path is just a fallback
+        // for chords the menu does not own).
+        #[cfg(target_os = "macos")]
+        for a in crate::macos::menu::drain_actions() {
+            self.apply_menu_action(a);
+        }
         // A quit request (prefix+q, the palette's Quit action, or Cmd+Q) is honored here, after the
         // key handler's borrows have ended.
         if self.quit_requested {
@@ -7245,6 +7287,12 @@ fn overlay_row_sel(fb: &mut Framebuffer, y_center: usize, line_px: usize, margin
 
 /// Entry point: create the native window and run the event loop.
 pub fn run(app: App) -> Result<(), Box<dyn std::error::Error>> {
+    // Install the native macOS menu bar (Cmd+T/W/Q, prev/next tab, palette) before any window
+    // appears so it's up for the whole session. Best-effort: a failure just means no menus.
+    #[cfg(target_os = "macos")]
+    unsafe {
+        crate::macos::menu::install_main_menu();
+    }
     let event_loop = EventLoop::new()?;
     let mut application = Application::new(app);
     event_loop.run_app(&mut application)?;

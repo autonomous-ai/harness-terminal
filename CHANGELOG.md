@@ -5,6 +5,15 @@ entries record user-visible and architectural changes since the last tagged mile
 
 ## Unreleased / 0.1.0 (in progress)
 
+### Added
+- **Native macOS menu bar.** winit 0.30 ships no menu API, so the app previously had a bare
+  menu-less bar. A real AppKit main menu is now installed at launch with the File, Tab, and Window
+  menus: `Cmd+T` new tab, `Cmd+W` close tab, `Cmd+Q` quit, `Cmd+Shift+[` / `Cmd+Shift+]` previous /
+  next tab, `Cmd+Shift+T` reopen last-closed tab, and `Cmd+Shift+P` command palette. Each item
+  dispatches through a Rust-owned ObjC target into a queue the winit loop drains each frame, wired
+  to the exact same handlers the keyboard shortcuts use; menu key equivalents consume their chords
+  first, so nothing that worked before can double-fire or regress.
+
 ### Fixed
 - **Moving a tab no longer strands its pin/mute/busy/badge state on the wrong session.** Both the
   prefix move (`Ctrl+H` move left/right) and drag-to-reorder swapped/relocated the tab entry alone,

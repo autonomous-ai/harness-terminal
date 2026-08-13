@@ -236,3 +236,240 @@ pub mod tabs {
         }
     }
 }
+
+// ───────────────────────────────────────────────────────────────────────────
+// Native macOS menu bar.
+//
+// winit 0.30 ships no menu API at all, so a real terminal keeps a bare, menu-less
+// app — no Apple menu, no File/Tab/Window menus, no discoverability for Cmd+T/W/Q.
+// We build a proper AppKit main menu whose key equivalents (Cmd+T, Cmd+W, Cmd+Q,
+// Cmd+Shift+[ / ], Cmd+Shift+T, Cmd+Shift+P) dispatch into a tiny Rust-owned ObjC
+// target. The target only pushes onto a static queue; the winit loop drains it once
+// per frame and maps each command onto the exact handlers the in-app Cmd shortcuts
+// route to.
+//
+// Key-equivalent ownership: a menu item with a key equivalent makes AppKit consume
+// that keystroke during `performKeyEquivalent:` before it reaches the key window, so
+// the winit `cmd_shortcut` fallback never double-fires — it only runs for chords that
+// have no menu item. The two paths never overlap, and nothing that worked before
+// stops working if the menu fails to take a chord.
+// ───────────────────────────────────────────────────────────────────────────
+
+#[cfg(target_os = "macos")]
+pub mod menu {
+    use std::sync::{Mutex, OnceLock};
+
+    use objc2::rc::Retained;
+    use objc2::runtime::{AnyObject, NSObject};
+    use objc2::{define_class, extern_methods, sel, MainThreadMarker};
+    use objc2_app_kit::{NSApplication, NSEventModifierFlags as ModifierFlags, NSMenu, NSMenuItem};
+    use objc2_foundation::NSString;
+
+    /// A menu-bar command the OS dispatched. Drained by the winit loop each frame and mapped onto
+    /// the same handlers the Cmd shortcuts route to.
+    #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+    pub enum MenuAction {
+        NewTab,
+        CloseTab,
+        Quit,
+        ReopenTab,
+        NextTab,
+        PrevTab,
+        CommandPalette,
+    }
+
+    static QUEUE: OnceLock<Mutex<Vec<MenuAction>>> = OnceLock::new();
+    fn queue() -> &'static Mutex<Vec<MenuAction>> {
+        QUEUE.get_or_init(|| Mutex::new(Vec::new()))
+    }
+    fn push(a: MenuAction) {
+        if let Ok(mut q) = queue().lock() {
+            q.push(a);
+        }
+    }
+
+    /// Drain any menu commands queued since the last frame (best-effort, never blocks the loop).
+    pub fn drain_actions() -> Vec<MenuAction> {
+        match queue().lock() {
+            Ok(mut q) => std::mem::take(&mut *q),
+            Err(_) => Vec::new(),
+        }
+    }
+
+    // The ObjC target receiving NSMenu action messages. Each item aims at the one shared instance
+    // with its own selector; the selector body only pushes the matching [`MenuAction`].
+    define_class!(
+        // SAFETY: NSObject imposes no subclassing requirements, and the class owns no Rust payload
+        // that must be freed on dealloc — each selector just pushes into a static queue.
+        #[unsafe(super(NSObject))]
+        #[name = "HarnessMenuTarget"]
+        pub struct MenuTarget;
+
+        impl MenuTarget {
+            #[unsafe(method(harnessNewTab:))]
+            unsafe fn new_tab(&self, _: &NSObject) {
+                push(MenuAction::NewTab);
+            }
+            #[unsafe(method(harnessCloseTab:))]
+            unsafe fn close_tab(&self, _: &NSObject) {
+                push(MenuAction::CloseTab);
+            }
+            #[unsafe(method(harnessQuit:))]
+            unsafe fn quit(&self, _: &NSObject) {
+                push(MenuAction::Quit);
+            }
+            #[unsafe(method(harnessReopenTab:))]
+            unsafe fn reopen_tab(&self, _: &NSObject) {
+                push(MenuAction::ReopenTab);
+            }
+            #[unsafe(method(harnessNextTab:))]
+            unsafe fn next_tab(&self, _: &NSObject) {
+                push(MenuAction::NextTab);
+            }
+            #[unsafe(method(harnessPrevTab:))]
+            unsafe fn prev_tab(&self, _: &NSObject) {
+                push(MenuAction::PrevTab);
+            }
+            #[unsafe(method(harnessPalette:))]
+            unsafe fn palette(&self, _: &NSObject) {
+                push(MenuAction::CommandPalette);
+            }
+        }
+    );
+
+    impl MenuTarget {
+        extern_methods!(
+            #[unsafe(method(new))]
+            pub fn new(mtm: MainThreadMarker) -> Retained<Self>;
+        );
+    }
+
+    static TARGET: OnceLock<Retained<MenuTarget>> = OnceLock::new();
+
+    // NSCommandKeyMask=1<<20, NSShiftKeyMask=1<<17.
+    const CMD: u64 = 1u64 << 20;
+    const SHIFT: u64 = 1u64 << 17;
+
+    /// Append a `title` item to `menu` with the given action/key equivalent, targeting our target.
+    /// `key` None yields a plain (mouse-only) item; otherwise its modifier mask is applied.
+    unsafe fn add(
+        menu: &NSMenu,
+        title: &str,
+        action: objc2::runtime::Sel,
+        target: &AnyObject,
+        key: Option<(&str, u64)>,
+        mtm: MainThreadMarker,
+    ) {
+        let t = NSString::from_str(title);
+        let item = NSMenuItem::new(mtm);
+        unsafe {
+            item.setTitle(&t);
+            item.setAction(Some(action));
+            item.setTarget(Some(target));
+            if let Some((k, mask)) = key {
+                let ks = NSString::from_str(k);
+                item.setKeyEquivalent(&ks);
+                item.setKeyEquivalentModifierMask(ModifierFlags(mask as usize));
+            }
+        }
+        menu.addItem(&item);
+    }
+
+    /// Install the native main menu on `NSApp`. Must run on the main thread (it is: at launch,
+    /// before any window appears). Best-effort; the terminal keeps running without menus if a
+    /// lookup fails, since only the menu tree is dropped, never app state.
+    pub unsafe fn install_main_menu() {
+        // SAFETY: callers invoke this once at launch before the event loop runs; if we are somehow
+        // off the main thread (no marker) we bail rather than touch AppKit from the wrong thread.
+        let Some(mtm) = MainThreadMarker::new() else {
+            return;
+        };
+        let target: Retained<MenuTarget> = TARGET.get_or_init(|| MenuTarget::new(mtm)).clone();
+        let target_ref: &AnyObject = target.as_ref();
+        let app = NSApplication::sharedApplication(mtm);
+
+        let main = NSMenu::new(mtm);
+
+        // App menu (first item, bare submenu titled with the app name).
+        let app_item = NSMenuItem::new(mtm);
+        let app_menu = NSMenu::new(mtm);
+        add(
+            &app_menu,
+            "Quit Harness Terminal",
+            sel!(harnessQuit:),
+            target_ref,
+            Some(("q", CMD)),
+            mtm,
+        );
+        app_item.setSubmenu(Some(&app_menu));
+        main.addItem(&app_item);
+
+        // File.
+        let file_item = NSMenuItem::new(mtm);
+        let file_menu = NSMenu::new(mtm);
+        add(
+            &file_menu,
+            "New Tab",
+            sel!(harnessNewTab:),
+            target_ref,
+            Some(("t", CMD)),
+            mtm,
+        );
+        add(
+            &file_menu,
+            "Reopen Last Tab",
+            sel!(harnessReopenTab:),
+            target_ref,
+            Some(("t", CMD | SHIFT)),
+            mtm,
+        );
+        add(
+            &file_menu,
+            "Close Tab",
+            sel!(harnessCloseTab:),
+            target_ref,
+            Some(("w", CMD)),
+            mtm,
+        );
+        file_item.setSubmenu(Some(&file_menu));
+        main.addItem(&file_item);
+
+        // Tab.
+        let tab_item = NSMenuItem::new(mtm);
+        let tab_menu = NSMenu::new(mtm);
+        add(
+            &tab_menu,
+            "Previous Tab",
+            sel!(harnessPrevTab:),
+            target_ref,
+            Some(("[", CMD | SHIFT)),
+            mtm,
+        );
+        add(
+            &tab_menu,
+            "Next Tab",
+            sel!(harnessNextTab:),
+            target_ref,
+            Some(("]", CMD | SHIFT)),
+            mtm,
+        );
+        tab_item.setSubmenu(Some(&tab_menu));
+        main.addItem(&tab_item);
+
+        // Window.
+        let win_item = NSMenuItem::new(mtm);
+        let win_menu = NSMenu::new(mtm);
+        add(
+            &win_menu,
+            "Command Palette",
+            sel!(harnessPalette:),
+            target_ref,
+            Some(("p", CMD | SHIFT)),
+            mtm,
+        );
+        win_item.setSubmenu(Some(&win_menu));
+        main.addItem(&win_item);
+
+        app.setMainMenu(Some(&main));
+    }
+}
