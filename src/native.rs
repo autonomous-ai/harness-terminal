@@ -921,7 +921,11 @@ impl Application {
             // `recover` toast for the same reconnect, so a second `busy` toast would be a double-nag.
             // Backgrounded-unmuted is the only state that reaches here with a set recovery badge
             // (active/muted tabs bail earlier), so this exactly cancels the duplicate.
-            if grew && !self.notified[i] && self.recover_until.get(i).copied().flatten().is_none() {
+            if should_busy_nudge(
+                grew,
+                self.notified[i],
+                self.recover_until.get(i).copied().flatten().is_some(),
+            ) {
                 self.notified[i] = true;
                 fresh_busy.push(i);
             }
@@ -8983,6 +8987,13 @@ fn grid_targets(marks: &[bool], fallback: Option<&[bool]>) -> Vec<usize> {
     }
 }
 
+/// Whether a freshly-grew backgrounded (non-muted) tab should fire a one-shot "busy" nudge.
+/// Suppressed while the tab is still inside its recovery window (down→alive within the last few
+/// seconds), because it just got a `recover` toast for the same reconnect — nudging again here
+/// would be a redundant double-nag. Pure so the coalescing rule is unit-tested once.
+fn should_busy_nudge(grew: bool, already_notified: bool, in_recovery: bool) -> bool {
+    grew && !already_notified && !in_recovery
+}
 #[cfg(test)]
 mod tests {
     use super::{
@@ -8991,7 +9002,8 @@ mod tests {
         fleet_host_line, fmt_duration, fmt_reconnect_summary, format_engine_mix, fuzzy_match,
         grid_targets, grid_tile_at, group_notifications, host_color, host_engine_breakdown,
         host_tally, join_labels, move_slot, next_host_index, parse_remote_attach,
-        reanchor_active_after_batch, recall_index, scroll_top, session_indices_for_host, swap_slot,
+        reanchor_active_after_batch, recall_index, scroll_top, session_indices_for_host,
+        should_busy_nudge, swap_slot,
         CmdShortcut, FleetMatch,
     };
 
@@ -9828,6 +9840,23 @@ mod tests {
             grid_targets(&[true, true, true], Some(&[false, false])),
             vec![0, 1, 2]
         );
+    }
+
+    /// The busy-nudge coalescing rule: nudge only when there is fresh output AND the tab has not
+    /// already been notified AND it is not still inside its recovery window (it just got a
+    /// `recover` toast for the same reconnect). Guards the one-notification-per-reconnect invariant.
+    #[test]
+    fn busy_nudge_coalesces_with_recovery() {
+        // Fresh output, never notified, not recovering -> nudge.
+        assert!(should_busy_nudge(true, false, false));
+        // Already notified this settle-window -> no duplicate nudge.
+        assert!(!should_busy_nudge(true, true, false));
+        // Fresh output but still inside the recovery window -> suppressed (the recover toast covers it).
+        assert!(!should_busy_nudge(true, false, true));
+        // No fresh output -> nothing regardless.
+        assert!(!should_busy_nudge(false, false, false));
+        // Already notified AND recovering -> definitely nothing.
+        assert!(!should_busy_nudge(true, true, true));
     }
 
     /// A drag-reorder (remove/insert) must apply the same relocation to every parallel vector, so a
