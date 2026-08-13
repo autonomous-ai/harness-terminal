@@ -179,8 +179,12 @@ setups).
 
 ## Status
 
-Functional and in active development. Persistent tabs, fleet status, scrollback search, copy mode,
-session restore, config, and font zoom all work. Architecture in `ARCHITECTURE.md`.
+In active development and used daily. Persistent tabs and order, per-session scrollback search with
+history (Cmd+F / Cmd+G), copy mode, URL click-to-open, native table-top tabbing (one real `NSWindow`
+per session), SGR mouse reporting to terminal apps that ask for it, firmware-layer fleet triage
+(peek, war-room grid, host overview), broadcast / interrupt / reconnect fleet actions, remote attach
+to tmux sessions over the e2ee harness tunnel, session restore, config & theme, and font zoom all
+work. Idles at ~0% CPU. Architecture in `ARCHITECTURE.md`.
 
 ## License
 

@@ -4377,13 +4377,18 @@ impl Application {
         let status_base = fb.height.saturating_sub(self.cell_h as usize / 2);
         // Overlay status line with query and match count info.
         let line = if self.find_query.is_empty() {
-            "  find: (type to search)  ".to_string()
+            if self.find_history.is_empty() {
+                "  find: (type to search · ↑ recalls history)  ".to_string()
+            } else {
+                let last = &self.find_history[0];
+                format!("  find: (up recalls {last})  ")
+            }
         } else {
             let n = self.find_all.len();
             if n > 0 {
                 let here = (self.find_index % n) + 1;
                 format!(
-                    "  find: {}  (match {} of {} · Enter/Tab next, Shift+Enter prev)",
+                    "  find: {}  (match {} of {} · Enter/Tab next, Shift+Enter prev, Cmd+G repeat)",
                     self.find_query, here, n
                 )
             } else {
