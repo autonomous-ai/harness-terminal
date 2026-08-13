@@ -1127,7 +1127,7 @@ impl Application {
                 s.kind() != "pty" && !s.alive()
             })
             .collect();
-        let mut targets = grid_targets(&self.grid_marks, Some(&down));
+        let targets = grid_targets(&self.grid_marks, Some(&down));
         self.grid_marks = vec![false; n];
         if targets.is_empty() {
             self.flash = Some((
@@ -1209,7 +1209,7 @@ impl Application {
         let unmuted: Vec<bool> = (0..n)
             .map(|i| !self.muted.get(i).copied().unwrap_or(false))
             .collect();
-        let mut targets = grid_targets(&self.grid_marks, Some(&unmuted));
+        let targets = grid_targets(&self.grid_marks, Some(&unmuted));
         self.grid_marks = vec![false; n];
         if targets.is_empty() {
             self.flash = Some((
@@ -10051,11 +10051,31 @@ impl ApplicationHandler for Application {
     }
 }
 
+/// Escape `s` for embedding inside a double-quoted AppleScript string literal. osascript parses
+/// `\` as its escape character, so both `\` and `"` must be escaped: a session that was renamed
+/// to include a quote or backslash (e.g. `a\"b`) would otherwise truncate the string and break
+/// the notification (and the rest of the script). Pure and unit-tested.
+fn script_escape(s: &str) -> String {
+    let mut out = String::with_capacity(s.len());
+    for c in s.chars() {
+        match c {
+            '\\' => out.push_str("\\\\"),
+            '"' => out.push_str("\\\""),
+            _ => out.push(c),
+        }
+    }
+    out
+}
+
 /// Fire one coalesced macOS notification (title + body). Shells out to `osascript` — no extra crate
 /// dependency, and the terminal already assumes macOS. Best-effort: a missing/denied osascript
 /// (rare, headless) must not touch the terminal.
 fn notify_simple(title: &str, body: &str) {
-    let script = format!("display notification \"{body}\" with title \"{title}\"");
+    let script = format!(
+        "display notification \"{}\" with title \"{}\"",
+        script_escape(body),
+        script_escape(title)
+    );
     let _ = std::process::Command::new("osascript")
         .arg("-e")
         .arg(script)
@@ -10249,10 +10269,10 @@ mod tests {
         fuzzy_match, grid_targets, grid_tile_at, group_notifications, host_color,
         host_engine_breakdown, host_tally, join_labels, move_slot, next_host_index,
         next_trouble_index, parse_remote_attach, prepend_capped, prev_trouble_index,
-        reanchor_active_after_batch, recall_index, scroll_top, session_indices_for_host,
-        sgr_button_code, sgr_motion_code, sgr_mouse, sgr_wheel_code, should_busy_nudge,
-        status_accent, swap_slot, tail_lines, CmdShortcut, FleetMatch, CHROME_BUSY, CHROME_ERR,
-        CHROME_QUIET, CHROME_RECOVER,
+        reanchor_active_after_batch, recall_index, script_escape, scroll_top,
+        session_indices_for_host, sgr_button_code, sgr_motion_code, sgr_mouse, sgr_wheel_code,
+        should_busy_nudge, status_accent, swap_slot, tail_lines, CmdShortcut, FleetMatch,
+        CHROME_BUSY, CHROME_ERR, CHROME_QUIET, CHROME_RECOVER,
     };
 
     use winit::event::{ElementState, MouseButton};
@@ -11567,5 +11587,15 @@ mod tests {
         assert_eq!(tail_lines("", 40), "");
         assert_eq!(tail_lines("\n  \n", 40), "");
         assert_eq!(tail_lines("only", 5), "only\n");
+    }
+
+    /// `script_escape` keeps quotes and backslashes inside a double-quoted AppleScript literal, so a
+    /// renamed session/host with hostile punctuation can never break the notification script.
+    #[test]
+    fn script_escape_handles_quotes_and_backslashes() {
+        assert_eq!(script_escape("plain"), "plain");
+        assert_eq!(script_escape("a\"b"), "a\\\"b");
+        assert_eq!(script_escape("a\\b"), "a\\\\b");
+        assert_eq!(script_escape("it's it"), "it's it");
     }
 }
