@@ -6,6 +6,10 @@ entries record user-visible and architectural changes since the last tagged mile
 ## Unreleased / 0.1.0 (in progress)
 
 ### Fixed
+- **Bulk-close marked panes from the fleet grid.** `X` prunes every marked tile at once (high→low,
+  honoring the pin guard + per-tab undo) — the bulk sibling of the single-tile `x`. Unlike
+  `b`/`C`/`R` it requires explicit marks (no "close everything" fallback), so a stray press can
+  never nuke the fleet; a miss flashes a reminder to Space-mark first.
 - **Close a pane straight from the fleet grid.** `x` prunes the selected tile (honoring the pin
   guard + undo, exactly like the tab bar's ×), so a war-room can clear dead/finished panes without
   leaving the overview — the counterpart to `b`/`C`/`R` marked bulk actions.

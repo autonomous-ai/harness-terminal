@@ -1167,6 +1167,45 @@ impl Application {
         ));
     }
 
+    /// `X` (fleet grid): close every marked tile at once (high→low so indices stay valid), honoring
+    /// the pin guard + per-tab undo via `close_tab_at`. The bulk-prune cousin of the single-tile
+    /// `x`; unlike `b`/`C`/`R` it does NOT fall back to "all" — closing everything with a miss is
+    /// too destructive, so a missing selection is a no-op with a reminder to mark first.
+    fn grid_close_marked(&mut self) {
+        let n = self.app.tabs.len();
+        let marked: Vec<usize> = (0..n)
+            .filter(|&i| self.grid_marks.get(i).copied().unwrap_or(false))
+            .collect();
+        self.grid_marks = vec![false; n];
+        if marked.is_empty() {
+            self.flash = Some((
+                "no marked tiles to close — Space to mark".to_string(),
+                std::time::Instant::now(),
+            ));
+            return;
+        }
+        let mut closed = 0usize;
+        for &i in marked.iter().rev() {
+            if self.close_tab_at(i) {
+                closed += 1;
+            }
+        }
+        self.flash = Some((
+            if closed == 0 {
+                "nothing closed (all marked were pinned)".to_string()
+            } else {
+                format!(
+                    "closed {closed} session{}",
+                    if closed == 1 { "" } else { "s" }
+                )
+            },
+            std::time::Instant::now(),
+        ));
+        if self.app.tabs.is_empty() {
+            self.app.overlay = Overlay::None;
+        }
+    }
+
     /// `prefix+l`: flip to the tab that was active just before this one (tmux last-window).
     /// Repeated presses ping-pong, since swapping focus swaps `last_active`.
     fn last_window(&mut self) {
@@ -3662,8 +3701,8 @@ impl Application {
                 "filter the peek list (host/engine/name/down) · Esc clears",
             ),
             (
-                "Fleet grid · b / C / x / R",
-                "broadcast · Ctrl-C · close · reconnect (marked)",
+                "Fleet grid · b / C / x / X / R",
+                "broadcast · Ctrl-C · close sel · close all marked · reconnect",
             ),
         ] {
             all.push((k.to_string(), d.to_string()));
@@ -4277,7 +4316,7 @@ impl Application {
             fb,
             &mut self.cache,
             &format!(
-                "  fleet grid · {} session{} · ↑/↓/PgUp/PgDn/1-9 select · Space mark · b→broadcast · C→Ctrl-C · x→close · R→reconnect · Enter dive · Esc close  ",
+                "  fleet grid · {} session{} · ↑/↓/PgUp/PgDn/1-9 select · Space mark · b→broadcast · C→Ctrl-C · x/X→close sel/all · R→reconnect · Enter dive · Esc close  ",
                 n,
                 if n == 1 { "" } else { "s" }
             ),
@@ -5997,6 +6036,10 @@ impl Application {
                         } else if c == "/" {
                             self.peek_q.clear();
                             self.peek_filtering = true;
+                            // Start the filter at the top of the (soon narrow) list so the first
+                            // matches are immediately visible rather than inheriting a stale scroll.
+                            self.peek_sel = 0;
+                            self.peek_scroll = 0;
                         } else if c == "n" || c == "N" {
                             // Jump to the next down pane within the (possibly filtered) list.
                             let shown = self.peek_filtered.len();
@@ -6154,7 +6197,7 @@ impl Application {
                             // `C` sends Ctrl-C to every marked tile (falling back to all non-muted) —
                             // the "stop the batch job" sibling of `R` reconnect and `b` broadcast.
                             self.grid_interrupt_marked();
-                        } else if ch == Some('x') || ch == Some('X') {
+                        } else if ch == Some('x') {
                             // `x` closes the selected tile (honoring the pin guard + undo, like the
                             // tab bar's ×) so a war-room can prune dead/finished panes in place.
                             self.close_tab_at(self.grid_sel);
@@ -6163,6 +6206,10 @@ impl Application {
                             } else {
                                 self.grid_sel = self.grid_sel.min(self.app.tabs.len() - 1);
                             }
+                        } else if ch == Some('X') {
+                            // `X` bulk-closes every marked tile; unlike `b`/`C`/`R` it needs marks
+                            // (no "close everything" fallback) so a stray press is never destructive.
+                            self.grid_close_marked();
                         }
                     }
                     _ => {}
