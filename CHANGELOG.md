@@ -24,6 +24,12 @@ entries record user-visible and architectural changes since the last tagged mile
   config degrades rather than panics) — 114→116 unit tests.
 
 ### Fixed
+- **`config.scrollback_lines` is now clamped to a safe ceiling (1M lines).** A mis-typed value (e.g.
+  `1000000000`) previously would have made the grid pre-allocate history up to that many lines,
+  risking an out-of-memory blank on relaunch. Oversized values (and `usize::MAX`) are pinned to 1M,
+  `0` still disables history, and normal values pass through unchanged.
+
+### Fixed
 - **Opening the fleet overlay (prefix+e) and the fleet overlay's `s` refresh no longer freeze the UI
   on a wedged daemon.** Both called `HarnessClient::local().status()` synchronously on the main
   event-loop thread, stalling the whole terminal for up to 800ms when the local daemon accepted the

@@ -26,10 +26,21 @@ use crate::transport::{LocalPtyTransport, Transport};
 #[cfg(test)]
 use alacritty_terminal::term::Config;
 
+/// Upper bound on the in-memory scrollback a single session holds, so a mis-typed config value
+/// (e.g. `scrollback_lines = 1000000000`) can never balloon a pane into exhausting RAM — the grid
+/// pre-allocates history up front. 1M lines is far beyond real agent runs but still bounded.
+pub(crate) const MAX_SCROLLBACK_LINES: usize = 1_000_000;
+
+/// Clamp a configured scrollback-line request into the safe range. `0` stays 0 (no history);
+/// enormous values are pinned to [`MAX_SCROLLBACK_LINES`]. Pure so the guard is unit-testable.
+fn clamp_scrollback_lines(n: usize) -> usize {
+    n.min(MAX_SCROLLBACK_LINES)
+}
+
 fn term_config() -> alacritty_terminal::term::Config {
     let mut cfg = alacritty_terminal::term::Config::default();
     if let Some(n) = crate::config::Config::load().scrollback_lines {
-        cfg.scrolling_history = n;
+        cfg.scrolling_history = clamp_scrollback_lines(n);
     }
     cfg
 }
@@ -688,6 +699,20 @@ fn row_text(grid: &Grid<alacritty_terminal::term::cell::Cell>, line: i32, cols: 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// A configured scrollback line limit is clamped to the safe ceiling (a typo can't balloon a
+    /// pane into exhausting RAM), `0` stays 0, and normal values pass through unchanged.
+    #[test]
+    fn scrollback_lines_are_clamped_to_safe_ceiling() {
+        assert_eq!(clamp_scrollback_lines(0), 0);
+        assert_eq!(clamp_scrollback_lines(50000), 50000);
+        assert_eq!(
+            clamp_scrollback_lines(MAX_SCROLLBACK_LINES),
+            MAX_SCROLLBACK_LINES
+        );
+        assert_eq!(clamp_scrollback_lines(1_000_000_000), MAX_SCROLLBACK_LINES);
+        assert_eq!(clamp_scrollback_lines(usize::MAX), MAX_SCROLLBACK_LINES);
+    }
 
     /// Typed bytes are echoed locally, then the identical copy returns over the link — the canceller
     /// must drop that returned copy while keeping genuine program output.
