@@ -21,6 +21,9 @@ entries record user-visible and architectural changes since the last tagged mile
   a bulk close — defeating the "marks required so a stray press is never destructive" guard. Marks
   now clear on grid close, matching the broadcast overlay's fresh-reset behavior.
 ### Added
+- **Session-jump palette rows carry triage status.** `Ctrl+H /` now shows each agent's status next
+  to its identity: `○` down, `!` busy (producing now), `⌛` quiet (done / waiting on you), plus the
+  existing `🔒`/`M` pin/mute — so you can pick the agent that needs you straight from the jump list.
 - **Native Cmd+Shift+J jumps to the next quiet (awaiting-you) agent.** When several agents run at
   once, the fastest thing to do is usually find the one waiting on your input — that's `next_quiet`,
   now one Cmd+Shift+J away. Plain Cmd+J stays free. Routes via the pure, unit-tested `cmd_shortcut`.

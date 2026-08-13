@@ -2949,7 +2949,19 @@ impl Application {
             }
             let name = s.meta.name.clone().unwrap_or_else(|| s.meta.engine.clone());
             // Compact status flags so a jump carries context: live/pin/mute next to the name.
-            let live = if s.alive() { "" } else { "○" };
+            // Status glyph so a jump carries triage context: `○` down, `!` busy (producing now),
+            // `⌛` quiet (done / waiting on you). Reuses the already-sampled per-frame `grew_delta`
+            // and the read-only `quiet_for`, so this is pure rendering — no re-sampling that could
+            // double-fire notifications. A dead pane wins, then busy, then quiet, then blank live.
+            let status = if !s.alive() {
+                "○"
+            } else if self.grew_delta.get(i).copied().unwrap_or(0) > 0 {
+                "!"
+            } else if self.quiet_for(i) {
+                "⌛"
+            } else {
+                " "
+            };
             let pin = if self.pinned.get(i).copied().unwrap_or(false) {
                 "🔒"
             } else {
@@ -2960,7 +2972,7 @@ impl Application {
             } else {
                 " "
             };
-            let flags = format!("{live}{pin}{mute}");
+            let flags = format!("{status}{pin}{mute}");
             let line = format!(
                 "  {} {} · {} · {}  {}",
                 flags,

@@ -48,7 +48,7 @@ same command mode:
 
 | Keys | Action |
 |------|--------|
-| `Ctrl+H` `/` | palette: fuzzy-jump to any session |
+| `Ctrl+H` `/` | palette: fuzzy-jump to any session (row shows status: `○` down, `!` busy, `⌛` quiet, `🔒` pinned, `M` muted) |
 | `Ctrl+H` `;` | command palette: run any action by name |
 | `Ctrl+H` `n` | new session (engine picker; type a working dir) |
 | `Ctrl+H` `r` | attach to remote `pane@host` (add `:port` for a non-default harness daemon; pre-fills the last host) |
