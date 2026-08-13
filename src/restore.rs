@@ -290,9 +290,22 @@ fn scrollback_cap() -> usize {
     }
 }
 
-fn scrollback_file(kind: &str, host: &str, engine: &str) -> std::path::PathBuf {
-    // Bullet-proof file name: only alnum/`_`/`-` survive, host may be an IP or machine id.
-    let k: String = (kind.to_owned() + host + engine)
+fn scrollback_file(
+    kind: &str,
+    host: &str,
+    engine: &str,
+    attach: Option<&str>,
+) -> std::path::PathBuf {
+    // Bullet-proof file name: only alnum/`_`/`-` survive, host may be an IP or machine id. For an
+    // attach tab the remote session name disambiguates multiple distinct `host/session` agents on
+    // the same host+engine (each keeps its own persisted history). Spawns (attach=None) share the
+    // same `auton-<engine>` pane, so their identity is exactly kind+host+engine.
+    let base = kind.to_owned() + host + engine;
+    let with_session = match attach {
+        Some(sess) if !sess.trim().is_empty() => base + "--" + sess,
+        _ => base,
+    };
+    let k: String = with_session
         .chars()
         .map(|c| {
             if c.is_ascii_alphanumeric() || c == '-' || c == '_' {
@@ -309,7 +322,7 @@ fn scrollback_file(kind: &str, host: &str, engine: &str) -> std::path::PathBuf {
 /// ~256KB (or the config's `scrollback_cap`) so a giant history can't balloon the config dir.
 /// Best-effort like the other state files; a full disk must not crash the app. Old snapshots of the
 /// same identity are overwritten.
-pub fn save_scrollback(kind: &str, host: &str, engine: &str, text: &str) {
+pub fn save_scrollback(kind: &str, host: &str, engine: &str, attach: Option<&str>, text: &str) {
     if text.trim().is_empty() {
         return;
     }
@@ -322,21 +335,21 @@ pub fn save_scrollback(kind: &str, host: &str, engine: &str, text: &str) {
     if skip > 0 {
         tail = &text[skip..];
     }
-    let path = scrollback_file(kind, host, engine);
+    let path = scrollback_file(kind, host, engine, attach);
     let _ = std::fs::create_dir_all(scrollback_path());
     let _ = std::fs::write(path, tail);
 }
 
 /// Load a previously-captured scrollback for a tab identity. Empty string on any error/missing.
-pub fn load_scrollback(kind: &str, host: &str, engine: &str) -> String {
-    let path = scrollback_file(kind, host, engine);
+pub fn load_scrollback(kind: &str, host: &str, engine: &str, attach: Option<&str>) -> String {
+    let path = scrollback_file(kind, host, engine, attach);
     std::fs::read_to_string(path).unwrap_or_default()
 }
 
 /// The file name (relative to the `scrollback/` dir) a tab identity maps to. Public so cleanup can
 /// match an on-disk file back to a tab that still references it.
-fn scrollback_name(kind: &str, host: &str, engine: &str) -> String {
-    scrollback_file(kind, host, engine)
+fn scrollback_name(kind: &str, host: &str, engine: &str, attach: Option<&str>) -> String {
+    scrollback_file(kind, host, engine, attach)
         .file_name()
         .unwrap_or_default()
         .to_string_lossy()
@@ -354,15 +367,17 @@ fn scrollback_name(kind: &str, host: &str, engine: &str) -> String {
 ///
 /// The `alive` slice is the set of identities we want to keep: for every entry its scrollback file
 /// and mute entry survive; everything else in the scrollback dir / muted set is removed.
-pub fn cleanup_orphans(alive: &[(&str, &str, &str)]) {
+pub fn cleanup_orphans(alive: &[(&str, &str, &str, Option<&str>)]) {
     // Resolve the live identities to their file names / mute keys so we can match on-disk state.
+    // The scrollback file name includes the attach session (to distinguish distinct `host/session`
+    // agents on one host); the mute key stays kind+host+engine (mute is a per-machine agent toggle).
     let keep_names: Vec<String> = alive
         .iter()
-        .map(|(k, h, e)| scrollback_name(k, h, e))
+        .map(|(k, h, e, a)| scrollback_name(k, h, e, *a))
         .collect();
     let keep_keys: Vec<String> = alive
         .iter()
-        .map(|(k, h, e)| format!("{k}:{h}:{e}"))
+        .map(|(k, h, e, _)| format!("{k}:{h}:{e}"))
         .collect();
 
     // Scavenge the scrollback dir: delete any *.txt not backed by a live identity.
@@ -708,26 +723,82 @@ mod tests {
     fn scrollback_roundtrips_through_file() {
         with_isolated_dir(|_| {
             // Missing file → empty, no panic.
-            assert_eq!(load_scrollback("tmux", "build-host", "claude"), "");
+            assert_eq!(load_scrollback("tmux", "build-host", "claude", None), "");
             // A snapshot with wrapped lines and unicode survives verbatim.
             let text = "line one\nbeta-beta-beta-beta-gamma\nελληνικά ωμέγα\n";
-            save_scrollback("tmux", "build-host", "claude", text);
-            assert_eq!(load_scrollback("tmux", "build-host", "claude"), text);
+            save_scrollback("tmux", "build-host", "claude", None, text);
+            assert_eq!(load_scrollback("tmux", "build-host", "claude", None), text);
             // Distinct identities don't collide (host differs → separate file).
-            assert!(load_scrollback("tmux", "other-host", "claude").is_empty());
+            assert!(load_scrollback("tmux", "other-host", "claude", None).is_empty());
             // An all-whitespace snapshot is refused (nothing meaningful to persist).
-            save_scrollback("ssh", "10.0.0.9", "codex", "   \n  ");
-            assert_eq!(load_scrollback("ssh", "10.0.0.9", "codex"), "");
+            save_scrollback("ssh", "10.0.0.9", "codex", None, "   \n  ");
+            assert_eq!(load_scrollback("ssh", "10.0.0.9", "codex", None), "");
 
             // A huge snapshot is capped at MAX_SCROLLBACK_BYTES so a multi-megabyte history can't
             // balloon the config dir; the persisted tail keeps the most recent bytes.
             let hugo = "x".repeat(MAX_SCROLLBACK_BYTES + 10) + "TAIL";
-            save_scrollback("tunnel", "10.0.0.7", "claude", &hugo);
-            let loaded = load_scrollback("tunnel", "10.0.0.7", "claude");
+            save_scrollback("tunnel", "10.0.0.7", "claude", None, &hugo);
+            let loaded = load_scrollback("tunnel", "10.0.0.7", "claude", None);
             assert!(loaded.len() <= MAX_SCROLLBACK_BYTES);
             assert!(
                 loaded.ends_with("TAIL"),
                 "cap must keep the tail, not the head"
+            );
+        });
+    }
+
+    /// Distinct remote agents on the same host+engine keep their own persisted history when they
+    /// attach distinct tmux sessions (`host/session`), instead of collapsing into one last-writer-wins
+    /// file. Spawned panes (attach=None) still share the single `auton-<engine>` identity.
+    #[test]
+    fn attach_session_disambiguates_scrollback() {
+        with_isolated_dir(|_| {
+            // Two claude agents on the same host, different remote session names.
+            save_scrollback(
+                "tunnel",
+                "10.0.0.4",
+                "claude",
+                Some("work-a"),
+                "alpha history",
+            );
+            save_scrollback(
+                "tunnel",
+                "10.0.0.4",
+                "claude",
+                Some("work-b"),
+                "beta history",
+            );
+            // A spawn (no attach) on the same host+engine is a third, separate identity.
+            save_scrollback("tunnel", "10.0.0.4", "claude", None, "fresh spawn history");
+
+            // Each attach session round-trips its own text; nothing bleeds across sessions.
+            assert_eq!(
+                load_scrollback("tunnel", "10.0.0.4", "claude", Some("work-a")),
+                "alpha history"
+            );
+            assert_eq!(
+                load_scrollback("tunnel", "10.0.0.4", "claude", Some("work-b")),
+                "beta history"
+            );
+            assert_eq!(
+                load_scrollback("tunnel", "10.0.0.4", "claude", None),
+                "fresh spawn history"
+            );
+
+            // cleanup keeps every distinct live identity's file.
+            let alive: Vec<(&str, &str, &str, Option<&str>)> = vec![
+                ("tunnel", "10.0.0.4", "claude", Some("work-a")),
+                ("tunnel", "10.0.0.4", "claude", Some("work-b")),
+                ("tunnel", "10.0.0.4", "claude", None),
+            ];
+            cleanup_orphans(&alive);
+            assert_eq!(
+                load_scrollback("tunnel", "10.0.0.4", "claude", Some("work-a")),
+                "alpha history"
+            );
+            assert_eq!(
+                load_scrollback("tunnel", "10.0.0.4", "claude", Some("work-b")),
+                "beta history"
             );
         });
     }
@@ -745,8 +816,8 @@ mod tests {
             std::fs::write(&cfg, "scrollback_cap = 64\n").unwrap();
 
             let big = "y".repeat(4096) + "TAIL";
-            save_scrollback("ssh", "10.0.0.9", "claude", &big);
-            let loaded = load_scrollback("ssh", "10.0.0.9", "claude");
+            save_scrollback("ssh", "10.0.0.9", "claude", None, &big);
+            let loaded = load_scrollback("ssh", "10.0.0.9", "claude", None);
             assert!(loaded.len() <= 64);
             assert!(
                 loaded.ends_with("TAIL"),
@@ -810,33 +881,36 @@ mod tests {
     fn cleanup_orphans_removes_stale_and_keeps_live() {
         with_isolated_dir(|_| {
             // Live identities (still persisted/open) and a vanished one.
-            save_scrollback("tmux", "build-host", "claude", "keep this");
-            save_scrollback("tunnel", "10.0.0.7", "codex", "keep this too");
-            save_scrollback("pty", "ghost", "shell", "stale — should be deleted");
+            save_scrollback("tmux", "build-host", "claude", None, "keep this");
+            save_scrollback("tunnel", "10.0.0.7", "codex", None, "keep this too");
+            save_scrollback("pty", "ghost", "shell", None, "stale — should be deleted");
             save_muted(&[
                 ("tmux", "build-host", "claude"),
                 ("tunnel", "10.0.0.7", "codex"),
                 ("pty", "ghost", "shell"),
             ]);
             assert_eq!(
-                load_scrollback("pty", "ghost", "shell"),
+                load_scrollback("pty", "ghost", "shell", None),
                 "stale — should be deleted"
             );
 
             // Only the two live identities survive.
-            let alive: Vec<(&str, &str, &str)> = vec![
-                ("tmux", "build-host", "claude"),
-                ("tunnel", "10.0.0.7", "codex"),
+            let alive: Vec<(&str, &str, &str, Option<&str>)> = vec![
+                ("tmux", "build-host", "claude", None),
+                ("tunnel", "10.0.0.7", "codex", None),
             ];
             cleanup_orphans(&alive);
 
             // Live scrollbacks kept; the ghost's deleted.
-            assert_eq!(load_scrollback("tmux", "build-host", "claude"), "keep this");
             assert_eq!(
-                load_scrollback("tunnel", "10.0.0.7", "codex"),
+                load_scrollback("tmux", "build-host", "claude", None),
+                "keep this"
+            );
+            assert_eq!(
+                load_scrollback("tunnel", "10.0.0.7", "codex", None),
                 "keep this too"
             );
-            assert_eq!(load_scrollback("pty", "ghost", "shell"), "");
+            assert_eq!(load_scrollback("pty", "ghost", "shell", None), "");
 
             // Live mutes kept; the ghost's pruned.
             let muted = load_muted();
@@ -851,10 +925,10 @@ mod tests {
     #[test]
     fn cleanup_orphans_with_no_live_empties_state() {
         with_isolated_dir(|_| {
-            save_scrollback("pty", "solo", "claude", "all gone");
+            save_scrollback("pty", "solo", "claude", None, "all gone");
             save_muted(&[("pty", "solo", "claude")]);
             cleanup_orphans(&[]);
-            assert_eq!(load_scrollback("pty", "solo", "claude"), "");
+            assert_eq!(load_scrollback("pty", "solo", "claude", None), "");
             assert!(load_muted().is_empty());
         });
     }

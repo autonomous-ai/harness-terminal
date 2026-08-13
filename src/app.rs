@@ -88,9 +88,16 @@ impl App {
         // runs before any tab is restored, so `load()` (the persisted specs) is exactly the set of
         // identities whose per-tab state we still want — anything else is an orphan and goes.
         let alive = crate::restore::load();
-        let alive: Vec<(&str, &str, &str)> = alive
+        let alive: Vec<(&str, &str, &str, Option<&str>)> = alive
             .iter()
-            .map(|s| (s.kind.as_str(), s.host.as_str(), s.engine.as_str()))
+            .map(|s| {
+                (
+                    s.kind.as_str(),
+                    s.host.as_str(),
+                    s.engine.as_str(),
+                    s.session.as_deref(),
+                )
+            })
             .collect();
         crate::restore::cleanup_orphans(&alive);
         // Load persisted engine recency so the picker keeps its ordering across restarts. The live
@@ -369,7 +376,13 @@ impl App {
                 continue; // no real pane to re-attach; a replayed prompt would just mislead.
             }
             let text = s.capture_scrollback();
-            crate::restore::save_scrollback(kind, &s.meta.host, &s.meta.engine, &text);
+            crate::restore::save_scrollback(
+                kind,
+                &s.meta.host,
+                &s.meta.engine,
+                s.attach_session.as_deref(),
+                &text,
+            );
         }
     }
 
@@ -512,7 +525,12 @@ impl App {
         session.meta.name = spec.name.clone();
         // Replay the persisted scrollback into the fresh emulator so a session comes back with
         // its history intact (before live bytes arrive; the reconnect sweep appends on top).
-        let history = crate::restore::load_scrollback(&spec.kind, &spec.host, &spec.engine);
+        let history = crate::restore::load_scrollback(
+            &spec.kind,
+            &spec.host,
+            &spec.engine,
+            spec.session.as_deref(),
+        );
         session.restore_history(&history);
         self.tabs.push(session);
         // Don't steal focus on restore — keep whatever was active (usually tab 0) meaningful.
