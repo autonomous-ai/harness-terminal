@@ -4624,8 +4624,7 @@ impl Application {
                             }
                         }
                         winit::keyboard::NamedKey::Space => {
-                            if self.grid_sel < self.app.tabs.len() {
-                                let m = self.grid_marks.get_mut(self.grid_sel).unwrap();
+                            if let Some(m) = self.grid_marks.get_mut(self.grid_sel) {
                                 *m = !*m;
                             }
                         }
@@ -4646,8 +4645,7 @@ impl Application {
                                     self.grid_sel = i;
                                 }
                             }
-                        } else if ch == Some(' ') && self.grid_sel < self.app.tabs.len() {
-                            let m = self.grid_marks.get_mut(self.grid_sel).unwrap();
+                        } else if let Some(m) = self.grid_marks.get_mut(self.grid_sel) {
                             *m = !*m;
                         } else if ch == Some('b') {
                             self.grid_broadcast_marked();

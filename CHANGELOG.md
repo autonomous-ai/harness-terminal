@@ -13,6 +13,13 @@ entries record user-visible and architectural changes since the last tagged mile
   hot-path config I/O.
 
 ### Fixed
+- **Fleet-grid mark toggling can no longer panic on a desync.** The fleet-grid `Space` toggle read
+  `grid_marks[grid_sel]` with an unwrap guarded only by the *tab* count, so a vector desync (the
+  same class as the earlier `last_output` / tab-close fixes) would `unwrap()` past `grid_marks` and
+  panic. The toggle now reads through `get_mut`, so a stale index can no longer panic — the mark is
+  just left alone until the vectors re-sync.
+
+### Fixed
 - **`prefix+H` next-host paging pinned with tests.** `next_host_index` (jumping the fleet by
   machine) had no coverage for interleaved/repeated hosts or the wrap-around case; added a test
   exercising distinct-host ordering, skipping ahead across repeats, and wrap-to-front (113→114).
