@@ -269,14 +269,13 @@ fn handle_key_tui(app: &mut App, key: crossterm::event::KeyEvent, in_command: &m
                     app.active = idx;
                 }
             }
-            KeyCode::Char('x') => {
-                if !app.tabs.is_empty() {
+            KeyCode::Char('x')
+                if !app.tabs.is_empty() => {
                     app.tabs.remove(app.active);
                     if app.active >= app.tabs.len() {
                         app.active = app.tabs.len().saturating_sub(1);
                     }
                 }
-            }
             _ => {}
         }
         return false;

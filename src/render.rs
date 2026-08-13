@@ -1581,7 +1581,7 @@ mod tests {
         );
         drop(g);
         // Center pixel of cell (line 0, col 1) should be the copy-cursor green (0x9ece6a).
-        let px = fb.pixels[0 * 18 * fb.width + 1 * 9 + 4];
+        let px = fb.pixels[13]; // center pixel (row 0, col 1) framebuffer index
         let (r, gg, b) = ((px >> 16) & 0xff, (px >> 8) & 0xff, px & 0xff);
         assert!(
             gg > 180 && r < 220 && b < 180,

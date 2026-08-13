@@ -78,9 +78,9 @@ fn tunnel_relays_pane_bytes_into_grid() {
 
 fn daemon_up(port: u16) -> bool {
     std::net::TcpStream::connect(("127.0.0.1", port))
-        .and_then(|s| {
+        .map(|s| {
             let _ = s;
-            Ok(())
+            ()
         })
         .is_ok()
 }
