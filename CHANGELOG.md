@@ -194,6 +194,9 @@ entries record user-visible and architectural changes since the last tagged mile
   drag-reorder paths.
 
 ### Added
+- **The hosts drill-in shows how long a quiet session has been waiting.** Drilling into a host
+  (`Ctrl+H .` → `→`) now tags a quiet (awaiting-you) session `⌛3m` — matching the fleet grid and
+  peek — so per-host triage tells you which agents on that machine are parked the longest.
 - **Page the fleet list and host overview like the grid.** `PgUp`/`PgDn` step the selection by a
   10-row slice in the fleet (`prefix+s`) and hosts (`prefix+.`) overlays — including a host's
   drill-in session list — so long lists don't need one keypress per row.

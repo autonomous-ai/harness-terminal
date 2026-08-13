@@ -3327,8 +3327,21 @@ impl Application {
         } else {
             String::new()
         };
+        // A quiet (awaiting-you) live session on this host says how long it has been parked,
+        // matching the fleet grid and peek. Down wins (its reason is the more urgent signal).
+        let idle = if !s.alive() && s.kind() != "pty" && self.quiet_for(tab) {
+            let d = std::time::Instant::now()
+                - self
+                    .last_output
+                    .get(tab)
+                    .copied()
+                    .unwrap_or(std::time::Instant::now());
+            format!(" · ⌛{}", fmt_duration(d))
+        } else {
+            String::new()
+        };
         format!(
-            "{state} {} ({}){where_s} · {head}{reason}{live}",
+            "{state} {} ({}){where_s} · {head}{reason}{idle}{live}",
             s.meta.engine,
             tab + 1
         )
