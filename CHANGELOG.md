@@ -6,6 +6,8 @@ entries record user-visible and architectural changes since the last tagged mile
 ## Unreleased / 0.1.0 (in progress)
 
 ### Added
+- **The palette gains scrollback-review actions.** `page up` and `scroll to bottom` are now
+  palette actions, so skimming a long agent log starts without the prefix chord.
 - **The command palette gains the triage jumps.** `next busy`, `next quiet`, `mute`/`unmute`, and
   `rename` are now first-class palette actions, so a diver who forgot the prefix chords can find
   them by typing in `Ctrl+H /`.

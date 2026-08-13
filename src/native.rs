@@ -89,6 +89,8 @@ enum PaletteAction {
     NextDown,
     MuteActive,
     Rename,
+    PageUp,
+    ScrollBottom,
     NextHost,
     Hosts,
     Dnd,
@@ -144,6 +146,8 @@ impl PaletteAction {
             ("kill active tab's pane (destroy remote session)", Destroy),
             ("send Ctrl-C to active tab (stop the run)", Interrupt),
             ("close all quiet (done) tabs", CloseQuiet),
+            ("page up (review this tab's scrollback)", PageUp),
+            ("scroll to bottom (back to live)", ScrollBottom),
             ("show this help", Help),
             ("quit", Quit),
         ]
@@ -4303,6 +4307,13 @@ impl Application {
                     .unwrap_or_default();
                 self.app.overlay = Overlay::Rename;
             }
+            PageUp => {
+                scroll_active(self, 20);
+                if let Some(s) = self.app.active_session() {
+                    s.set_scrolled(true);
+                }
+            }
+            ScrollBottom => self.scroll_to_bottom(),
             NextHost => self.next_host(),
             Hosts => {
                 self.hosts_sel = 0;
