@@ -3084,7 +3084,9 @@ impl Application {
         draw_text(
             fb,
             &mut self.cache,
-            &format!("  {host} sessions · ↑/↓ select · Enter → open · ←/Esc back  "),
+            &format!(
+                "  {host} sessions · ↑/↓ select · Enter → open · r reconnect host · ←/Esc back  "
+            ),
             32,
             base_y,
             self.font_px,
@@ -5393,6 +5395,38 @@ impl Application {
                         }
                         _ => {}
                     },
+                    // In the drill-in view, `r` force-reconnects every down pane on this host — the
+                    // per-machine cousin of prefix+T. Most useful when a whole box came back after a
+                    // blip but its panes are still waiting on their backoff timers.
+                    Key::Character(c) => {
+                        if (c == "r" || c == "R") && self.hosts_host.is_some() {
+                            let host = self.hosts_host.clone().unwrap_or_default();
+                            let idxs = self.host_session_indices(&host);
+                            let mut ok = 0usize;
+                            let mut still = 0usize;
+                            for i in idxs {
+                                let (pty, alive) = {
+                                    let s = &self.app.tabs[i];
+                                    (s.kind() == "pty", s.alive())
+                                };
+                                if pty || alive {
+                                    continue;
+                                }
+                                match self.app.tabs[i].reconnect_now() {
+                                    Ok(()) => ok += 1,
+                                    Err(_) => still += 1,
+                                }
+                            }
+                            self.flash = Some((
+                                if still > 0 {
+                                    format!("{host}: {ok} reconnected, {still} still down")
+                                } else {
+                                    format!("{host}: {ok} reconnected")
+                                },
+                                std::time::Instant::now(),
+                            ));
+                        }
+                    }
                     _ => {}
                 }
                 return;

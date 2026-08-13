@@ -6,6 +6,9 @@ entries record user-visible and architectural changes since the last tagged mile
 ## Unreleased / 0.1.0 (in progress)
 
 ### Added
+- **Reconnect a whole host from its drill-in.** In the hosts drill-in (`prefix+.` → `→`), `r`
+  force-reconnects every down pane on that host at once (the per-machine cousin of reconnect-all),
+  and the header names the shortcut.
 - **Remote-Attach lets you Tab through remembered hosts.** The overlay now cycles the host field
   through your recent hosts (MRU) with `Tab` / `Shift+Tab` (forward/back), and the hint names the
   last one — so reconnecting to a machine you used before no longer requires retyping the address.
