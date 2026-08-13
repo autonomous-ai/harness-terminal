@@ -2638,7 +2638,30 @@ impl Application {
             } else {
                 "○ tunnel down"
             };
-            info = format!("  {} · {}", tunnel, info);
+            // Compact fleet-wide summary when several agents run at once: a glance at the status
+            // line should surface the urgent counts without opening peek — N down then N busy.
+            // A fleet that needs nothing reads as a quiet "ok". Pure aggregation of the already
+            // computed per-tab live signals, so idle CPU is unaffected.
+            let mut fleet = String::new();
+            if self.app.tabs.len() > 1 {
+                let down = self
+                    .app
+                    .tabs
+                    .iter()
+                    .filter(|s| s.kind() != "pty" && !s.alive())
+                    .count();
+                let busy = self.grew_delta.iter().filter(|&&d| d > 0).count();
+                if down > 0 {
+                    fleet += &format!("  {} ⚠ down", down);
+                }
+                if busy > 0 {
+                    fleet += &format!("  {} ⚡ busy", busy);
+                }
+                if down == 0 && busy == 0 {
+                    fleet = "  ✓ fleet ok".to_string();
+                }
+            }
+            info = format!("  {}{} · {}", tunnel, fleet, info);
             // When the viewport is scrolled back from the live bottom, say so — a dead giveaway that
             // keys won't take you to fresh output until you press Escape (or the b key). Also show how
             // far back we are as a percentage so a long agent log stays navigable.

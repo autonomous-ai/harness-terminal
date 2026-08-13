@@ -75,6 +75,11 @@ entries record user-visible and architectural changes since the last tagged mile
   a bulk close — defeating the "marks required so a stray press is never destructive" guard. Marks
   now clear on grid close, matching the broadcast overlay's fresh-reset behavior.
 ### Added
+- **The status line now shows a fleet-wide health summary at a glance.** When several agents are
+  open, a glance at the bottom bar now reads `N ⚠ down` and `N ⚡ busy` (the urgent counts a diver
+  needs without opening peek), and a healthy fleet shows `✓ fleet ok`. Derived purely from the
+  already-computed per-tab live signals, so idle CPU is unaffected; single-session windows show the
+  same line as before.
 - **Cmd+G / Cmd+Shift+G jump between search matches from anywhere.** Once you've run a find
   (`Cmd+F` / `prefix+f`), Cmd+G steps forward and Cmd+Shift+G steps backward through the hits even
   after the find bar closes — the iTerm2 muscle memory for reviewing a search without reopening it.
