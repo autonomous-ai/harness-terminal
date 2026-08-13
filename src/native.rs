@@ -5711,6 +5711,15 @@ impl Application {
             CmdShortcut::Interrupt => {
                 self.interrupt_active();
             }
+            // Cmd+G / Cmd+Shift+G cycle through the last search's matches from anywhere. `find_jump`
+            // is a no-op when there's no match list yet, and still scrolls + lands the viewport on
+            // the new hit; the key handler redraws afterwards.
+            CmdShortcut::FindNext => {
+                self.find_jump(1);
+            }
+            CmdShortcut::FindPrev => {
+                self.find_jump(-1);
+            }
             CmdShortcut::NextQuiet => {
                 self.next_quiet();
             }
@@ -5958,10 +5967,10 @@ impl Application {
                             self.find_recompute(None);
                         }
                         winit::keyboard::NamedKey::Escape => {
-                            // Clear the search highlight on dismiss so the frozen match doesn't
-                            // linger in the grid after find closes.
-                            self.find_hit = None;
-                            self.find_all = Vec::new();
+                            // Close the find bar but keep the match list + highlight (and the last
+                            // query), so Cmd+G / Cmd+Shift+G keep cycling through the hits from
+                            // anywhere, exactly like iTerm2 — the matches stay lit until the next
+                            // Cmd+F starts a fresh search.
                             self.app.overlay = Overlay::None;
                         }
                         _ => {}
@@ -8970,6 +8979,11 @@ enum CmdShortcut {
     /// Cmd+. — send Ctrl-C to the active session. The macOS "stop the running thing" key, so a
     /// runaway agent is halted with the same reflex you'd use to stop a Python script in Xcode.
     Interrupt,
+    /// Cmd+G — jump to the next find match (the iTerm2 muscle memory for stepping through a search
+    /// after the find bar closes).
+    FindNext,
+    /// Cmd+Shift+G — jump to the previous find match.
+    FindPrev,
     /// Not a Cmd shortcut we own (forward as normal).
     None,
 }
@@ -9156,6 +9170,9 @@ fn cmd_shortcut(key: &Key, mods: &ModifiersState) -> CmdShortcut {
             "K" if mods.shift_key() => InterruptAll,
             // Cmd+Shift+Y opens peek — every session's tail in one war-room list.
             "Y" if mods.shift_key() => Peek,
+            // Cmd+G / Cmd+Shift+G: next / previous find match, after a search (iTerm2 habit).
+            "g" => FindNext,
+            "G" if mods.shift_key() => FindPrev,
             // Plain Cmd+[ is left to the shell; only the Shift variant switches tabs.
             _ => None,
         },
@@ -10026,6 +10043,9 @@ mod tests {
             CmdShortcut::None,
             "plain Cmd+Y is not hijacked"
         );
+        // Cmd+G / Cmd+Shift+G: next / previous find match.
+        assert_eq!(chars("g", s), CmdShortcut::FindNext);
+        assert_eq!(chars("G", sc), CmdShortcut::FindPrev);
         assert_eq!(
             chars("]", s),
             CmdShortcut::None,

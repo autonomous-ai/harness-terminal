@@ -75,6 +75,12 @@ entries record user-visible and architectural changes since the last tagged mile
   a bulk close — defeating the "marks required so a stray press is never destructive" guard. Marks
   now clear on grid close, matching the broadcast overlay's fresh-reset behavior.
 ### Added
+- **Cmd+G / Cmd+Shift+G jump between search matches from anywhere.** Once you've run a find
+  (`Cmd+F` / `prefix+f`), Cmd+G steps forward and Cmd+Shift+G steps backward through the hits even
+  after the find bar closes — the iTerm2 muscle memory for reviewing a search without reopening it.
+  Closing find now keeps the matches highlighted and the last query alive (they clear on the next
+  `Cmd+F`), so the "N of M" cursor and the scroll-back-to-match behavior keep working in the plain
+  grid. `<key>` route via the same pure, unit-tested `cmd_shortcut` table as the other Cmd shortcuts.
 - **Mouse reporting to terminals that request it.** TUIs like vim, tmux, and htop that enable
   mouse mode (`ESC [?1000h` / `1002` / `1003`) now receive proper SGR mouse reports
   (`ESC [ < ... M`) for clicks, wheel, drag, and motion — the same sequence real terminals send,
