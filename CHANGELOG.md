@@ -6,6 +6,12 @@ entries record user-visible and architectural changes since the last tagged mile
 ## Unreleased / 0.1.0 (in progress)
 
 ### Fixed
+- **A stray trailing `/` after a remote host no longer breaks the connection.** If you typed or
+  pasted `build.example.com/` (or `10.0.0.4:18473/`) into the Remote Attach overlay, the slash was
+  kept as part of the host, so the daemon was contacted at a dead name and the connect failed. A
+  trailing slash with no session name is now stripped, so the fallback reaches the real host (and a
+  true `host/session` attach is still detected as before). Covered by the `parse_remote_attach`
+  unit tests, including the new slash/whitespace edge cases.
 - **Tab order now persists across restarts.** Re-arranging the fleet with `Ctrl+H {`/`}` or by
   dragging a tab reordered the bar for the session but the new order was never saved, so on relaunch
   your arranged fleet (sorted by machine or priority) silently snapped back to the original order.

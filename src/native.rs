@@ -9719,9 +9719,14 @@ fn notify_simple(title: &str, body: &str) {
 /// names an existing remote tmux session to attach to (no spawn/kill); without one the input is a
 /// plain `host[:port]` for a fresh engine spawn. Pure so it's unit-testable.
 pub(crate) fn parse_remote_attach(raw: &str) -> (String, Option<String>) {
-    match raw.split_once('/') {
+    let t = raw.trim();
+    match t.split_once('/') {
+        // `host[/session]` with a non-empty session name is a classic attach.
         Some((a, s)) if !s.trim().is_empty() => (a.trim().to_string(), Some(s.trim().to_string())),
-        _ => (raw.to_string(), None),
+        // No session: `host`, `host:port`, `host/`, or blank. A stray trailing `/` (a typo or a
+        // paste artifact, e.g. `build.example.com/`) must not become part of the DNS name — strip
+        // it so the fallback still reaches the real host.
+        _ => (t.trim_end_matches('/').trim().to_string(), None),
     }
 }
 
@@ -10344,10 +10349,20 @@ mod tests {
             parse_remote_attach(" host / my-session "),
             ("host".to_string(), Some("my-session".to_string()))
         );
-        // A trailing slash with an empty session is not an attach (falls back to fresh host).
+        // A trailing slash with an empty session is not an attach (falls back to fresh host) and
+        // the stray slash is stripped so it never becomes part of the DNS name.
         assert_eq!(
             parse_remote_attach("build.example.com/"),
-            ("build.example.com/".to_string(), None)
+            ("build.example.com".to_string(), None)
+        );
+        assert_eq!(
+            parse_remote_attach("build.example.com/ "),
+            ("build.example.com".to_string(), None)
+        );
+        assert_eq!(parse_remote_attach("  "), ("".to_string(), None));
+        assert_eq!(
+            parse_remote_attach("10.0.0.4:18473/"),
+            ("10.0.0.4:18473".to_string(), None)
         );
     }
 
