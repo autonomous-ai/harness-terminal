@@ -1680,4 +1680,33 @@ mod tests {
         assert_eq!(hits[2], (2, 0, 3));
         assert!(all_matches(&g, "zzz").is_empty());
     }
+
+    /// The font-fallback validator accepts a real, parseable mono font (SF Mono or Monaco, both
+    /// bundled on macOS) and never returns empty bytes for it.
+    #[test]
+    fn read_valid_font_accepts_a_real_mono_font() {
+        for cand in [
+            "/System/Library/Fonts/SFNSMono.ttf",
+            "/System/Library/Fonts/Monaco.ttf",
+        ] {
+            if std::path::Path::new(cand).exists() {
+                let data = read_valid_font(cand).expect("a real font must validate");
+                assert!(!data.is_empty());
+                return;
+            }
+        }
+        // No system mono face present (non-macOS) — the rejection tests below still run.
+    }
+
+    /// A nonexistent path and a corrupt file both fail validation, so a bad configured `font_path`
+    /// degrades to the fallback chain instead of panicking on launch.
+    #[test]
+    fn read_valid_font_rejects_missing_and_corrupt() {
+        assert!(read_valid_font("/no/such/font-file.ttf").is_none());
+        let path = std::env::temp_dir().join("ht_invalid_font_probe.ttf");
+        std::fs::write(&path, b"this is definitely not a valid font").expect("write temp probe");
+        let spath = path.to_string_lossy().into_owned();
+        assert!(read_valid_font(&spath).is_none());
+        let _ = std::fs::remove_file(&path);
+    }
 }

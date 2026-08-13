@@ -12,6 +12,10 @@ entries record user-visible and architectural changes since the last tagged mile
   `quiet_after_secs` threshold is now resolved once at startup and cached, eliminating all
   hot-path config I/O.
 
+- **Font-fallback logic pinned with tests.** The new `read_valid_font` validation helper now has
+  coverage proving a real mono font validates, and a corrupt/absent path fails validation (so a bad
+  config degrades rather than panics) — 114→116 unit tests.
+
 ### Fixed
 - **A bad/missing configured font can no longer crash the app at launch.** `GlyphCache::load`
   panicked (`expect`) the moment `font_path()` pointed at an unreadable or corrupt file (a typo in
