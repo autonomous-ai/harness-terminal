@@ -4076,20 +4076,15 @@ impl Application {
                 }
                 _ => {}
             },
-            Key::Named(n) => match n {
-                winit::keyboard::NamedKey::Tab => {
-                    if !self.app.tabs.is_empty() {
-                        let n = self.app.tabs.len();
-                        // Shift+Tab cycles backward (wrapping) through tabs; plain Tab goes forward.
-                        if mods.shift_key() {
-                            self.set_active((self.app.active + n - 1) % n);
-                        } else {
-                            self.set_active((self.app.active + 1) % n);
-                        }
-                    }
+            Key::Named(winit::keyboard::NamedKey::Tab) if !self.app.tabs.is_empty() => {
+                // Shift+Tab cycles backward (wrapping) through tabs; plain Tab goes forward.
+                let n = self.app.tabs.len();
+                if mods.shift_key() {
+                    self.set_active((self.app.active + n - 1) % n);
+                } else {
+                    self.set_active((self.app.active + 1) % n);
                 }
-                _ => {}
-            },
+            }
             _ => {}
         }
         false
