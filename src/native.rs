@@ -3801,6 +3801,32 @@ impl Application {
                 "live follow (bottom)"
             }
         ));
+        // Fleet context on the active session's machine: how many of this host's sessions are open
+        // and how many are dark. The host is what a diver manages, so it belongs in the per-session
+        // details — a one-host micro-overview from a single tab's info panel.
+        let host_norm = {
+            let h = s.meta.host.clone();
+            if h.is_empty() { "local".to_string() } else { h }
+        };
+        let same = session_indices_for_host(
+            self.app
+                .tabs
+                .iter()
+                .enumerate()
+                .map(|(i, t)| (i, t.meta.host.as_str())),
+            &host_norm,
+        );
+        let down = same
+            .iter()
+            .filter(|&&i| self.app.tabs[i].kind() != "pty" && !self.app.tabs[i].alive())
+            .count();
+        rows.push(format!(
+            "  fleet      {} session{} on {} · {} down",
+            same.len(),
+            if same.len() == 1 { "" } else { "s" },
+            host_norm,
+            down
+        ));
         // Pin/mute protection status — same flags the tab bar badges, so the info panel is a
         // one-stop read of a tab's shielding without hunting the bar.
         rows.push(format!(
