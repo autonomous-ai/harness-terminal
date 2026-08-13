@@ -6,6 +6,9 @@ entries record user-visible and architectural changes since the last tagged mile
 ## Unreleased / 0.1.0 (in progress)
 
 ### Added
+- **Exported agent logs are tagged with the host.** `prefix+w` already wrote a timestamped
+  `<name>-<stamp>.log`; for a pane-backed session it now writes `<name>-<host>-<stamp>.log`, so a
+  dump pulled from a multi-machine fleet is identifiable at a glance (local pty exports stay bare).
 - **A copied fleet summary now says why machines are down.** `prefix+E` / the fleet copy has always
   marked each down tab with `○`; it now appends the reconnect reason (`⚠ tunnel connect 10.0.0.4:
   refused`), so a pasted health handoff reads as "which host is dark and why" instead of a bare

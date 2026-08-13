@@ -1117,13 +1117,37 @@ impl Application {
                 }
             })
             .collect();
+        // Tag the file with the host for pane-backed tabs so a dump from a multi-machine fleet is
+        // identifiable at a glance (`claude-fix42-build02-…log`); a local pty has no remote host to
+        // disambiguate, so it stays bare.
+        let host_tag = if s.kind() == "pty" {
+            String::new()
+        } else {
+            let h: String = s
+                .meta
+                .host
+                .chars()
+                .map(|c| {
+                    if c.is_ascii_alphanumeric() || c == '-' || c == '_' || c == '.' {
+                        c
+                    } else {
+                        '_'
+                    }
+                })
+                .collect();
+            if h.is_empty() {
+                String::new()
+            } else {
+                format!("-{h}")
+            }
+        };
         let base = std::env::current_dir().unwrap_or_else(|_| std::env::temp_dir());
         // The timestamp needs to be readable but collision-safe; epoch-ms keeps it unique.
         let stamp = std::time::SystemTime::now()
             .duration_since(std::time::UNIX_EPOCH)
             .map(|d| d.as_millis())
             .unwrap_or(0);
-        let fname = format!("{}-{}.log", slug, stamp);
+        let fname = format!("{}{}-{}.log", slug, host_tag, stamp);
         let now = std::time::Instant::now();
         // Try the current directory first; if that isn't writable (e.g. an unwritable cwd) fall back
         // to the guaranteed-writable temp dir so the export never silently does nothing.
