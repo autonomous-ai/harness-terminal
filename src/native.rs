@@ -4149,22 +4149,26 @@ impl Application {
             self.app.overlay = Overlay::None;
             return;
         }
-        let tab = m.tab;
-        // Focus the session's tab first so the scroll/copy targets the same session the renderer draws.
-        self.app.active = tab.min(self.app.tabs.len().saturating_sub(1));
-        crate::restore::save_active(self.app.active);
+        // Focus the session's tab first so the scroll/copy targets the same session the renderer
+        // draws. `set_active` (not a direct field write) so native-tab mode also surfaces & focuses
+        // the matching window — the same routing `Cmd+1-9` / the jump palette use.
+        // Copy the match's scalar fields before `set_active` takes `&mut self` (we can't hold the
+        // `fleet_matches` borrow across the mutation).
+        let (tab, line, col) = (m.tab, m.line, m.col);
+        let tab = tab.min(self.app.tabs.len().saturating_sub(1));
+        self.set_active(tab);
         if let Some(s) = self.app.tabs.get(self.app.active) {
             let mut g = s.term.lock();
             // Scroll so the match line is at the top of the viewport.
             use alacritty_terminal::grid::Scroll;
             let current = g.grid().display_offset() as i32;
-            let desired = (-m.line).clamp(0, g.grid().history_size() as i32);
+            let desired = (-line).clamp(0, g.grid().history_size() as i32);
             g.grid_mut()
                 .scroll_display(Scroll::Delta(desired - current));
             s.set_scrolled(true);
         }
         // Place the read cursor at the match start so it's clearly visible where the hit landed.
-        self.copy_pos = (m.line, m.col);
+        self.copy_pos = (line, col);
         self.app.overlay = Overlay::None;
     }
 

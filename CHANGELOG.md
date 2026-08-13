@@ -6,6 +6,11 @@ entries record user-visible and architectural changes since the last tagged mile
 ## Unreleased / 0.1.0 (in progress)
 
 ### Fixed
+- **A fleet-search jump now surfaces the matching native window.** In `native_tabs` mode, jumping
+  to a hit from fleet search (`prefix+h` / `Cmd+Shift+F`) switched the in-app active session but
+  never surfaced the matching `NSWindow`, so your focus stayed on the old tab while the content you
+  asked for was in a hidden window. The jump now routes through `set_active` (the same path as
+  `Cmd+1-9` / the jump palette), so the target tab's window comes to front and gains focus.
 - **Every tab's `@host` suffix is now tinted by its machine's color, not just the active pill.**
   Previously the tab bar painted the whole inactive-tab label (including `@host`) in the engine's
   accent, so a session on `build05` and one on `edge1` of the *same engine* scanned identically.
