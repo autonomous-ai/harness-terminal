@@ -6342,11 +6342,12 @@ impl Application {
                             // was unreachable.
                             self.grid_broadcast_marked();
                         } else if ch == Some('n') || ch == Some('N') {
-                            // `n` jumps the selection to the next tile that needs attention — the
-                            // war-room sibling of peek's `n`: first the next DOWN pane, else the next
-                            // busy one, wrapping around the grid. Lets a diver hop pane-to-pane
-                            // through a large fleet's trouble spots instead of paging one tile at a
-                            // time. A fully healthy fleet flashes so the no-op is legible.
+                            // `n`/`N` jump the selection to the next/previous tile that needs
+                            // attention — the war-room sibling of peek's `n`: first a DOWN pane,
+                            // else the next busy one, wrapping around the grid. Lets a diver hop
+                            // pane-to-pane through a large fleet's trouble spots instead of paging
+                            // one tile at a time. Capital `N` walks backward, so both directions are
+                            // covered without arrowing. A fully healthy fleet flashes a legible no-op.
                             let n = self.app.tabs.len();
                             if n > 0 {
                                 let down: Vec<bool> = (0..n)
@@ -6356,7 +6357,12 @@ impl Application {
                                     })
                                     .collect();
                                 let busy = self.activity_flags();
-                                if let Some(idx) = next_trouble_index(&down, &busy, self.grid_sel) {
+                                let found = if ch == Some('n') {
+                                    next_trouble_index(&down, &busy, self.grid_sel)
+                                } else {
+                                    prev_trouble_index(&down, &busy, self.grid_sel)
+                                };
+                                if let Some(idx) = found {
                                     self.grid_sel = idx;
                                 } else {
                                     self.flash = Some((
@@ -8286,6 +8292,30 @@ fn next_trouble_index(down: &[bool], busy: &[bool], start: usize) -> Option<usiz
     None
 }
 
+/// Backward sibling of `next_trouble_index`: the previous session needing attention, searching
+/// backward from `start` with wrap — the first DOWN pane, else the first busy one, else `None`.
+/// Mirrors peek's up-cycling so a diver can walk both directions through a fleet's trouble spots.
+/// Pure so the backward wrap and down-over-busy precedence are unit-tested.
+fn prev_trouble_index(down: &[bool], busy: &[bool], start: usize) -> Option<usize> {
+    let n = down.len();
+    if n == 0 {
+        return None;
+    }
+    for step in 1..=n {
+        let i = (start + n - (step % n)) % n;
+        if down[i] {
+            return Some(i);
+        }
+    }
+    for step in 1..=n {
+        let i = (start + n - (step % n)) % n;
+        if busy[i] {
+            return Some(i);
+        }
+    }
+    None
+}
+
 /// Top offset of a scrolling viewport given `total` rows and a 0-based `selected` index. Keeps the
 /// highlighted row on screen and rides the bottom edge once the list is taller than `rows`, so a
 /// fleet/palette/broadcast list bigger than the window never hides rows behind an invisible
@@ -9254,9 +9284,9 @@ mod tests {
         fleet_host_line, fmt_duration, fmt_reconnect_summary, format_engine_mix, fuzzy_match,
         grid_targets, grid_tile_at, group_notifications, host_color, host_engine_breakdown,
         host_tally, join_labels, move_slot, next_host_index, next_trouble_index,
-        parse_remote_attach, reanchor_active_after_batch, recall_index, scroll_top,
-        session_indices_for_host, should_busy_nudge, status_accent, swap_slot, CmdShortcut,
-        FleetMatch, CHROME_BUSY, CHROME_ERR, CHROME_QUIET, CHROME_RECOVER,
+        parse_remote_attach, prev_trouble_index, reanchor_active_after_batch, recall_index,
+        scroll_top, session_indices_for_host, should_busy_nudge, status_accent, swap_slot,
+        CmdShortcut, FleetMatch, CHROME_BUSY, CHROME_ERR, CHROME_QUIET, CHROME_RECOVER,
     };
 
     use std::sync::Arc;
@@ -9883,6 +9913,38 @@ mod tests {
         );
         // Empty fleet → None (never a panic).
         assert_eq!(next_trouble_index(&[], &[], 0), None);
+    }
+
+    /// The fleet-grid `N` backward jump walks opposite the forward one, still wrapping and still
+    /// preferring a down pane anywhere over a busy one.
+    #[test]
+    fn prev_trouble_index_walks_backward_and_prioritizes_down() {
+        let down = [true, false, false, false];
+        let busy = [false, false, true, false];
+        // Backward from index 2 (busy) → the previous down is at 0, not the nearer busy at 2's own
+        // slot, and it wraps past index 0.
+        assert_eq!(prev_trouble_index(&down, &busy, 2), Some(0));
+        // Backward from index 1 → the previous busy is at 2 (wrapping), no down before it.
+        assert_eq!(
+            prev_trouble_index(&[false, false, false], &[false, false, true], 1),
+            Some(2)
+        );
+        // Backward from 0 → wraps to the last down at 3.
+        assert_eq!(
+            prev_trouble_index(
+                &[false, false, false, true],
+                &[false, false, false, false],
+                0
+            ),
+            Some(3)
+        );
+        // Nothing eligible anywhere → None.
+        assert_eq!(
+            prev_trouble_index(&[false, false], &[false, false], 1),
+            None
+        );
+        // Empty fleet → None (never a panic).
+        assert_eq!(prev_trouble_index(&[], &[], 0), None);
     }
 
     /// Idle-age formatting stays compact and readable at every scale — seconds, minutes, hours,

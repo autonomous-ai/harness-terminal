@@ -15,6 +15,9 @@ entries record user-visible and architectural changes since the last tagged mile
   grid jumps the selection to the next DOWN pane (else the next busy one), wrapping around, so a
   large fleet's trouble spots are triaged pane-to-pane instead of one tile at a time. A healthy
   fleet flashes a legible no-op. Precedence/wrap logic is unit-tested.
+- **Fleet grid `N` hops backward to the previous trouble tile.** Capital `N` walks the same
+  down-then-busy priority in the opposite direction, so a war-room diver can sweep both ways through
+  a fleet's trouble spots without arrowing tile-by-tile. Backward wrap/precedence is unit-tested.
 - **Fleet grid is color-coded by session status.** Each tile's border and header are tinted so the
   war-room is scannable at a glance: down = red, busy/output = amber, quiet/awaiting-you = blue,
   just-reconnected = green, idle local = neutral. The precedence (down > busy > quiet) is unit-tested.
