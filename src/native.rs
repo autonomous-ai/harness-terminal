@@ -98,6 +98,7 @@ enum PaletteAction {
     ReconnectAll,
     Destroy,
     Interrupt,
+    InterruptAll,
     CloseQuiet,
     Help,
     Quit,
@@ -145,6 +146,10 @@ impl PaletteAction {
             ("force reconnect ALL down panes", ReconnectAll),
             ("kill active tab's pane (destroy remote session)", Destroy),
             ("send Ctrl-C to active tab (stop the run)", Interrupt),
+            (
+                "send Ctrl-C to every session (stop the fleet)",
+                InterruptAll,
+            ),
             ("close all quiet (done) tabs", CloseQuiet),
             ("page up (review this tab's scrollback)", PageUp),
             ("scroll to bottom (back to live)", ScrollBottom),
@@ -1124,6 +1129,44 @@ impl Application {
         self.app.overlay = Overlay::Broadcast;
     }
 
+    /// `C` (fleet grid): send Ctrl-C to every marked tile (falling back to all non-muted sessions
+    /// when nothing is marked) — the "stop the batch job" sibling of `b` broadcast and `R`
+    /// reconnect. Explicitly-marked sessions are always interrupted (the diver asked for them);
+    /// muted tabs are skipped by the fallback so a deliberately-quiet pane is never round-housed.
+    fn grid_interrupt_marked(&mut self) {
+        let n = self.app.tabs.len();
+        let mut targets: Vec<usize> = (0..n)
+            .filter(|&i| self.grid_marks.get(i).copied().unwrap_or(false))
+            .collect();
+        self.grid_marks = vec![false; n];
+        if targets.is_empty() {
+            targets = (0..n)
+                .filter(|&i| !self.muted.get(i).copied().unwrap_or(false))
+                .collect();
+        }
+        if targets.is_empty() {
+            self.flash = Some((
+                "no sessions to interrupt".to_string(),
+                std::time::Instant::now(),
+            ));
+            return;
+        }
+        let mut sent = 0usize;
+        for i in &targets {
+            if let Some(s) = self.app.tabs.get(*i) {
+                s.write(b"\x03");
+                sent += 1;
+            }
+        }
+        self.flash = Some((
+            format!(
+                "sent Ctrl-C to {sent} session{}",
+                if sent == 1 { "" } else { "s" }
+            ),
+            std::time::Instant::now(),
+        ));
+    }
+
     /// `prefix+l`: flip to the tab that was active just before this one (tmux last-window).
     /// Repeated presses ping-pong, since swapping focus swaps `last_active`.
     fn last_window(&mut self) {
@@ -1719,6 +1762,35 @@ impl Application {
                 std::time::Instant::now(),
             ));
         }
+    }
+
+    /// Send an interrupt (Ctrl-C) to every session — the "stop the whole fleet" hammer a diver
+    /// reaches for when several agents are looping at once. Muted tabs are off-limits (their
+    /// silence means "leave me alone"), matching how fleet notices skip them. Buffered into
+    /// `pending` for down transports just like a normal write, so it still lands on reconnect.
+    fn interrupt_fleet(&mut self) {
+        let mut sent = 0usize;
+        for (i, s) in self.app.tabs.iter().enumerate() {
+            if self.muted.get(i).copied().unwrap_or(false) {
+                continue;
+            }
+            s.write(b"\x03");
+            sent += 1;
+        }
+        if sent == 0 {
+            self.flash = Some((
+                "no sessions to interrupt (all muted)".to_string(),
+                std::time::Instant::now(),
+            ));
+            return;
+        }
+        self.flash = Some((
+            format!(
+                "sent Ctrl-C to {sent} session{}",
+                if sent == 1 { "" } else { "s" }
+            ),
+            std::time::Instant::now(),
+        ));
     }
 
     /// Force a live-again attempt on the active tab, ignoring its auto-reconnect backoff. A no-op for
@@ -3589,6 +3661,10 @@ impl Application {
                 "Peek · / then type",
                 "filter the peek list (host/engine/name/down) · Esc clears",
             ),
+            (
+                "Fleet grid · b / C / R",
+                "broadcast marked · Ctrl-C marked · reconnect marked",
+            ),
         ] {
             all.push((k.to_string(), d.to_string()));
         }
@@ -4201,7 +4277,7 @@ impl Application {
             fb,
             &mut self.cache,
             &format!(
-                "  fleet grid · {} session{} · ↑/↓/PgUp/PgDn/1-9 select · Space mark · b→broadcast · R→reconnect · Enter dive · Esc close  ",
+                "  fleet grid · {} session{} · ↑/↓/PgUp/PgDn/1-9 select · Space mark · b→broadcast · C→Ctrl-C · R→reconnect · Enter dive · Esc close  ",
                 n,
                 if n == 1 { "" } else { "s" }
             ),
@@ -4728,6 +4804,7 @@ impl Application {
             ReconnectAll => self.reconnect_all_down(),
             Destroy => self.destroy_active(),
             Interrupt => self.interrupt_active(),
+            InterruptAll => self.interrupt_fleet(),
             CloseQuiet => self.close_quiet_tabs(),
             Help => {
                 self.app.overlay = Overlay::Help;
@@ -6073,6 +6150,10 @@ impl Application {
                             // `R` force-reconnects every marked tile (falling back to all down) —
                             // the `b`-style bulk action for healing, complementing broadcast.
                             self.grid_reconnect_marked();
+                        } else if ch == Some('C') {
+                            // `C` sends Ctrl-C to every marked tile (falling back to all non-muted) —
+                            // the "stop the batch job" sibling of `R` reconnect and `b` broadcast.
+                            self.grid_interrupt_marked();
                         }
                     }
                     _ => {}

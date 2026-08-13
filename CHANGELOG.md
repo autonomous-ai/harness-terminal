@@ -6,6 +6,11 @@ entries record user-visible and architectural changes since the last tagged mile
 ## Unreleased / 0.1.0 (in progress)
 
 ### Fixed
+- **Fleet interrupt: stop the whole batch with one key.** In the command palette,
+  `send Ctrl-C to every session` fans an interrupt fleet-wide; in the fleet grid, `C` sends Ctrl-C
+  to every marked tile (falling back to all non-muted when nothing is marked) — the "stop the
+  looping agents" sibling of `b` broadcast and `R` reconnect. Works with the buf into a down pane
+  on reconnect; muted tabs are skipped by the fallback so a deliberately-quiet pane is never hit.
 - **The peek overlay filters the fleet.** Press `/` in the peek, then type (host, engine, name, or
   `down`/`up`) to narrow the triage to matching sessions; `n`, arrows and Enter all operate on the
   filtered list, `Esc` clears back to all. Escaping a huge multi-machine fleet to "just the dead
