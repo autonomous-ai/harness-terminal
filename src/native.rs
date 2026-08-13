@@ -2123,6 +2123,15 @@ impl Application {
                 } else {
                     ""
                 };
+                // A persistent `↓` marks a pane that is currently down (disconnected / in reconnect
+                // backoff), so in the fleet bar a dead pane reads at a glance instead of only
+                // surfacing in the status count / peek. The counterpart to the transient `↻` for
+                // recovery; live local PTYs are never "down", so they never get the marker.
+                let down = if !s.alive() && s.kind() != "pty" {
+                    "↓"
+                } else {
+                    ""
+                };
                 // A down pane with queued type-ahead shows how much is staged to flush on reconnect,
                 // so input parked for a host coming back is visible in the fleet bar, not just the
                 // status line. (This is a 5-tier red "queued" marker, drawn dim on non-active tabs.)
@@ -2133,8 +2142,19 @@ impl Application {
                     String::new()
                 };
                 let label = format!(
-                    " {}{}{}{}{}{} {} {}{}{}{} ",
-                    bell, recover, flag, spin, pin, head, live, mute, where_s, queued_mark, dot
+                    " {}{}{}{}{}{}{} {} {}{}{}{} ",
+                    down,
+                    bell,
+                    recover,
+                    flag,
+                    spin,
+                    pin,
+                    head,
+                    live,
+                    mute,
+                    where_s,
+                    queued_mark,
+                    dot
                 );
                 // Active tab: tinted by a stable hash of its host (dive context). Inactive tabs fall back
                 // to the engine's own accent color so you can spot the "claude" tab from across the bar.

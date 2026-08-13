@@ -6,6 +6,9 @@ entries record user-visible and architectural changes since the last tagged mile
 ## Unreleased / 0.1.0 (in progress)
 
 ### Fixed
+- **The fleet tab bar marks panes that are currently down.** Each down (non-PTY) pane's tab now
+  carries a persistent `↓` glyph — the in-bar counterpart to the transient `↻` recovery badge — so
+  a dead pane reads at a glance instead of only surfacing in the status count or peek.
 - **Mute/pin toggles are panic-proofed against freshly-spawned tabs.** `prefix+m` / `prefix+a` now
   read and write the per-tab mute/pin state through the same guarded `.get()` pattern as every
   other tab-parallel vector, so toggling right after a `duplicate_session` (which can leave the
