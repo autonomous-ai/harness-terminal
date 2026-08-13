@@ -10,6 +10,11 @@ entries record user-visible and architectural changes since the last tagged mile
   sessions are up per host but which agents are running there (`● build02 · live · 2 sessions ·
   claude×2, codex`), so a diver sees the whole fleet's engine spread at a glance. Backed by a pure,
   unit-tested `host_engine_breakdown` helper.
+
+- **Copied fleet summary now carries each machine's agent mix too.** `prefix+c` (copy fleet
+  summary) renders the same per-host status + agent list as the host overview, so a pasted report
+  reads `● build02 · live · claude×2, codex` — not just a live/total tally. A shared pure
+  `fleet_host_line` formatter keeps the on-screen and copied views identical.
 - **Native macOS menu bar.** winit 0.30 ships no menu API, so the app previously had a bare
   menu-less bar. A real AppKit main menu is now installed at launch with the File, Tab, and Window
   menus: `Cmd+T` new tab, `Cmd+W` close tab, `Cmd+Q` quit, `Cmd+Shift+[` / `Cmd+Shift+]` previous /

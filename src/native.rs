@@ -1018,29 +1018,14 @@ impl Application {
     /// machines are up" snapshot for a fleet spread across many computers.
     fn fleet_summary_text(&self) -> String {
         let mut lines: Vec<String> = Vec::new();
-        let hosts = host_tally(
+        let hosts = host_engine_breakdown(
             self.app
                 .tabs
                 .iter()
-                .map(|s| (s.meta.host.as_str(), s.alive())),
+                .map(|s| (s.meta.host.as_str(), s.alive(), s.meta.engine.as_str())),
         );
-        for (h, alive, total) in hosts {
-            let label = if h.is_empty() { "local" } else { h };
-            let mark = if alive == 0 {
-                "○"
-            } else if alive == total {
-                "●"
-            } else {
-                "◐"
-            };
-            let state = if alive == 0 {
-                "down".to_string()
-            } else if alive < total {
-                format!("{alive}/{total} live")
-            } else {
-                "live".to_string()
-            };
-            lines.push(format!("{mark} {label} · {state}"));
+        for (h, alive, total, mix) in hosts {
+            lines.push(fleet_host_line(&h, alive, total, &mix));
         }
         lines.push(String::new());
         for (i, s) in self.app.tabs.iter().enumerate() {
@@ -6700,6 +6685,33 @@ fn format_engine_mix(mix: &[(String, usize)]) -> String {
         .join(", ")
 }
 
+/// One fleet-summary host line: `● build02 · live · claude×2, codex` with a local empty host
+/// normalized. This is the copied-summary counterpart to the on-screen host-overview rows, built
+/// from the same pure data so the two always agree. Pure so it's unit-testable.
+fn fleet_host_line(host: &str, alive: usize, total: usize, mix: &[(String, usize)]) -> String {
+    let label = if host.is_empty() { "local" } else { host };
+    let mark = if alive == 0 {
+        "○"
+    } else if alive == total {
+        "●"
+    } else {
+        "◐"
+    };
+    let state = if alive == 0 {
+        "down".to_string()
+    } else if alive < total {
+        format!("{alive}/{total} live")
+    } else {
+        "live".to_string()
+    };
+    let mix_s = format_engine_mix(mix);
+    if mix_s.is_empty() {
+        format!("{mark} {label} · {state}")
+    } else {
+        format!("{mark} {label} · {state} · {mix_s}")
+    }
+}
+
 fn collect_fleet_matches(
     terms: &[Arc<
         alacritty_terminal::sync::FairMutex<
@@ -7410,10 +7422,10 @@ fn move_slot<T>(v: &mut Vec<T>, from: usize, to: usize) {
 mod tests {
     use super::{
         argb_to_rgb, broadcast_bytes, cmd_shortcut, collect_fleet_matches, engine_accent,
-        expand_click_word, fmt_duration, format_engine_mix, fuzzy_match, group_notifications,
-        host_color, host_engine_breakdown, host_tally, join_labels, move_slot, next_host_index,
-        parse_remote_attach, reanchor_active_after_batch, recall_index, scroll_top, swap_slot,
-        CmdShortcut, FleetMatch,
+        expand_click_word, fleet_host_line, fmt_duration, format_engine_mix, fuzzy_match,
+        group_notifications, host_color, host_engine_breakdown, host_tally, join_labels, move_slot,
+        next_host_index, parse_remote_attach, reanchor_active_after_batch, recall_index,
+        scroll_top, swap_slot, CmdShortcut, FleetMatch,
     };
 
     use std::sync::Arc;
@@ -8095,5 +8107,35 @@ mod tests {
             "claude\u{00d7}2, codex"
         );
         assert_eq!(format_engine_mix(&[("codex".into(), 3)]), "codex\u{00d7}3");
+    }
+    /// The copied fleet summary's host line carries the same status + agent mix as the on-screen
+    /// host overview, ready to paste into a report, with a local empty host normalized.
+    #[test]
+    fn fleet_host_line_matches_host_overview_rows() {
+        // Fully alive host with a mixed fleet.
+        assert_eq!(
+            fleet_host_line(
+                "build02",
+                2,
+                2,
+                &[("claude".into(), 2), ("codex".into(), 1)]
+            ),
+            "● build02 · live · claude\u{00d7}2, codex"
+        );
+        // Partly down host.
+        assert_eq!(
+            fleet_host_line("edge1", 1, 3, &[("codex".into(), 2)]),
+            "◐ edge1 · 1/3 live · codex\u{00d7}2"
+        );
+        // Fully down host: dimmed-down marker, no live fraction.
+        assert_eq!(
+            fleet_host_line("edge1", 0, 2, &[("claude".into(), 1)]),
+            "○ edge1 · down · claude"
+        );
+        // Empty host normalized to "local".
+        assert_eq!(
+            fleet_host_line("", 1, 1, &[("claude".into(), 1)]),
+            "● local · live · claude"
+        );
     }
 }
