@@ -6,6 +6,9 @@ entries record user-visible and architectural changes since the last tagged mile
 ## Unreleased / 0.1.0 (in progress)
 
 ### Added
+- **Reconnected notifications name the machine.** When a down pane comes back, the OS notification
+  now reads `name@host` (e.g. `claude@build02 · reconnected`), so a multi-host fleet's "back online"
+  is actionable instead of ambiguous.
 - **The palette gains scrollback-review actions.** `page up` and `scroll to bottom` are now
   palette actions, so skimming a long agent log starts without the prefix chord.
 - **The command palette gains the triage jumps.** `next busy`, `next quiet`, `mute`/`unmute`, and

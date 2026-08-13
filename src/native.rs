@@ -786,15 +786,31 @@ impl Application {
                 notify_simple(&title, &body);
             }
             "recover" => {
-                let title = if n == 1 {
-                    format!("{list} · reconnected")
+                // A pane coming back is a MACHINE event in a multi-host fleet — name which machine
+                // (`name@host`), not just the session, so "back online" is actionable at a glance.
+                let hl: Vec<String> = tabs
+                    .iter()
+                    .filter_map(|&i| self.app.tabs.get(i))
+                    .map(|s| {
+                        let head = s.meta.name.clone().unwrap_or_else(|| s.meta.engine.clone());
+                        if s.meta.host.is_empty() {
+                            head
+                        } else {
+                            format!("{head}@{}", s.meta.host)
+                        }
+                    })
+                    .collect();
+                let hn = hl.len();
+                let hlist = join_labels(&hl);
+                let title = if hn == 1 {
+                    format!("{hlist} · reconnected")
                 } else {
-                    format!("{n} sessions reconnected")
+                    format!("{hn} sessions reconnected")
                 };
-                let body = if n == 1 {
-                    format!("Pane {list} is back online.")
+                let body = if hn == 1 {
+                    format!("{hlist} is back online.")
                 } else {
-                    format!("Back online: {list}.")
+                    format!("Back online: {hlist}.")
                 };
                 notify_simple(&title, &body);
             }
