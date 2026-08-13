@@ -97,7 +97,20 @@ same command mode:
 | `Ctrl+H` `p` | paste clipboard (bracketed) |
 | Middle-click | paste clipboard (raw) |
 
-Native macOS menu shortcuts also work without an AppKit menu installed — `Cmd+T`/`Cmd+N` open
+Native macOS shortcuts work without an AppKit menu installed (routed Rust-side, so they fire
+whenever the window is focused):
+| `Cmd+T` / `Cmd+N` | new session (new native tab) |
+| `Cmd+W` | close active tab / window |
+| `Cmd+Q` | quit |
+| `Cmd+Shift+[` / `]` | previous / next tab |
+| `Cmd+1-9` / `0` | jump straight to that tab (`0` = last) |
+| `Cmd+Shift+P` | command palette |
+| `Cmd+Shift+F` | search all sessions (fleet) |
+| `Cmd+Shift+T` | reopen the last-closed tab |
+| `Cmd+Shift+D` | duplicate the active session |
+| `Cmd+Shift+R` | force-reconnect ALL down panes |
+| `Cmd+Shift+U` / `Cmd+Shift+M` | pin the active tab / mute the active tab |
+| `Ctrl+Tab` / `Ctrl+Shift+Tab` | previous / next tab (browser muscle memory) |
 
 Backgrounded tabs that keep producing output are flagged with a magnitude badge in the tab bar
 (e.g. `!43` — how many new lines since you last looked). Muted tabs show a dim `M` instead.

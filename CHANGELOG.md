@@ -6,6 +6,8 @@ entries record user-visible and architectural changes since the last tagged mile
 ## Unreleased / 0.1.0 (in progress)
 
 ### Fixed
+- **README documents the native Cmd shortcuts.** Replaced the truncated native-shortcuts paragraph
+  with a full table (Cmd+T/N/W/Q, Cmd+Shift+[/], Cmd+1-9, Cmd+Shift+P/F/T/D/R, Cmd+Shift+U/M, Ctrl+Tab).
 - **Find `Shift+Tab` now goes to the previous match.** In the scrollback search (`prefix+f`),
   `Shift+Tab` previously advanced (same as Tab); it now steps backward, matching `Shift+Enter` and
   the other overlays' Shift+Tab-up convention, and the header hint stays truthful.
