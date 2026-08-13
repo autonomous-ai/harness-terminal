@@ -31,6 +31,11 @@ use alacritty_terminal::term::Config;
 /// pre-allocates history up front. 1M lines is far beyond real agent runs but still bounded.
 pub(crate) const MAX_SCROLLBACK_LINES: usize = 1_000_000;
 
+/// Ceiling on buffered type-ahead for a transport that's down (see `Session::write`). The reconnect
+/// watchdog retries for hours, so unbounded queued input could balloon RAM; 1 MiB is far beyond any
+/// command a diver stages while a host is offline, but still strictly bounded.
+pub(crate) const MAX_PENDING_BYTES: usize = 1 << 20;
+
 /// Clamp a configured scrollback-line request into the safe range. `0` stays 0 (no history);
 /// enormous values are pinned to [`MAX_SCROLLBACK_LINES`]. Pure so the guard is unit-testable.
 fn clamp_scrollback_lines(n: usize) -> usize {
@@ -547,7 +552,15 @@ impl Session {
     /// so typing into a dead pane queues the command rather than dropping it.
     pub fn write(&self, bytes: &[u8]) {
         if !self.transport.alive() {
-            self.pending.lock().unwrap().extend_from_slice(bytes);
+            let mut p = self.pending.lock().unwrap();
+            p.extend_from_slice(bytes);
+            // Guard against unbounded growth while a host is down for a long stretch (the reconnect
+            // watchdog retries for hours). Keep the NEWEST input (the command the diver wants to run)
+            // and drop the oldest beyond a generous ceiling, so queued type-ahead can never balloon.
+            let excess = p.len().saturating_sub(MAX_PENDING_BYTES);
+            if excess > 0 {
+                p.drain(0..excess);
+            }
             return;
         }
         self.transport.write(bytes);
@@ -862,6 +875,31 @@ mod tests {
             *writes.lock().unwrap(),
             b"ls\rgit pull\r && make\r",
             "buffered keystrokes flush on reconnect"
+        );
+        assert_eq!(s.pending_bytes(), 0);
+    }
+
+    /// Queued type-ahead for a down transport is capped so a host offline for hours can't balloon
+    /// memory; the NEWEST bytes (the command the diver wants to run) are kept, oldest dropped.
+    #[test]
+    fn type_ahead_caps_and_keeps_newest() {
+        let (fake, alive, writes) = FakeTransport::new();
+        let mut s = fake_session(fake);
+        alive.store(false, Ordering::Relaxed);
+        // Overfill the buffer with a recognizable tail marker.
+        let chunk = vec![b'x'; 4096];
+        for _ in 0..(MAX_PENDING_BYTES / 4096 + 2) {
+            s.write(&chunk);
+        }
+        let buffered = s.pending_bytes();
+        assert!(buffered <= MAX_PENDING_BYTES, "buffer stays capped");
+        // Bring it back; the flushed command is the NEWEST tail (contains a marker), not random junk.
+        s.write(b"TAIL-MARKER\r");
+        s.reconnect_now().unwrap();
+        let flushed = writes.lock().unwrap().clone();
+        assert!(
+            flushed.ends_with(b"TAIL-MARKER\r"),
+            "newest staged input survives the cap"
         );
         assert_eq!(s.pending_bytes(), 0);
     }

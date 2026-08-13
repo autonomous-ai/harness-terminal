@@ -6,6 +6,12 @@ entries record user-visible and architectural changes since the last tagged mile
 ## Unreleased / 0.1.0 (in progress)
 
 ### Fixed
+- **Queued type-ahead for a down host is now capped (1 MiB, newest-kept).** If a machine is offline
+  for a long stretch the reconnect watchdog retries for hours, and the old code buffered every key
+  typed into a dead pane without bound — a real memory leak for a far-flung fleet. Input now drops
+  the OLDEST bytes past a generous ceiling and keeps the newest command, so a queued command is
+  preserved but RAM stays bounded.
+
 - **Peek overlay clamps its selection if tabs close underneath it.** `prefix+peek` could leave
   `peek_sel` pointing past the end after a `Cmd+W` closed a tab while the overlay was open, and the
   Enter handler then set the active tab out of range (a latent panic). It now re-clamps selection
