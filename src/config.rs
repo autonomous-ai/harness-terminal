@@ -27,6 +27,12 @@ pub struct Config {
     /// beyond the cap is dropped, so the newest lines always survive.
     #[serde(default)]
     pub scrollback_cap: Option<usize>,
+    /// In-memory scrollback limit in lines held per session's terminal grid (the history you can
+    /// scroll/find/copy). Absent uses the alacritty default (10000 lines). Lower it to cap memory
+    /// on long agent runs; raise it to keep more context for scrollback search/export. Stop-and-go
+    /// history is bounded regardless, so this only caps what stays in RAM.
+    #[serde(default)]
+    pub scrollback_lines: Option<usize>,
     /// Directory new local (PTY) tabs start in, overriding the app's own cwd. A diver who keeps one
     /// repo open can set this so a fresh `prefix+n` tab lands in the repo instead of wherever the
     /// binary was launched. Absent/empty = use the app's current working directory.
@@ -151,6 +157,7 @@ impl Default for Config {
             default_engine: "claude".to_string(),
             font_path: None,
             scrollback_cap: None,
+            scrollback_lines: None,
             start_cwd: None,
             quiet_after_secs: None,
             theme: None,
@@ -213,6 +220,15 @@ mod tests {
         assert_eq!(c.scrollback_cap, Some(1_048_576));
         let d: Config = toml::from_str("font_px = 14").unwrap();
         assert_eq!(d.scrollback_cap, None);
+    }
+
+    /// An explicit in-memory scrollback line limit round-trips; absent falls back to None.
+    #[test]
+    fn scrollback_lines_roundtrips() {
+        let c: Config = toml::from_str("scrollback_lines = 50000").unwrap();
+        assert_eq!(c.scrollback_lines, Some(50_000));
+        let d: Config = toml::from_str("font_px = 14").unwrap();
+        assert_eq!(d.scrollback_lines, None);
     }
 
     /// A quiet threshold round-trips; absent falls back to None (default 120s in the UI).

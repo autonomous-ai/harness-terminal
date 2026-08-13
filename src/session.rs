@@ -14,10 +14,25 @@ use alacritty_terminal::event::{Event, EventListener};
 use alacritty_terminal::grid::{Dimensions, Grid};
 use alacritty_terminal::index::{Column, Line as GridLine};
 use alacritty_terminal::sync::FairMutex;
-use alacritty_terminal::term::{cell::Flags, Config, Term};
+use alacritty_terminal::term::{cell::Flags, Term};
 use alacritty_terminal::vte::ansi::{Processor, StdSyncHandler};
 
 use crate::transport::{LocalPtyTransport, Transport};
+
+/// Build the alacritty term config every session starts from, applying the configured in-memory
+/// scrollback line limit (`config.scrollback_lines`) instead of the alacritty default. Absent
+/// keeps the default 10000 lines. Session creation is user-triggered (never hot-path), so a config
+/// read here is free; a `0` explicitly disables scrollback history.
+#[cfg(test)]
+use alacritty_terminal::term::Config;
+
+fn term_config() -> alacritty_terminal::term::Config {
+    let mut cfg = alacritty_terminal::term::Config::default();
+    if let Some(n) = crate::config::Config::load().scrollback_lines {
+        cfg.scrolling_history = n;
+    }
+    cfg
+}
 
 /// Reusable pane geometry.
 #[derive(Clone, Copy, Debug)]
@@ -275,11 +290,7 @@ impl Session {
         let title = Arc::new(Mutex::new(None));
         let listener = Listener::with_title(Arc::clone(&title));
         let bell = listener.bell_flag();
-        let term = Arc::new(FairMutex::new(Term::new(
-            Config::default(),
-            &size,
-            listener,
-        )));
+        let term = Arc::new(FairMutex::new(Term::new(term_config(), &size, listener)));
         let transport =
             LocalPtyTransport::spawn(program, args, size, working_dir, Arc::clone(&term))?;
         Ok(Session {
@@ -302,11 +313,7 @@ impl Session {
         let title = Arc::new(Mutex::new(None));
         let listener = Listener::with_title(Arc::clone(&title));
         let bell = listener.bell_flag();
-        let term = Arc::new(FairMutex::new(Term::new(
-            Config::default(),
-            &size,
-            listener,
-        )));
+        let term = Arc::new(FairMutex::new(Term::new(term_config(), &size, listener)));
         let transport = crate::transport::TmuxTransport::spawn(program, size, Arc::clone(&term))?;
         Ok(Session {
             meta,
@@ -335,11 +342,7 @@ impl Session {
         let title = Arc::new(Mutex::new(None));
         let listener = Listener::with_title(Arc::clone(&title));
         let bell = listener.bell_flag();
-        let term = Arc::new(FairMutex::new(Term::new(
-            Config::default(),
-            &size,
-            listener,
-        )));
+        let term = Arc::new(FairMutex::new(Term::new(term_config(), &size, listener)));
         // The tunnel crosses a latency link, so the session owns an echo canceller (Session::write
         // notes keystrokes; the transport's reader thread cancels the returned copy).
         let echo = Arc::new(EchoCanceller::default());
@@ -379,11 +382,7 @@ impl Session {
         let title = Arc::new(Mutex::new(None));
         let listener = Listener::with_title(Arc::clone(&title));
         let bell = listener.bell_flag();
-        let term = Arc::new(FairMutex::new(Term::new(
-            Config::default(),
-            &size,
-            listener,
-        )));
+        let term = Arc::new(FairMutex::new(Term::new(term_config(), &size, listener)));
         // Attaching to a live pane is a latency cross too — same echo-cancellation setup as tunnel.
         let echo = Arc::new(EchoCanceller::default());
         let transport = crate::transport::TunnelTransport::spawn_attach(
@@ -415,11 +414,7 @@ impl Session {
         let title = Arc::new(Mutex::new(None));
         let listener = Listener::with_title(Arc::clone(&title));
         let bell = listener.bell_flag();
-        let term = Arc::new(FairMutex::new(Term::new(
-            Config::default(),
-            &size,
-            listener,
-        )));
+        let term = Arc::new(FairMutex::new(Term::new(term_config(), &size, listener)));
         // Remote ssh crosses a latency link — same echo-cancellation setup as the tunnel.
         let echo = Arc::new(EchoCanceller::default());
         let transport = crate::transport::RemoteTransport::spawn(

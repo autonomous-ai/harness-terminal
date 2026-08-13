@@ -25,6 +25,11 @@ default_engine = "claude"
 # kept on save, so resume keeps recent context without ballooning disk.
 # scrollback_cap = 262144
 
+# In-memory scrollback kept per session (lines you can scroll/find/copy/export),
+# regardless of the disk cap above. Default 10000; raise it to keep more context
+# from long agent runs, lower it to cap RAM. 0 disables scrollback history.
+# scrollback_lines = 50000
+
 # Directory NEW local (PTY) tabs open in, overriding wherever the binary was
 # launched. Leave unset to use the app's cwd (or set a per-tab dir in prefix+n).
 # start_cwd = "/Users/you/dev/myrepo"

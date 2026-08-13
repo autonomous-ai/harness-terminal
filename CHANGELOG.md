@@ -5,6 +5,13 @@ entries record user-visible and architectural changes since the last tagged mile
 
 ## Unreleased / 0.1.0 (in progress)
 
+### Added
+- **Configurable in-memory scrollback (``config.scrollback_lines``).** Each session's terminal grid
+  previously kept the alacritty hardcoded default of 10000 history lines. You can now set how much
+  history stays in RAM for scrollback search/find/copy/export — raise it (e.g. 50000+) to carry more
+  context from long multi-agent runs, or lower it (even 0) to cap memory. Persisted-to-disk history is
+  still bounded separately by ``scrollback_cap``.
+
 ### Performance
 - **The fleet's quiet detector no longer reads the config file on every frame.** `quiet_flags`
   (the per-frame triage count and status line) plus the fleet-grid and `prefix+z` quiet checks each
