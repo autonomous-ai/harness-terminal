@@ -2379,6 +2379,21 @@ impl Application {
             (false, false) => "",
         };
         lines.insert(0, format!(" {} · {} · {}{}", head, live, alive, prot));
+        // A down pane's hover explains how it's recovering and why it's down — the preview is
+        // roomier than the tab/status line, so the reason fits here (clipped) without crowding
+        // chrome. Only for non-local panes; a local pty has no transport to diagnose.
+        if !s.alive() && s.kind() != "pty" {
+            let retry = s
+                .retry_info()
+                .unwrap_or_else(|| "reconnecting…".to_string());
+            lines.insert(1, format!("  ○ {}", clip_dots(&retry, 40)));
+            if let Some(reason) = s.down_reason() {
+                let reason = reason.trim();
+                if !reason.is_empty() {
+                    lines.insert(2, format!("  ↳ {}", clip_dots(reason, 56)));
+                }
+            }
+        }
         if lines.len() > 1 {
             lines.push(" (click → switch to this tab) ".to_string());
         }
@@ -6887,6 +6902,20 @@ fn fmt_duration(d: std::time::Duration) -> String {
     }
 }
 
+/// Truncate `s` to at most `max` chars, appending "…" when it was cut, so long status strings
+/// (e.g. a remote reconnect reason) fit a bounded panel without overflowing the window. Pure so
+/// it is unit-testable; counts chars, not raw bytes, so multi-byte glyphs survive intact.
+fn clip_dots(s: &str, max: usize) -> String {
+    let n = s.chars().count();
+    if n <= max {
+        s.to_string()
+    } else if max == 0 {
+        "…".to_string()
+    } else {
+        s.chars().take(max).collect::<String>() + "…"
+    }
+}
+
 fn recall_index(n: usize, delta: isize, cur: Option<usize>) -> usize {
     match cur {
         Some(i) => (i as isize + delta).rem_euclid(n as isize) as usize,
@@ -7781,7 +7810,7 @@ fn move_slot<T>(v: &mut Vec<T>, from: usize, to: usize) {
 #[cfg(test)]
 mod tests {
     use super::{
-        argb_to_rgb, arrow_seq, broadcast_bytes, cmd_shortcut, collect_fleet_matches,
+        argb_to_rgb, arrow_seq, broadcast_bytes, clip_dots, cmd_shortcut, collect_fleet_matches,
         engine_accent, expand_click_word, extra_named_seq, fleet_host_line, fmt_duration,
         format_engine_mix, fuzzy_match, group_notifications, host_color, host_engine_breakdown,
         host_tally, join_labels, move_slot, next_host_index, parse_remote_attach,
@@ -8290,6 +8319,26 @@ mod tests {
         assert_eq!(fmt_duration(d(3600)), "1h");
         assert_eq!(fmt_duration(d(23 * 3600)), "23h");
         assert_eq!(fmt_duration(d(24 * 3600)), "1d");
+    }
+
+    /// `clip_dots` character-clips (not byte-clips) and always signals a cut with "…", never grows
+    /// text past the bound, and survives multi-byte glyphs.
+    #[test]
+    fn clip_dots_truncates_on_char_boundaries() {
+        // Under the bound: returned verbatim, no ellipsis.
+        assert_eq!(
+            clip_dots("tunnel connect refused", 40),
+            "tunnel connect refused"
+        );
+        assert_eq!(clip_dots("", 5), "");
+        // At the bound exactly: nothing cut, no ellipsis.
+        assert_eq!(clip_dots("abcde", 5), "abcde");
+        // Over the bound: clipped to max chars plus an ellipsis (so output > max by one glyph).
+        assert_eq!(clip_dots("abcdef", 5), "abcde…");
+        // A clipped multi-byte reason keeps each char whole (Han + space) without splitting bytes.
+        assert_eq!(clip_dots("主机 refused—retrying", 3), "主机 …");
+        // Zero bound collapses to just the ellipsis.
+        assert_eq!(clip_dots("anything", 0), "…");
     }
 
     /// `prefix+H` pages by host: from a three-host fleet it steps to the first tab of the next

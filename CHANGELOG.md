@@ -6,6 +6,10 @@ entries record user-visible and architectural changes since the last tagged mile
 ## Unreleased / 0.1.0 (in progress)
 
 ### Added
+- **Hovering a down tab says how it's recovering and why.** The tab tooltip now shows the live
+  retry state (`reconnect 2 · retry in 5s`) and, when known, the last failure reason (`tunnel
+  connect 10.0.0.4: refused`) beneath `○ down` — the roomier hover panel carries the reason the
+  concise status line keeps out, so you see at a glance which remote agent is down and why.
 - **Broadcast confirms the fan-out.** After `prefix+a`/`b`, a one-line flash says exactly how many
   targets got the command now (`broadcast to N`) and — when any target is down — how many are staged
   to flush on reconnect (`broadcast to N · M queued on reconnect`), so a command to a dead host is
