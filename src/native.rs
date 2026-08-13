@@ -957,6 +957,15 @@ impl Application {
     /// Open the broadcast overlay pre-scoped to exactly the tiles marked in the fleet grid (`b`).
     /// If nothing is marked, fall back to opening broadcast on all sessions (safety — you can't
     /// silently broadcast to zero). Marks are consumed (cleared) once applied.
+    /// The column count the fleet grid lays tiles into — the same the renderer uses, so the
+    /// PgUp/PgDn selection page matches what's actually on screen. Shared so the two never drift.
+    fn fleet_grid_cols(&self) -> usize {
+        let n = self.app.tabs.len();
+        let gcol = self.cell_w as usize;
+        let inner_w = (self.size.width as usize).saturating_sub(16);
+        (inner_w / (gcol.max(1) * 12)).max(1).min(n.max(1))
+    }
+
     /// `R` (fleet grid): force-reconnect every marked tile at once — the war-room cousin of the
     /// broadcast-`b` action. Mark with Space then `R` to heal several down machines in one sweep;
     /// if nothing is marked, falls back to every down pane (so a bare `R` is never a silent no-op).
@@ -4045,7 +4054,7 @@ impl Application {
             fb,
             &mut self.cache,
             &format!(
-                "  fleet grid · {} session{} · ↑/↓/1-9 select · Space mark · b→broadcast · R→reconnect marked · Enter dive · Esc close  ",
+                "  fleet grid · {} session{} · ↑/↓/PgUp/PgDn/1-9 select · Space mark · b→broadcast · R→reconnect · Enter dive · Esc close  ",
                 n,
                 if n == 1 { "" } else { "s" }
             ),
@@ -5753,6 +5762,18 @@ impl Application {
                         }
                         winit::keyboard::NamedKey::ArrowUp => {
                             self.grid_sel = self.grid_sel.saturating_sub(1);
+                        }
+                        // PgDn/PgUp jump the selection by a full row of tiles (the same column count
+                        // the render uses), so covering a large fleet doesn't need one keypress per
+                        // tile. Clamped to the first/last session like the arrow keys.
+                        winit::keyboard::NamedKey::PageDown => {
+                            let cols = self.fleet_grid_cols();
+                            self.grid_sel =
+                                (self.grid_sel + cols).min(self.app.tabs.len().saturating_sub(1));
+                        }
+                        winit::keyboard::NamedKey::PageUp => {
+                            let cols = self.fleet_grid_cols();
+                            self.grid_sel = self.grid_sel.saturating_sub(cols);
                         }
                         winit::keyboard::NamedKey::Enter => {
                             if !self.app.tabs.is_empty() {

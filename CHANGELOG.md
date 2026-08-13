@@ -6,6 +6,9 @@ entries record user-visible and architectural changes since the last tagged mile
 ## Unreleased / 0.1.0 (in progress)
 
 ### Added
+- **Page the fleet grid by a full row.** `PgDn`/`PgUp` jump the tile selection by an entire row of
+  sessions at a time (column count matches the actual layout), so covering a large multi-host fleet
+  no longer takes one keypress per tile.
 - **Reconnect marked tiles straight from the fleet grid.** Mark tiles with Space then hit `R` to
   force-reconnect every marked session at once (falling back to all-down when nothing is marked) —
   the healing counterpart to `b` broadcast, so you can bulk-recover several machines in the war-room.
