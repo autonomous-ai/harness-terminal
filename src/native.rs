@@ -3522,7 +3522,7 @@ impl Application {
             "  host[:port] = new engine · host[:port]/session = attach existing  ".to_string()
         } else {
             format!(
-                "  Tab = last {} host{} ({}) · host/session = attach existing · host = new engine  ",
+                "  Tab/⇧Tab = last {} host{} ({}) · host/session = attach existing · host = new engine  ",
                 self.app.recent_hosts.len(),
                 if self.app.recent_hosts.len() == 1 { "" } else { "s" },
                 self.app.recent_hosts.first().map(String::as_str).unwrap_or("")
@@ -5102,15 +5102,23 @@ impl Application {
                         // Tab cycles the host field through the remembered hosts (MRU) so a diver can
                         // page back to a machine they connected to before without retyping the addr.
                         winit::keyboard::NamedKey::Tab => {
+                            // Tab cycles forward, Shift+Tab backward through the remembered hosts.
                             let hosts = &self.app.recent_hosts;
                             if hosts.is_empty() {
                                 return;
                             }
                             let cur = self.app.remote_host.trim().to_string();
                             let pos = hosts.iter().position(|h| h == &cur);
-                            let next = match pos {
-                                Some(i) => (i + 1) % hosts.len(),
-                                None => 0,
+                            let next = if mods.shift_key() {
+                                match pos {
+                                    Some(i) => (i + hosts.len() - 1) % hosts.len(),
+                                    None => hosts.len() - 1,
+                                }
+                            } else {
+                                match pos {
+                                    Some(i) => (i + 1) % hosts.len(),
+                                    None => 0,
+                                }
                             };
                             self.app.remote_host = hosts[next].clone();
                             return;
