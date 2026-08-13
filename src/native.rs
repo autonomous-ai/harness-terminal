@@ -98,6 +98,7 @@ enum PaletteAction {
     MuteActive,
     Rename,
     PageUp,
+    ScrollTop,
     ScrollBottom,
     NextHost,
     Hosts,
@@ -160,6 +161,7 @@ impl PaletteAction {
             ),
             ("close all quiet (done) tabs", CloseQuiet),
             ("page up (review this tab's scrollback)", PageUp),
+            ("scroll to top (start of the log)", ScrollTop),
             ("scroll to bottom (back to live)", ScrollBottom),
             ("show this help", Help),
             ("quit", Quit),
@@ -3843,7 +3845,7 @@ impl Application {
             ("prefix { }", "move tab left / right"),
             ("1-9 / 0 / Tab", "switch tab (0 = last)"),
             ("x / c", "close tab / go to tab 0"),
-            ("g / b", "scroll up a page / jump to bottom"),
+            ("g / G / b", "scroll up a page / to the top / jump to bottom"),
             ("Ctrl/Cmd+= / -", "font zoom (Ctrl+0 reset; Cmd+0 = last tab)"),
             ("Ctrl+Enter", "toggle fullscreen"),
             ("PgUp/PgDn", "scrollback"),
@@ -5178,6 +5180,7 @@ impl Application {
                 }
             }
             ScrollBottom => self.scroll_to_bottom(),
+            ScrollTop => self.scroll_to_top(),
             NextHost => self.next_host(),
             Hosts => {
                 self.hosts_sel = 0;
@@ -5637,6 +5640,7 @@ impl Application {
                     }
                 }
                 Some("scroll_bottom") => self.scroll_to_bottom(),
+                Some("scroll_top") => self.scroll_to_top(),
                 Some("search") => self.open_find(),
                 Some("search_all") => {
                     self.app.overlay = Overlay::FleetSearch;
@@ -7760,6 +7764,18 @@ impl Application {
             let mut g = active.term.lock();
             g.grid_mut().scroll_display(Scroll::Bottom);
             active.set_scrolled(false);
+        }
+    }
+
+    /// `prefix+G`: jump straight to the very top of the active session's scrollback (the oldest
+    /// line), pinning the view in history. The complement of `scroll_to_bottom` — a diver opening a
+    /// long agent log can read the run from its start without paging through every screenful.
+    fn scroll_to_top(&mut self) {
+        use alacritty_terminal::grid::Scroll;
+        if let Some(active) = self.app.active_session() {
+            let mut g = active.term.lock();
+            g.grid_mut().scroll_display(Scroll::Top);
+            active.set_scrolled(true);
         }
     }
 

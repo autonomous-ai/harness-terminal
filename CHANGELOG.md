@@ -86,6 +86,11 @@ entries record user-visible and architectural changes since the last tagged mile
   a bulk close — defeating the "marks required so a stray press is never destructive" guard. Marks
   now clear on grid close, matching the broadcast overlay's fresh-reset behavior.
 ### Added
+- **`prefix+G` jumps straight to the top of the active tab's scrollback.** Until now only page-up
+  (`g`) and jump-to-bottom (`b`) existed, so reading a long agent run from its start meant paging
+  through every screenful. `prefix+G` (and the palette action) land you at the oldest line and pin
+  the view in history — the exact complement to `prefix+b`, mirroring how you'd open a log from the
+  top. Documented in the `?` help and README.
 - **Fleet search rows now show the matched line centered on the hit.** A long agent line whose
   match sits mid-line used to display only the line's head, so the reason it matched was often
   off-screen. Each row now shows a `…`-clipped window around the match (short lines pass through

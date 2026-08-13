@@ -87,7 +87,7 @@ same command mode:
 | `Ctrl+H` `{` / `}` | move the active tab left / right |
 | `x` / `C` | close tab / close all quiet (done) tabs at once |
 | `c` | jump to tab 0 |
-| `g` / `b` | scroll up a page / jump to bottom |
+| `g` / `G` / `b` | scroll up a page / to the top of the log / jump to bottom |
 | `Ctrl+Enter` | toggle fullscreen |
 | `Ctrl+=` / `Ctrl+-` | font zoom (`Ctrl+0` resets) |
 | `PgUp` / `PgDn` | scrollback |
@@ -204,7 +204,7 @@ mute = "v"          # prefix+v toggles mute
 
 Action names: `palette`, `new_session`, `remote_attach`, `local_shell`, `quit`, `fleet`,
 `goto_tab0`, `next_busy`, `next_quiet`, `next_down`, `next_host`, `dnd`, `mute`, `last_window`, `paste`, `broadcast`, `close_tab`, `close_quiet`,
-`copy_scrollback`, `export_scrollback`, `copy_identity`, `copy_fleet`, `peek`, `fleet_grid`, `undo_close`, `duplicate`, `page_up`, `scroll_bottom`,
+`copy_scrollback`, `export_scrollback`, `copy_identity`, `copy_fleet`, `peek`, `fleet_grid`, `undo_close`, `duplicate`, `page_up`, `scroll_top`, `scroll_bottom`,
 `search`, `search_all`, `move_left`, `move_right`, `copy_mode`, `help`, `command_palette`,
 `rename`, `session_info`, `toggle_focus`, `pin`, `next_pinned`, `reconnect`, `reconnect_all`, `destroy`, `interrupt`. The digit keys `1-9` / `0` (tab switching) and `Tab`
 are not remappable.

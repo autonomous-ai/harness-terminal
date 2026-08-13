@@ -42,6 +42,7 @@ pub const ACTIONS: &[(&str, &str)] = &[
     ("undo_close", "u"),
     ("duplicate", "k"),
     ("page_up", "g"),
+    ("scroll_top", "G"),
     ("scroll_bottom", "b"),
     ("search", "f"),
     ("search_all", "h"),
