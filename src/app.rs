@@ -607,23 +607,14 @@ impl App {
     /// without extra keystrokes, and it adapts when they switch their main framework.
     pub fn select_default_engine(&mut self) {
         let ordered = self.engine_order();
+        let ids: Vec<&str> = ordered.iter().map(|e| e.id).collect();
         let recent = self
             .engine_last_used
             .iter()
             .max_by_key(|(_, &t)| t)
-            .map(|(id, _)| id.to_lowercase());
-        self.selected = if let Some(id) = recent {
-            ordered
-                .iter()
-                .position(|e| e.id.to_lowercase() == id)
-                .unwrap_or(0)
-        } else {
-            let want = crate::config::Config::load().default_engine.to_lowercase();
-            ordered
-                .iter()
-                .position(|e| e.id.eq_ignore_ascii_case(&want))
-                .unwrap_or(0)
-        };
+            .map(|(id, _)| id.as_str());
+        let cfg_default = crate::config::Config::load().default_engine;
+        self.selected = pick_default_engine(&ids, recent, &cfg_default);
     }
 }
 
@@ -633,6 +624,31 @@ fn engine_cmd(id: &str) -> Option<&'static str> {
         return Some("bash");
     }
     ENGINES.iter().find(|e| e.id == id).map(|e| e.cmd)
+}
+
+/// Pick the flashlit engine for the new-session picker index (into `ordered`): an explicitly
+/// configured default (anything other than the built-in `claude` sentinel) wins outright; otherwise
+/// the most-recently-used engine wins; otherwise the configured default. Unknown ids fall back to
+/// index 0 rather than selecting nothing. Pure so the precedence is unit-testable without a config
+/// file on disk.
+fn pick_default_engine(ordered: &[&str], recent_id: Option<&str>, cfg_default: &str) -> usize {
+    let want = cfg_default.trim().to_lowercase();
+    let explicit = !want.is_empty() && want != "claude";
+    if explicit {
+        return ordered
+            .iter()
+            .position(|e| e.eq_ignore_ascii_case(&want))
+            .unwrap_or(0);
+    }
+    if let Some(id) = recent_id {
+        if let Some(p) = ordered.iter().position(|e| e.eq_ignore_ascii_case(id)) {
+            return p;
+        }
+    }
+    ordered
+        .iter()
+        .position(|e| e.eq_ignore_ascii_case(&want))
+        .unwrap_or(0)
 }
 
 #[cfg(test)]
@@ -768,6 +784,21 @@ mod tests {
         app.selected = 99; // sentinel; will be overwritten
         app.select_default_engine();
         assert_eq!(app.engine_order()[app.selected].id, "claude");
+    }
+
+    /// The picker's default-engine precedence: an explicit (non-`claude`) configured default pins the
+    /// selection even over recency; the un-set default lets recency float; unknown ids fall to 0.
+    #[test]
+    fn pick_default_engine_prioritizes_explicit_default_over_recency() {
+        let ordered = ["claude", "codex", "grok", "opencode"];
+        // Explicit default pins over recency.
+        assert_eq!(pick_default_engine(&ordered, Some("claude"), "codex"), 1);
+        // No explicit default → recency floats.
+        assert_eq!(pick_default_engine(&ordered, Some("codex"), "claude"), 1);
+        // No recency, un-set default → falls back to the default.
+        assert_eq!(pick_default_engine(&ordered, None, "claude"), 0);
+        // Explicit default that no longer exists → 0 rather than selecting nothing.
+        assert_eq!(pick_default_engine(&ordered, Some("grok"), "solar"), 0);
     }
 
     /// `palette_score` floats a prefix-of-engine match above a prefix-of-name, above an in-field

@@ -36,6 +36,11 @@ entries record user-visible and architectural changes since the last tagged mile
   reconnect.
 
 ### Fixed
+- **A configured `default_engine` now actually pins the new-session picker.** Previously any engine
+  usage at all made recency override the config, so setting `default_engine = "codex"` but having once
+  used `claude` kept preselected `claude`. An explicitly-set default (anything other than the built-in
+  `claude`) now wins over recency; the un-set default keeps the usual "most recently used floats" and
+  unknown ids still fall back safely to the first engine.
 - **A `~` in the new-session working directory now actually expands.** The `dir:` field passed the
   path straight through, so typing `~/projects` spawned the session (and saved the working dir) with
   a literal `~/projects` that couldn't be resolved. `~` / `~/…` now expand to your home directory
