@@ -5,7 +5,10 @@ entries record user-visible and architectural changes since the last tagged mile
 
 ## Unreleased / 0.1.0 (in progress)
 
-### Added
+### Fixed
+- **The peek preview no longer re-walks the whole scrollback every frame.** It now reads only the
+  newest handful of history rows (bounded, cheap) instead of capturing the full scrollback each
+  render — a real "fast" win when the peek is open over a long-running agent log.
 - **Page the fleet grid by a full row.** `PgDn`/`PgUp` jump the tile selection by an entire row of
   sessions at a time (column count matches the actual layout), so covering a large multi-host fleet
   no longer takes one keypress per tile.

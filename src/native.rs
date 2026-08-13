@@ -4348,11 +4348,19 @@ impl Application {
             let row_y = base_y + (row + 1) * line_px;
             draw_text(fb, &mut self.cache, &line, 32, row_y, self.font_px, color);
             // Expand the highlighted row: dim preview of the last ~4 scrollback lines underneath.
+            // Use the cheap bounded reads (history_slice/tail walk a handful of rows, never the
+            // whole history) — capturing the entire scrollback every frame would re-walk and
+            // re-allocate a long agent log once per render, which is slow with the peek open.
             if sel {
-                let scrollback = s.capture_scrollback();
-                let lines: Vec<&str> = scrollback
-                    .split('\n')
-                    .map(|l| l.trim_end())
+                let h = s.history_slice(6);
+                let src: Vec<String> = if h.iter().any(|l| !l.trim().is_empty()) {
+                    h
+                } else {
+                    s.tail(6)
+                };
+                let lines: Vec<String> = src
+                    .into_iter()
+                    .map(|l| l.trim_end().to_string())
                     .filter(|l| !l.is_empty())
                     .collect();
                 let start = lines.len().saturating_sub(4);
