@@ -3797,6 +3797,17 @@ impl Application {
         let full = crate::render::all_matches(&g, &query);
         drop(g);
         if full.is_empty() {
+            // A query with no hit is otherwise completely silent (`n`/`N` and Enter just leave the
+            // cursor put) — flash the miss so a diver isn't wondering why the jump didn't fire.
+            let q = clip_dots(query.trim(), 40);
+            self.flash = Some((
+                if q.is_empty() {
+                    "copy: no match".to_string()
+                } else {
+                    format!("copy: no match /{q}")
+                },
+                std::time::Instant::now(),
+            ));
             self.copy_pos = (cur_line, 0);
             return;
         }
