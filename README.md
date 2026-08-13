@@ -111,6 +111,7 @@ whenever the window is focused):
 | `Cmd+Shift+R` | force-reconnect ALL down panes |
 | `Cmd+Shift+U` / `Cmd+Shift+M` | pin the active tab / mute the active tab |
 | `Cmd+Shift+I` | show this tab's info (kind/host/task) |
+| `Cmd+Shift+C` | copy the active tab's whole scrollback |
 | `Ctrl+Tab` / `Ctrl+Shift+Tab` | previous / next tab (browser muscle memory) |
 
 Backgrounded tabs that keep producing output are flagged with a magnitude badge in the tab bar

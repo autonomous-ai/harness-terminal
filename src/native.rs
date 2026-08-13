@@ -3735,6 +3735,7 @@ impl Application {
             ("Cmd+Shift+R", "force-reconnect ALL down panes"),
             ("Cmd+Shift+U / Cmd+Shift+M", "pin active tab / mute active tab"),
             ("Cmd+Shift+I", "show this tab's info (kind/host/task)"),
+            ("Cmd+Shift+C", "copy whole scrollback to clipboard"),
             (
                 "Hosts drill · r / b",
                 "reconnect this host / broadcast to this host",
@@ -5599,6 +5600,9 @@ impl Application {
             }
             CmdShortcut::Info => {
                 self.app.overlay = Overlay::Info;
+            }
+            CmdShortcut::CopyScrollback => {
+                self.copy_whole_scrollback();
             }
             CmdShortcut::GotoTab(i) => {
                 if !self.app.tabs.is_empty() {
@@ -8654,6 +8658,9 @@ enum CmdShortcut {
     /// Cmd+Shift+I — open this tab's info panel (kind/host/task), the system shortcut for
     /// prefix+i. Fast way to read a session's identity + fleet context without the prefix chord.
     Info,
+    /// Cmd+Shift+C — copy the active tab's whole scrollback to the clipboard, the system shortcut
+    /// for prefix+copy_scrollback. Grab an agent's full session log fast, without the prefix chord.
+    CopyScrollback,
     /// Not a Cmd shortcut we own (forward as normal).
     None,
 }
@@ -8758,6 +8765,9 @@ fn cmd_shortcut(key: &Key, mods: &ModifiersState) -> CmdShortcut {
             "M" if mods.shift_key() => Mute,
             // Cmd+Shift+I shows the active tab's info (kind/host/task) — prefix+i muscle memory.
             "I" if mods.shift_key() => Info,
+            // Cmd+Shift+C copies the whole scrollback (the shift-guarded C: plain Cmd+C stays the
+            // normal copy-selection key, exactly as copy mode expects).
+            "C" if mods.shift_key() => CopyScrollback,
             // Plain Cmd+[ is left to the shell; only the Shift variant switches tabs.
             _ => None,
         },
@@ -9548,6 +9558,13 @@ mod tests {
             chars("i", s),
             CmdShortcut::None,
             "plain Cmd+I is not hijacked"
+        );
+        // Cmd+Shift+C copies the whole scrollback; plain Cmd+C stays the copy-selection key.
+        assert_eq!(chars("C", sc), CmdShortcut::CopyScrollback);
+        assert_eq!(
+            chars("c", s),
+            CmdShortcut::None,
+            "plain Cmd+C is not hijacked"
         );
         assert_eq!(
             chars("]", s),

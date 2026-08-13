@@ -16,6 +16,9 @@ entries record user-visible and architectural changes since the last tagged mile
   a bulk close — defeating the "marks required so a stray press is never destructive" guard. Marks
   now clear on grid close, matching the broadcast overlay's fresh-reset behavior.
 ### Added
+- **Native Cmd+Shift+C copies the active tab's whole scrollback.** The system shortcut for
+  prefix+copy_scrollback: grab an agent's full session log to the clipboard from anywhere. Plain
+  Cmd+C stays the normal copy-selection key. Routes via the pure, unit-tested `cmd_shortcut`.
 - **Native Cmd+Shift+I opens the active tab's info.** The system shortcut for prefix+i: shows the
   session's engine kind, host, and live task from anywhere without the prefix chord. Plain Cmd+I
   stays free for the shell. Routes via the pure, unit-tested `cmd_shortcut`.
