@@ -11,6 +11,9 @@ entries record user-visible and architectural changes since the last tagged mile
   a bulk close — defeating the "marks required so a stray press is never destructive" guard. Marks
   now clear on grid close, matching the broadcast overlay's fresh-reset behavior.
 ### Added
+- **Session-jump palette pages with PgUp/PgDn.** `prefix+/` (jump to any session) now moves the
+  selection a full 12-row window per keypress, so a large fleet is browsed without arrowing one row
+  at a time — mirroring the other list overlays.
 - **Scrollback exports carry a self-describing header.** `prefix+w` (export) now writes a header line
   with `session: engine@host`, transport kind, the live task title, and a human-readable export time
   (falling back to the epoch if `date` is unavailable), so a handed-off agent log says what it is.

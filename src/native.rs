@@ -5625,6 +5625,16 @@ impl Application {
                         winit::keyboard::NamedKey::ArrowUp => {
                             self.app.selected = self.app.selected.saturating_sub(1)
                         }
+                        // PgDn/PgUp page the jump list by a full window (the same 12-row slice the
+                        // renderer shows), so a large fleet isn't browsed one row at a time —
+                        // mirroring the fleet/broadcast/peek list overlays.
+                        winit::keyboard::NamedKey::PageDown => {
+                            self.app.selected = (self.app.selected + 12)
+                                .min(self.app.filtered.len().saturating_sub(1));
+                        }
+                        winit::keyboard::NamedKey::PageUp => {
+                            self.app.selected = self.app.selected.saturating_sub(12);
+                        }
                         winit::keyboard::NamedKey::Backspace => {
                             self.app.query.pop();
                             self.app.refresh_filter();
