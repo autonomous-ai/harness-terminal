@@ -30,6 +30,10 @@ entries record user-visible and architectural changes since the last tagged mile
   a bulk close — defeating the "marks required so a stray press is never destructive" guard. Marks
   now clear on grid close, matching the broadcast overlay's fresh-reset behavior.
 ### Added
+- **Fleet overview auto-refreshes while open.** `Ctrl+H s` (the remote-fleet list) now re-polls
+  the daemon every few seconds in the background, so a host that comes back shows up without
+  manually pressing `s`. Still non-blocking (falls back to the cached snapshot) and stops the
+  instant the overlay closes.
 - **Native Cmd+Shift+Y opens peek.** Seeing every agent's tail at once (`peek`) is now one key
   away. Plain Cmd+Y stays free. Routes via the pure, unit-tested `cmd_shortcut`.
 - **Native Cmd+Shift+K stops the whole fleet.** Sends Ctrl-C to every non-muted session — one

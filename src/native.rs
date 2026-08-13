@@ -392,6 +392,9 @@ struct Application {
     /// The tab index currently under the pointer (for a hover-preview tooltip of its tail), or
     /// None when the cursor isn't over a tab. Recompute on every CursorMoved against the tab bar.
     hover_tab: Option<usize>,
+    /// Last time the remote-fleet overview re-polled the daemon while it was open, so a host that
+    /// comes back shows up without pressing `s` (see `about_to_wait`).
+    fleet_last_poll: std::time::Instant,
     /// The last-rendered hover tooltip's rect `(px0, py0, panel_w, panel_h)`, so a click inside
     /// the popover can switch to the hovered tab. `None` when no tooltip is showing.
     tooltip_box: Option<(usize, usize, usize, usize)>,
@@ -658,6 +661,7 @@ impl Application {
             hover_tab: None,
             drag_tab: None,
             tooltip_box: None,
+            fleet_last_poll: std::time::Instant::now(),
             frame: 0,
             hosts: Vec::new(),
             active_host: 0,
@@ -9358,6 +9362,15 @@ impl ApplicationHandler for Application {
         if self.quit_requested {
             event_loop.exit();
             return;
+        }
+        // Fleet overview auto-refresh: while the remote-fleet overlay is open, re-poll the daemon
+        // every few seconds (non-blocking) so a host that comes back appears without pressing `s`.
+        // Cheap and contained — skipped the instant the overlay is dismissed.
+        if self.app.overlay == Overlay::Fleet
+            && self.fleet_last_poll.elapsed() >= std::time::Duration::from_secs(3)
+        {
+            self.fleet_last_poll = std::time::Instant::now();
+            self.app.refresh_fleet_nonblocking();
         }
         // Cmd+W: close the active tab. In native mode we close the focused host's window (which
         // closes that session); otherwise we close the in-app tab. Needs `event_loop`, hence here.
