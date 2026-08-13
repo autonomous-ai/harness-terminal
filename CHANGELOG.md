@@ -16,6 +16,9 @@ entries record user-visible and architectural changes since the last tagged mile
   a bulk close — defeating the "marks required so a stray press is never destructive" guard. Marks
   now clear on grid close, matching the broadcast overlay's fresh-reset behavior.
 ### Added
+- **Native Cmd+Shift+S exports the active tab's scrollback to a .log file.** The system shortcut for
+  prefix+export_scrollback: hand an agent's session off to a file from anywhere. Plain Cmd+S stays
+  with the shell. Routes via the pure, unit-tested `cmd_shortcut`.
 - **Native Cmd+Shift+C copies the active tab's whole scrollback.** The system shortcut for
   prefix+copy_scrollback: grab an agent's full session log to the clipboard from anywhere. Plain
   Cmd+C stays the normal copy-selection key. Routes via the pure, unit-tested `cmd_shortcut`.

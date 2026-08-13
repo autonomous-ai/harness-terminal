@@ -3736,6 +3736,7 @@ impl Application {
             ("Cmd+Shift+U / Cmd+Shift+M", "pin active tab / mute active tab"),
             ("Cmd+Shift+I", "show this tab's info (kind/host/task)"),
             ("Cmd+Shift+C", "copy whole scrollback to clipboard"),
+            ("Cmd+Shift+S", "write scrollback to a .log file"),
             (
                 "Hosts drill · r / b",
                 "reconnect this host / broadcast to this host",
@@ -5603,6 +5604,9 @@ impl Application {
             }
             CmdShortcut::CopyScrollback => {
                 self.copy_whole_scrollback();
+            }
+            CmdShortcut::ExportScrollback => {
+                self.export_scrollback();
             }
             CmdShortcut::GotoTab(i) => {
                 if !self.app.tabs.is_empty() {
@@ -8661,6 +8665,9 @@ enum CmdShortcut {
     /// Cmd+Shift+C — copy the active tab's whole scrollback to the clipboard, the system shortcut
     /// for prefix+copy_scrollback. Grab an agent's full session log fast, without the prefix chord.
     CopyScrollback,
+    /// Cmd+Shift+S — write the active tab's whole scrollback to a .log file, the system shortcut
+    /// for prefix+export_scrollback. Hand an agent's session off to a file fast, without the chord.
+    ExportScrollback,
     /// Not a Cmd shortcut we own (forward as normal).
     None,
 }
@@ -8768,6 +8775,8 @@ fn cmd_shortcut(key: &Key, mods: &ModifiersState) -> CmdShortcut {
             // Cmd+Shift+C copies the whole scrollback (the shift-guarded C: plain Cmd+C stays the
             // normal copy-selection key, exactly as copy mode expects).
             "C" if mods.shift_key() => CopyScrollback,
+            // Cmd+Shift+S exports the scrollback to a .log (shift-guarded S: plain Cmd+S stays free).
+            "S" if mods.shift_key() => ExportScrollback,
             // Plain Cmd+[ is left to the shell; only the Shift variant switches tabs.
             _ => None,
         },
@@ -9565,6 +9574,13 @@ mod tests {
             chars("c", s),
             CmdShortcut::None,
             "plain Cmd+C is not hijacked"
+        );
+        // Cmd+Shift+S exports the scrollback to a .log; plain Cmd+S stays with the shell.
+        assert_eq!(chars("S", sc), CmdShortcut::ExportScrollback);
+        assert_eq!(
+            chars("s", s),
+            CmdShortcut::None,
+            "plain Cmd+S is not hijacked"
         );
         assert_eq!(
             chars("]", s),
