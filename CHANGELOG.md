@@ -6,6 +6,11 @@ entries record user-visible and architectural changes since the last tagged mile
 ## Unreleased / 0.1.0 (in progress)
 
 ### Fixed
+- **Fleet-grid / peek close no longer strands a native window.** Closing a session with the
+  war-room's `x` (or peek's `x`) now also drops the matching native window host. Previously, in
+  `native_tabs` mode, those close paths removed the tab but left its `NSWindow` lingering as a tab
+  with nothing behind it — the prefix close (and Ctx/CloseTab) already handled hosts, but the grid
+  and peek closures didn't.
 - **README documents the native Cmd shortcuts.** Replaced the truncated native-shortcuts paragraph
   with a full table (Cmd+T/N/W/Q, Cmd+Shift+[/], Cmd+1-9, Cmd+Shift+P/F/T/D/R, Cmd+Shift+U/M, Ctrl+Tab).
 - **Find `Shift+Tab` now goes to the previous match.** In the scrollback search (`prefix+f`),

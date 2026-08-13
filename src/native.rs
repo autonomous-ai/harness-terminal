@@ -8109,7 +8109,13 @@ impl Application {
         }
         self.forget_tab(i);
         self.app.tabs.remove(i);
-        if self.app.active == i {
+        if self.native_tabs {
+            // Native mode: drop the matching window host too, or the closed session's window would
+            // linger as a native tab with nothing behind it. `native_remove_host` also re-derives
+            // the active session from the now-focused window (like `close_quiet_tabs`), so the
+            // manual single-window re-anchor below is skipped here.
+            self.native_remove_host(i);
+        } else if self.app.active == i {
             self.app.active = self.app.active.min(self.app.tabs.len().saturating_sub(1));
         } else if self.app.active > i {
             self.app.active -= 1;
