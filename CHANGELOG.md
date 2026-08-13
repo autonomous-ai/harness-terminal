@@ -6,6 +6,9 @@ entries record user-visible and architectural changes since the last tagged mile
 ## Unreleased / 0.1.0 (in progress)
 
 ### Added
+- **`n` inside peek jumps to the next down pane.** With the peek list open, `n` wraps the
+  selection to the next still-down remote pane and scrolls it into view — triage without leaving
+  the picker.
 - **The hosts overview names why a host is down.** A fully-down machine (`prefix+.`) now shows its
   first pane's reconnect reason (`○ build02 · down (refused)`) instead of a bare "down".
 - **Peek rows show the engine for renamed tabs.** A custom-named session now reads `name (engine)`

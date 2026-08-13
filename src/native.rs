@@ -4054,7 +4054,7 @@ impl Application {
         draw_text(
             fb,
             &mut self.cache,
-            "  peek · ↑/↓ preview  · Enter jump · Esc close  ",
+            "  peek · ↑/↓ preview · n next down · Enter jump · Esc close  ",
             32,
             base_y,
             self.font_px,
@@ -5381,8 +5381,27 @@ impl Application {
             }
             Overlay::Peek => {
                 match key {
-                    // A picker, not a prompt: typing does nothing.
-                    Key::Character(_) => {}
+                    // A picker, not a prompt: ordinary typing does nothing. `n` is the one useful
+                    // character — jump the picker to the next down pane (wrapping), the dashboard
+                    // the list already scrolls onto on open.
+                    Key::Character(c) => {
+                        if c == "n" || c == "N" {
+                            let n = self.app.tabs.len();
+                            if n > 0 {
+                                let start = self.peek_sel;
+                                for step in 1..=n {
+                                    let i = (start + step) % n;
+                                    if self.app.tabs[i].kind() != "pty" && !self.app.tabs[i].alive()
+                                    {
+                                        self.peek_sel = i;
+                                        // Slide the window so the chosen row is the last visible.
+                                        self.peek_scroll = i.saturating_add(1).saturating_sub(10);
+                                        break;
+                                    }
+                                }
+                            }
+                        }
+                    }
                     Key::Named(n) => match n {
                         winit::keyboard::NamedKey::ArrowDown | winit::keyboard::NamedKey::Tab
                             if !mods.shift_key() =>
