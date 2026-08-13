@@ -95,7 +95,9 @@ impl LocalPtyTransport {
             _ => crate::config::Config::load()
                 .start_cwd
                 .filter(|p| !p.is_empty())
-                .map(Into::into),
+                // A configurable `start_cwd = "~/repo"` should resolve like a typed `~`, not chdir
+                // into a literal `~` directory (same expansion the new-session picker applies).
+                .map(|p| crate::config::expand_user_path(&p).into()),
         };
         let pty = tty::new(
             &tty::Options {

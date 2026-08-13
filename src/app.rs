@@ -157,7 +157,16 @@ impl App {
             }
         }
         self.push_ok(
-            Session::local(meta, program, Vec::new(), self.size, cwd),
+            // Expand a typed `~` / `~/` so `~/projects` resolves to the real home path instead of a
+            // literal `~` directory that fails to chdir. `last_dirs` above keeps the user's original
+            // text so the next picker prefill reads how they typed it.
+            Session::local(
+                meta,
+                program,
+                Vec::new(),
+                self.size,
+                cwd.map(|d| crate::config::expand_user_path(&d)),
+            ),
             engine_id,
             host,
         )

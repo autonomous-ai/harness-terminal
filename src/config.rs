@@ -187,9 +187,57 @@ impl Config {
     }
 }
 
+/// Resolve the current user's home directory, mirroring how `restore::config_dir` finds it (the
+/// `$HOME` env var, always set on macOS). Falls back to None when unset so callers can leave the
+/// path untouched rather than guess.
+fn home_dir() -> Option<std::path::PathBuf> {
+    std::env::var_os("HOME").map(std::path::PathBuf::from)
+}
+
+/// Expand a leading `~` / `~/` in a user-supplied path to the home directory, so typing `~/projects`
+/// in the new-session working-directory field (or `start_cwd`) resolves instead of spawning a PTY in
+/// a literal `~` directory. Leaves absolute paths, relative paths, and `~user` untouched; returns the
+/// input unchanged when `$HOME` is unavailable. Pure so it is unit-testable without a process spawn.
+pub fn expand_user_path(input: &str) -> String {
+    let s = input.trim();
+    if s == "~" || s.starts_with("~/") {
+        if let Some(home) = home_dir() {
+            if s == "~" {
+                return home.display().to_string();
+            }
+            return home.join(&s[2..]).display().to_string();
+        }
+    }
+    s.to_string()
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// `expand_user_path` resolves `~` and `~/sub` to the real home, but leaves absolute, relative,
+    /// `~user`, and empty inputs alone — so the new-session cwd prefill behaves predictably.
+    #[test]
+    fn expand_user_path_covers_tilde_home_only() {
+        // Pad the environment with a known HOME so the assertion doesn't depend on the runner's.
+        let old = std::env::var_os("HOME");
+        std::env::set_var("HOME", "/home/alice");
+        assert_eq!(expand_user_path("~"), "/home/alice");
+        assert_eq!(
+            expand_user_path("~/projects/llm"),
+            "/home/alice/projects/llm"
+        );
+        assert_eq!(expand_user_path("  ~/work  "), "/home/alice/work");
+        // Untouched: absolute, relative, other-user, empty.
+        assert_eq!(expand_user_path("/abs/path"), "/abs/path");
+        assert_eq!(expand_user_path("rel/path"), "rel/path");
+        assert_eq!(expand_user_path("~bob/tmp"), "~bob/tmp");
+        assert_eq!(expand_user_path(""), "");
+        match old {
+            Some(v) => std::env::set_var("HOME", v),
+            None => std::env::remove_var("HOME"),
+        }
+    }
 
     /// A fully-specified config round-trips, and absent keys fall back to defaults.
     #[test]

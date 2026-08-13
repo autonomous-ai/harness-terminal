@@ -25,6 +25,11 @@ entries record user-visible and architectural changes since the last tagged mile
   reconnect.
 
 ### Fixed
+- **A `~` in the new-session working directory now actually expands.** The `dir:` field passed the
+  path straight through, so typing `~/projects` spawned the session (and saved the working dir) with
+  a literal `~/projects` that couldn't be resolved. `~` / `~/…` now expand to your home directory
+  in both the new-session picker and a config `start_cwd`; absolute, relative, and `~user` paths are
+  left untouched.
 - **`prefix+l` (back to previous tab) no longer jumps to the wrong session after a close or
   reorder.** The "previous tab" index was only re-recorded on focus switches and never invalidated
   when tabs were closed or dragged into a new order, so after removing/reordering a tab the stored
