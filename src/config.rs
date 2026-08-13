@@ -44,6 +44,12 @@ pub struct Config {
     /// a stuck run faster.
     #[serde(default)]
     pub quiet_after_secs: Option<u64>,
+    /// Remote-attach connect timeout in seconds (how long a tunnel spawn/attach waits on a
+    /// host before giving up with an error toast). These attempts run on the main thread, so a
+    /// wedged host freezes the UI for up to this long — lower it (e.g. 2) to cap that freeze, or
+    /// raise it (e.g. 8) on a slow but reachable link. Absent defaults to 4. Clamped to 1..=30.
+    #[serde(default)]
+    pub connect_timeout_secs: Option<u64>,
     /// Prefix chord: the key pressed with Ctrl to enter tmux-style command mode. Default `h`
     /// (Ctrl+H — "Ctrl Harness"; tmux uses Ctrl+B). The special literals `space` and `\` name
     /// those chords, otherwise any single character works (case-insensitive). Ctrl+Space and
@@ -160,6 +166,7 @@ impl Default for Config {
             scrollback_lines: None,
             start_cwd: None,
             quiet_after_secs: None,
+            connect_timeout_secs: None,
             theme: None,
             keybindings: None,
             prefix_key: None,
@@ -238,6 +245,15 @@ mod tests {
         assert_eq!(c.quiet_after_secs, Some(60));
         let d: Config = toml::from_str("font_px = 14").unwrap();
         assert_eq!(d.quiet_after_secs, None);
+    }
+
+    /// A connect-timeout round-trips; absent falls back to None (default 4s).
+    #[test]
+    fn connect_timeout_roundtrips() {
+        let c: Config = toml::from_str("connect_timeout_secs = 8").unwrap();
+        assert_eq!(c.connect_timeout_secs, Some(8));
+        let d: Config = toml::from_str("font_px = 14").unwrap();
+        assert_eq!(d.connect_timeout_secs, None);
     }
 
     /// A start-working-directory round-trips; absent falls back to None (app cwd).

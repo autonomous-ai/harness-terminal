@@ -39,6 +39,11 @@ default_engine = "claude"
 # the prefix+z jump. Default 120.
 # quiet_after_secs = 120
 
+# Remote-attach connect timeout, in seconds (tunnel spawn/attach wait on a host before
+# giving up with an error). These run on the UI thread, so a wedged host freezes the
+# terminal up to this long. Lower it to cap that freeze; raise it on a slow link. Default 4.
+# connect_timeout_secs = 4
+
 # Optional color theme. Every entry is optional — unset values keep the built-in
 # palette, so a partial block works. Colors are [r, g, b], each 0-255.
 # [theme]

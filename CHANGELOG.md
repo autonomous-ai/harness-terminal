@@ -6,6 +6,14 @@ entries record user-visible and architectural changes since the last tagged mile
 ## Unreleased / 0.1.0 (in progress)
 
 ### Added
+- **Configurable remote-attach connect timeout (`config.connect_timeout_secs`).** A tunnel
+  spawn/attach waits up to 4s by default on the main thread, so a wedged host freezes the UI that
+  long. The timeout is now tunable (clamped 1..=30): lower it to cap the freeze, raise it for a slow
+  but reachable link. This is the same "no main-thread freeze" concern as the fleet-status work,
+  giving the diver control over the exact tradeoff.
+
+
+### Added
 - **`Cmd+Shift+N` also opens a new session** (matching `Cmd+T`/`Cmd+N` and the browser/iTerm
   "new window" muscle memory). `Cmd+Shift+T` still reopens the last-closed tab. Covered by the pure
   `cmd_shortcut` unit test.

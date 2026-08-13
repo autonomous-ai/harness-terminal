@@ -21,6 +21,17 @@ use alacritty_terminal::vte::ansi::{Processor, StdSyncHandler};
 
 use crate::session::{EchoCanceller, Listener, TermSize};
 
+/// The wall-clock seconds a remote tunnel spawn/attach waits for a host before giving up. Read from
+/// `config.connect_timeout_secs` (so users can tune the freeze-vs-patience tradeoff for their own
+/// hosts), clamped to a sane 1..=30 so a config typo can't pin the UI for a full hour. Default 4.
+fn tunnel_connect_timeout() -> std::time::Duration {
+    let secs = crate::config::Config::load()
+        .connect_timeout_secs
+        .unwrap_or(4)
+        .clamp(1, 30);
+    std::time::Duration::from_secs(secs)
+}
+
 /// A byte transport for one session. Sends keystrokes/resize outward; the concrete transport's own
 /// reader thread feeds incoming bytes back into the shared `Term` grid.
 pub trait Transport: Send {
@@ -644,9 +655,7 @@ impl TunnelTransport {
             .map_err(|e| io::Error::other(format!("tunnel resolve {addr}: {e}")))?
             .next()
             .ok_or_else(|| io::Error::other(format!("tunnel resolve {addr}: no address")))
-            .and_then(|sa| {
-                std::net::TcpStream::connect_timeout(&sa, std::time::Duration::from_secs(4))
-            })
+            .and_then(|sa| std::net::TcpStream::connect_timeout(&sa, tunnel_connect_timeout()))
             .map_err(|e| io::Error::other(format!("tunnel connect {addr}: {e}")))?;
         let url = format!("ws://{host}:{port}/api/pane-ws");
         let request = tungstenite::client::IntoClientRequest::into_client_request(url)
