@@ -1072,8 +1072,21 @@ impl Application {
             } else {
                 String::new()
             };
+            // A down tab carries its reconnect reason so a copied fleet report reads as a health
+            // handoff ("which host is dark and why"), not a bare ○. Local PTYs have no transport
+            // to diagnose and stay bare.
+            let down_s = if !s.alive() && s.kind() != "pty" {
+                match s.down_reason() {
+                    Some(r) if !r.trim().is_empty() => {
+                        format!(" · ⚠ {}", clip_dots(r.trim(), 60))
+                    }
+                    _ => format!(" · ⚠ {}", clip_dots("reconnecting…", 60)),
+                }
+            } else {
+                String::new()
+            };
             lines.push(format!(
-                "{state} {} ({}){where_s} · {head}{live}{queued_s}",
+                "{state} {} ({}){where_s} · {head}{live}{queued_s}{down_s}",
                 s.meta.engine,
                 i + 1
             ));

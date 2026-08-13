@@ -6,6 +6,10 @@ entries record user-visible and architectural changes since the last tagged mile
 ## Unreleased / 0.1.0 (in progress)
 
 ### Added
+- **A copied fleet summary now says why machines are down.** `prefix+E` / the fleet copy has always
+  marked each down tab with `○`; it now appends the reconnect reason (`⚠ tunnel connect 10.0.0.4:
+  refused`), so a pasted health handoff reads as "which host is dark and why" instead of a bare
+  unreachable glyph.
 - **The session palette ranks the best match on top.** Typing a query now floats the strongest hit
   to the top of a many-tab fleet: a prefix match in the engine/name/host outranks a loose fuzzy
   subsequence, and equally-strong hits break ties by engine recency then tab order. Previously
