@@ -86,6 +86,9 @@ entries record user-visible and architectural changes since the last tagged mile
   a bulk close — defeating the "marks required so a stray press is never destructive" guard. Marks
   now clear on grid close, matching the broadcast overlay's fresh-reset behavior.
 ### Added
+- **`Cmd+Up` / `Cmd+Home` jump to the top of the scrollback and `Cmd+Down` / `Cmd+End` snap back
+  to live** (iTerm2 muscle memory). These work from the live view — no need to scroll up first —
+  and are pure view navigation (they never reach the shell). Pages/bottom keys are unchanged.
 - **The scrollbar is now clickable to jump (iTerm2-style).** A left-press on the right-edge thumb
   track scrolls the view to that position — click the top to read the oldest line, the bottom to
   snap back live, anywhere in between to skip there — instead of starting a text selection in the

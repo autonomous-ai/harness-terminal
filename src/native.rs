@@ -3878,6 +3878,7 @@ impl Application {
             ("Cmd+Shift+I", "show this tab's info (kind/host/task)"),
             ("Cmd+Shift+C", "copy whole scrollback to clipboard"),
             ("Cmd+Shift+S", "write scrollback to a .log file"),
+            ("Cmd+Up / Cmd+Home · Cmd+Down / Cmd+End", "jump to top / bottom of scrollback"),
             ("Cmd+.", "interrupt the active session (stop the run)"),
             ("Cmd+Shift+J", "jump to the next quiet (awaiting-you) agent"),
             ("Cmd+Shift+K", "send Ctrl-C to every session (stop the fleet)"),
@@ -6982,6 +6983,29 @@ impl Application {
             // Scrollback navigation takes precedence over forwarding to the shell. While scrolled,
             // page/arrow keys move the viewport; Esc returns to the live (bottom) view. PageUp from
             // the live view also enters scroll mode.
+            // iTerm2-style jump-to-end: Cmd+Up / Cmd+Home jump to the very top of the scrollback,
+            // Cmd+Down / Cmd+End snap back to the live bottom. Works from the live view too (so no
+            // prior PgUp is needed), and never forwards to the shell — it's pure view navigation.
+            if mods.super_key() {
+                let to_top = match key {
+                    Key::Named(winit::keyboard::NamedKey::ArrowUp)
+                    | Key::Named(winit::keyboard::NamedKey::Home) => Some(true),
+                    Key::Named(winit::keyboard::NamedKey::ArrowDown)
+                    | Key::Named(winit::keyboard::NamedKey::End) => Some(false),
+                    _ => None,
+                };
+                if let Some(to_top) = to_top {
+                    if to_top {
+                        self.scroll_to_top();
+                    } else {
+                        self.scroll_to_bottom();
+                    }
+                    if let Some(w) = &self.window {
+                        w.request_redraw();
+                    }
+                    return;
+                }
+            }
             let scrolled_now = self
                 .app
                 .active_session()

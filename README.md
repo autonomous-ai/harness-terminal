@@ -91,6 +91,7 @@ same command mode:
 | `Ctrl+Enter` | toggle fullscreen |
 | `Ctrl+=` / `Ctrl+-` | font zoom (`Ctrl+0` resets) |
 | `PgUp` / `PgDn` | scrollback |
+| `Cmd+Up` / `Cmd+Home` · `Cmd+Down` / `Cmd+End` | jump to the top / bottom of the scrollback |
 | `Cmd`/`Ctrl`+click | open the URL (web / `mailto:` / `tel:`), file path under the cursor |
 | `Alt`+click | move the shell cursor (click-to-move) |
 | `Cmd+C` | copy selection |
