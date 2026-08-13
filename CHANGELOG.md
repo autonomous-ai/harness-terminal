@@ -5,6 +5,13 @@ entries record user-visible and architectural changes since the last tagged mile
 
 ## Unreleased / 0.1.0 (in progress)
 
+### Added
+- **Down panes say *why* they're down.** `prefix+i` info now shows the last reconnect failure's
+  reason (e.g. `tunnel connect 10.0.0.4: refused`), so a dropped agent reads as host-unreachable /
+  auth-rejected / timeout instead of just "reconnect 3 · retry in 10s". The tab-bar/status line
+  stays concise; the reason appears in the roomier info panel and clears on the next successful
+  reconnect.
+
 ### Fixed
 - **Cmd+click opens URLs without a trailing sentence period.** A scheme URL that ended in
   punctuation (``Read https://…/foo.``) included the trailing period and opened a 404; the docs

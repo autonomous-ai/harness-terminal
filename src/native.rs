@@ -3257,6 +3257,13 @@ impl Application {
                 None => "live".to_string(),
             }
         ));
+        // Why it's down, when we know: the last reconnect failure's message (host unreachable,
+        // auth rejected, timeout, …). Only in the info panel — the status line stays concise.
+        if let Some(reason) = s.down_reason() {
+            if !reason.trim().is_empty() {
+                rows.push(format!("  reason     {reason}"));
+            }
+        }
         // Age / uptime — how long this session has been alive. Tells a long-running agent (hours
         // of work) from a just-spawned one at a glance, alongside the idle `silence` row below.
         rows.push(format!("  age        {}", fmt_duration(s.age())));

@@ -251,6 +251,10 @@ struct RetryState {
     attempts: u32,
     /// Monotonic instant before which we won't try again.
     next_attempt: Instant,
+    /// The most recent reconnect failure's display reason (e.g. ``tunnel connect 10.0.0.4: …``).
+    /// Set on a failed attempt, cleared on the next success. Surfaces WHY a pane is down in the
+    /// info panel (host unreachable vs auth vs timeout) instead of only the retry count.
+    last_err: Option<String>,
 }
 
 impl RetryState {
@@ -258,6 +262,7 @@ impl RetryState {
         RetryState {
             attempts: 0,
             next_attempt: Instant::now(),
+            last_err: None,
         }
     }
     /// Exponential backoff seconds for the *next* retry, capped: 5s, 10s, 20s, … 60s.
@@ -499,7 +504,9 @@ impl Session {
         match self.transport.reconnect() {
             Ok(()) => {
                 // Back up: the pane came through, reset the retry ladder.
-                self.retry.lock().unwrap().attempts = 0;
+                let mut r = self.retry.lock().unwrap();
+                r.attempts = 0;
+                r.last_err = None;
                 // Replay whatever was typed while the pane was dead so a queued command actually
                 // lands in the re-attached pane.
                 let buffered: Vec<u8> = self.pending.lock().unwrap().drain(..).collect();
@@ -513,6 +520,14 @@ impl Session {
                 r.attempts = r.attempts.saturating_add(1);
                 let backoff = Duration::from_secs(RetryState::backoff_seconds(r.attempts));
                 r.next_attempt = Instant::now() + backoff;
+                // Keep the readable failure reason (host unreachable, auth, timeout, …) so the
+                // info panel can say WHY the pane is down, not just that it's retrying.
+                let msg = e.to_string();
+                r.last_err = Some(if msg.is_empty() {
+                    e.kind().to_string()
+                } else {
+                    msg
+                });
                 Err(e)
             }
         }
@@ -531,6 +546,16 @@ impl Session {
             let secs = RetryState::backoff_seconds(r.attempts);
             Some(format!("reconnect {} · retry in {}s", r.attempts, secs))
         }
+    }
+
+    /// The last reconnect failure's readable reason, for the info panel. None while the pane is
+    /// up or no attempt has failed yet. Kept separate from [`Session::retry_info`] (which stays
+    /// concise for the status line) because a reason string can be long.
+    pub fn down_reason(&self) -> Option<String> {
+        if self.transport.alive() {
+            return None;
+        }
+        self.retry.lock().unwrap().last_err.clone()
     }
 
     /// Number of bytes buffered while the transport was down (type-ahead awaiting a reconnect).
@@ -902,6 +927,92 @@ mod tests {
             "newest staged input survives the cap"
         );
         assert_eq!(s.pending_bytes(), 0);
+    }
+
+    /// A failed reconnect records its readable reason (host unreachable, auth, timeout, …) so the
+    /// info panel can say WHY a pane is down; a later success clears it.
+    #[test]
+    fn down_reason_surfaces_last_reconnect_failure() {
+        use alacritty_terminal::sync::FairMutex as AFairMutex;
+        use alacritty_terminal::term::{Config, Term};
+
+        // A transport that is initially down and fails its first reconnect, then succeeds.
+        struct Flaky {
+            alive: bool,
+            fail_next: bool,
+        }
+        impl Transport for Flaky {
+            fn kind(&self) -> &'static str {
+                "fake"
+            }
+            fn write(&self, _bytes: &[u8]) {}
+            fn resize(&self, _size: TermSize) {}
+            fn alive(&self) -> bool {
+                self.alive
+            }
+            fn reconnect(&mut self) -> io::Result<()> {
+                if self.fail_next {
+                    self.fail_next = false;
+                    Err(io::Error::new(
+                        io::ErrorKind::Other,
+                        "tunnel connect 10.0.0.4: refused",
+                    ))
+                } else {
+                    self.alive = true;
+                    Ok(())
+                }
+            }
+            fn destroy(&self) {}
+        }
+
+        let title = Arc::new(Mutex::new(None));
+        let listener = Listener::with_title(Arc::clone(&title));
+        let size = TermSize {
+            lines: 24,
+            cols: 80,
+        };
+        let term = Arc::new(AFairMutex::new(Term::new(
+            Config::default(),
+            &size,
+            listener,
+        )));
+        let mut s = Session {
+            meta: SessionMeta {
+                host: "10.0.0.4".into(),
+                engine: "claude".into(),
+                title: "claude @ h".into(),
+                name: None,
+            },
+            attach_session: None,
+            term,
+            transport: Box::new(Flaky {
+                alive: false,
+                fail_next: true,
+            }),
+            echo: None,
+            title,
+            bell: Arc::new(std::sync::atomic::AtomicBool::new(false)),
+            retry: Mutex::new(RetryState::new()),
+            scrolled: Arc::new(std::sync::atomic::AtomicBool::new(false)),
+            pending: Mutex::new(Vec::new()),
+            born: Instant::now(),
+        };
+
+        // First reconnect fails: the reason is recorded and a retry is counted.
+        assert!(s.reconnect_now().is_err());
+        assert_eq!(
+            s.down_reason().as_deref(),
+            Some("tunnel connect 10.0.0.4: refused")
+        );
+        assert!(
+            s.retry_info().is_some(),
+            "down pane still shows retry state"
+        );
+
+        // A later success clears the reason (and the retry counter is reset by reconnect_now).
+        s.reconnect_now().unwrap();
+        assert_eq!(s.down_reason(), None, "success clears the recorded reason");
+        assert_eq!(s.retry_info(), None, "live pane has no retry state");
     }
 
     /// OSC window titles are captured into the shared slot and exposed via live_title; ResetTitle
