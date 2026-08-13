@@ -3734,6 +3734,7 @@ impl Application {
             ("Cmd+Shift+F", "search all sessions (fleet)"),
             ("Cmd+Shift+R", "force-reconnect ALL down panes"),
             ("Cmd+Shift+U / Cmd+Shift+M", "pin active tab / mute active tab"),
+            ("Cmd+Shift+I", "show this tab's info (kind/host/task)"),
             (
                 "Hosts drill · r / b",
                 "reconnect this host / broadcast to this host",
@@ -5595,6 +5596,9 @@ impl Application {
             }
             CmdShortcut::Mute => {
                 self.toggle_mute_active();
+            }
+            CmdShortcut::Info => {
+                self.app.overlay = Overlay::Info;
             }
             CmdShortcut::GotoTab(i) => {
                 if !self.app.tabs.is_empty() {
@@ -8647,6 +8651,9 @@ enum CmdShortcut {
     /// Cmd+Shift+M — toggle mute on the active tab (stop its busy badge + OS ping), the system
     /// shortcut for prefix+mute. Quick way to silence a noisy backgrounded agent from anywhere.
     Mute,
+    /// Cmd+Shift+I — open this tab's info panel (kind/host/task), the system shortcut for
+    /// prefix+i. Fast way to read a session's identity + fleet context without the prefix chord.
+    Info,
     /// Not a Cmd shortcut we own (forward as normal).
     None,
 }
@@ -8749,6 +8756,8 @@ fn cmd_shortcut(key: &Key, mods: &ModifiersState) -> CmdShortcut {
             "U" if mods.shift_key() => Pin,
             // Cmd+Shift+M toggles mute (silence a noisy agent's badge + OS ping).
             "M" if mods.shift_key() => Mute,
+            // Cmd+Shift+I shows the active tab's info (kind/host/task) — prefix+i muscle memory.
+            "I" if mods.shift_key() => Info,
             // Plain Cmd+[ is left to the shell; only the Shift variant switches tabs.
             _ => None,
         },
@@ -9532,6 +9541,13 @@ mod tests {
             chars("m", s),
             CmdShortcut::None,
             "plain Cmd+M is not hijacked"
+        );
+        // Cmd+Shift+I shows the active tab's info; plain Cmd+I stays with the shell.
+        assert_eq!(chars("I", sc), CmdShortcut::Info);
+        assert_eq!(
+            chars("i", s),
+            CmdShortcut::None,
+            "plain Cmd+I is not hijacked"
         );
         assert_eq!(
             chars("]", s),

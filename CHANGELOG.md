@@ -16,6 +16,9 @@ entries record user-visible and architectural changes since the last tagged mile
   a bulk close — defeating the "marks required so a stray press is never destructive" guard. Marks
   now clear on grid close, matching the broadcast overlay's fresh-reset behavior.
 ### Added
+- **Native Cmd+Shift+I opens the active tab's info.** The system shortcut for prefix+i: shows the
+  session's engine kind, host, and live task from anywhere without the prefix chord. Plain Cmd+I
+  stays free for the shell. Routes via the pure, unit-tested `cmd_shortcut`.
 - **Native Cmd+Shift+U / Cmd+Shift+M toggle pin / mute.** The system shortcut for prefix+pin and
   prefix+mute: `Cmd+Shift+U` shields the active tab from close, `Cmd+Shift+M` silences a noisy
   agent's badge + OS ping — both reachable from anywhere without the prefix chord. Plain Cmd+U/M
