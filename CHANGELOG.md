@@ -11,6 +11,10 @@ entries record user-visible and architectural changes since the last tagged mile
   a bulk close — defeating the "marks required so a stray press is never destructive" guard. Marks
   now clear on grid close, matching the broadcast overlay's fresh-reset behavior.
 ### Added
+- **Native Cmd+Shift+U / Cmd+Shift+M toggle pin / mute.** The system shortcut for prefix+pin and
+  prefix+mute: `Cmd+Shift+U` shields the active tab from close, `Cmd+Shift+M` silences a noisy
+  agent's badge + OS ping — both reachable from anywhere without the prefix chord. Plain Cmd+U/M
+  stay free for the shell. Routes via the pure, unit-tested `cmd_shortcut`.
 - **Broadcast target list navigates with Tab/Shift+Tab.** `prefix+b` walks the focused target with
   Tab (Shift+Tab up), so the row is selected without the arrows; Shift+arrows still recall history
   as before.

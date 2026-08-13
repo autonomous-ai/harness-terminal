@@ -3733,6 +3733,7 @@ impl Application {
             ("Cmd+Shift+P", "command palette"),
             ("Cmd+Shift+F", "search all sessions (fleet)"),
             ("Cmd+Shift+R", "force-reconnect ALL down panes"),
+            ("Cmd+Shift+U / Cmd+Shift+M", "pin active tab / mute active tab"),
             (
                 "Hosts drill · r / b",
                 "reconnect this host / broadcast to this host",
@@ -5588,6 +5589,12 @@ impl Application {
             }
             CmdShortcut::ReconnectAll => {
                 self.reconnect_all_down();
+            }
+            CmdShortcut::Pin => {
+                self.toggle_pin_active();
+            }
+            CmdShortcut::Mute => {
+                self.toggle_mute_active();
             }
             CmdShortcut::GotoTab(i) => {
                 if !self.app.tabs.is_empty() {
@@ -8629,6 +8636,12 @@ enum CmdShortcut {
     /// Cmd+Shift+R — force-reconnect ALL down panes at once (the browser "reload" muscle memory for
     /// bringing a whole fleet back).
     ReconnectAll,
+    /// Cmd+Shift+U — toggle pin on the active tab (protect it from close), the system shortcut for
+    /// prefix+pin. Lets a diver shield a long-running agent without dropping into the prefix chord.
+    Pin,
+    /// Cmd+Shift+M — toggle mute on the active tab (stop its busy badge + OS ping), the system
+    /// shortcut for prefix+mute. Quick way to silence a noisy backgrounded agent from anywhere.
+    Mute,
     /// Not a Cmd shortcut we own (forward as normal).
     None,
 }
@@ -8727,6 +8740,10 @@ fn cmd_shortcut(key: &Key, mods: &ModifiersState) -> CmdShortcut {
             "D" if mods.shift_key() => Duplicate,
             // Cmd+Shift+R force-reconnects every down pane at once (browser "reload" habit).
             "R" if mods.shift_key() => ReconnectAll,
+            // Cmd+Shift+U toggles pin (protect-from-close) — the "U" for the un-shifted prefix+pin.
+            "U" if mods.shift_key() => Pin,
+            // Cmd+Shift+M toggles mute (silence a noisy agent's badge + OS ping).
+            "M" if mods.shift_key() => Mute,
             // Plain Cmd+[ is left to the shell; only the Shift variant switches tabs.
             _ => None,
         },
@@ -9497,6 +9514,19 @@ mod tests {
             chars("r", s),
             CmdShortcut::None,
             "plain Cmd+R must not hijack the shell"
+        );
+        // Cmd+Shift+U toggles pin; Cmd+Shift+M toggles mute; both plain Cmd forms stay free.
+        assert_eq!(chars("U", sc), CmdShortcut::Pin);
+        assert_eq!(
+            chars("u", s),
+            CmdShortcut::None,
+            "plain Cmd+U is not hijacked"
+        );
+        assert_eq!(chars("M", sc), CmdShortcut::Mute);
+        assert_eq!(
+            chars("m", s),
+            CmdShortcut::None,
+            "plain Cmd+M is not hijacked"
         );
         assert_eq!(
             chars("]", s),
