@@ -16,6 +16,10 @@ entries record user-visible and architectural changes since the last tagged mile
   a bulk close — defeating the "marks required so a stray press is never destructive" guard. Marks
   now clear on grid close, matching the broadcast overlay's fresh-reset behavior.
 ### Added
+- **Fleet grid gains a per-tile `m` mute.** `Ctrl+H e` (the war-room grid) now toggles mute on the
+  selected tile with `m` — the per-tile sibling of peek's `m` and prefix mute — so a noisy
+  backgrounded agent is silenced straight from the grid without a drill-in. Consistent with the
+  triage's `r` reconnect and `x` close.
 - **Native Cmd+Shift+S exports the active tab's scrollback to a .log file.** The system shortcut for
   prefix+export_scrollback: hand an agent's session off to a file from anywhere. Plain Cmd+S stays
   with the shell. Routes via the pure, unit-tested `cmd_shortcut`.

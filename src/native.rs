@@ -3750,8 +3750,8 @@ impl Application {
                 "toggle one target · select all / clear all",
             ),
             (
-                "Fleet grid · Space mark · b/C/x/X/r/R",
-                "mark · broadcast · Ctrl-C · close · bulk-close · reconnect sel/all · n next/prev trouble",
+                "Fleet grid · Space mark · b/C/m/x/X/r/R",
+                "mark · broadcast · Ctrl-C · mute · close · bulk-close · reconnect sel/all · n next/prev trouble",
             ),
         ] {
             all.push((k.to_string(), d.to_string()));
@@ -4395,7 +4395,7 @@ impl Application {
             fb,
             &mut self.cache,
             &format!(
-                "  fleet grid · {} session{} · ↑/↓/PgUp/PgDn/1-9 select · n→next trouble · Space mark · b→broadcast · C→Ctrl-C · x/X→close sel/all · r/R→reconnect · Enter dive · Esc close  ",
+                "  fleet grid · {} session{} · ↑/↓/PgUp/PgDn/1-9 select · n→next trouble · Space mark · b→broadcast · C→Ctrl-C · m→mute · x/X→close sel/all · r/R→reconnect · Enter dive · Esc close  ",
                 n,
                 if n == 1 { "" } else { "s" }
             ),
@@ -6574,6 +6574,29 @@ impl Application {
                             // `R` force-reconnects every marked tile (falling back to all down) —
                             // the `b`-style bulk action for healing, complementing broadcast.
                             self.grid_reconnect_marked();
+                        } else if ch == Some('m') {
+                            // `m` toggles mute on the selected tile — the per-tile sibling of peek's
+                            // `m` and of prefix mute — so a noisy backgrounded agent is silenced
+                            // straight from the war-room without a drill-in. Non-destructive; the
+                            // selected tile stays put so the toggle's `M` glyph change is visible.
+                            let sel = self.grid_sel;
+                            // Scope the mutable borrow so `save_muted_state`/`tab_identity` can run
+                            // after the vector write (they can't while `get_mut` is still live).
+                            let toggled = {
+                                if let Some(m) = self.muted.get_mut(sel) {
+                                    *m = !*m;
+                                    Some(*m)
+                                } else {
+                                    None
+                                }
+                            };
+                            if let Some(new_muted) = toggled {
+                                self.save_muted_state();
+                                let id = self.tab_identity(sel);
+                                let state = if new_muted { "muted" } else { "unmuted" };
+                                self.flash =
+                                    Some((format!("{id} {state}"), std::time::Instant::now()));
+                            }
                         } else if ch == Some('C') {
                             // `C` sends Ctrl-C to every marked tile (falling back to all non-muted) —
                             // the "stop the batch job" sibling of `R` reconnect and `b` broadcast.
