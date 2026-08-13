@@ -6,6 +6,11 @@ entries record user-visible and architectural changes since the last tagged mile
 ## Unreleased / 0.1.0 (in progress)
 
 ### Added
+- **Native mode gains an iTerm2-style status bar.** Each native tab window now keeps a slim bottom
+  strip — this window's session identity + ✓/○ health (with the reconnect reason when down) on the
+  left, and the whole-fleet triage (`↓N` down, `!M` busy, `⏳N` queued, `⌛N` quiet, `🔕` DND) on the
+  right — so a multi-machine diver still sees machines going dark without leaving the OS tab bar.
+  One terminal row is reserved uniformly across windows (no resize churn when switching tabs).
 - **`prefix+Q` (next down) names the failure.** The jump toast now appends the reconnect reason
   (`down — claude@build02 (refused)`) so a diver knows whether a pane is mid-reconnect or hard-down
   without tab-hopping.

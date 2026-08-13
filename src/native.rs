@@ -5969,7 +5969,10 @@ impl Application {
     ) {
         let gline_px = self.cell_h as usize;
         let gcol_px = self.cell_w as usize;
-        let grid_lines = height.max(1) / gline_px;
+        // Reserve the bottom cell for the native status strip (iTerm2-style), across every window
+        // so the terminal size is identical whether a tab is focused or not — no resize/reflow
+        // churn when you flip between tabs.
+        let grid_lines = (height.max(2) / gline_px).saturating_sub(1).max(1);
         let grid_cols = width.max(1) / gcol_px;
 
         // Size this window's session to its grid.
@@ -6031,6 +6034,11 @@ impl Application {
             draw_text(fb, &mut self.cache, &hint, cx, cy, self.font_px, CHROME_DIM);
         }
 
+        // Native status strip: this window's session info on the left, the fleet triage on the
+        // right — the signal the in-app status line used to carry, now that the OS tab bar owns the
+        // top chrome.
+        self.draw_native_status(fb, width, height);
+
         // Overlays paint only in the focused window.
         if focused {
             if self.app.overlay != Overlay::None {
@@ -6056,6 +6064,109 @@ impl Application {
             if self.ctx.is_some() {
                 self.render_ctx_menu(fb);
             }
+        }
+    }
+
+    /// Bottom status strip for a native host window (iTerm2-style). The OS title-bar tab bar owns
+    /// the top chrome in native mode, so the in-app status line is gone; this puts the session's
+    /// own identity + health back on the left and the fleet triage (down/busy/quiet/queued/DND) on
+    /// the right, so a diver still sees at a glance whether machines went dark without leaving tabs.
+    fn draw_native_status(&mut self, fb: &mut Framebuffer, width: usize, height: usize) {
+        let gline_px = self.cell_h as usize;
+        let top = height.saturating_sub(gline_px);
+        fill_rect(fb, 0, top, width, gline_px, CHROME_BG);
+        // Hairline separator, mirroring the single-window chrome's edge.
+        fill_rect(fb, 0, top, width, 1, CHROME_HAIR);
+        let base = height.saturating_sub(self.cell_h as usize / 2);
+
+        // Left: this window's session — identity, health, and the reconnect reason if it's down.
+        let info = match self.app.active_session() {
+            Some(s) => {
+                let head = s.meta.name.clone().unwrap_or_else(|| s.meta.engine.clone());
+                let is_pty = s.kind() == "pty";
+                let state = if is_pty {
+                    String::new()
+                } else if s.alive() {
+                    "  ● live".to_string()
+                } else {
+                    let reason = s
+                        .down_reason()
+                        .unwrap_or_else(|| "reconnecting…".to_string());
+                    let reason = clip_dots(&reason.trim().to_string(), 22);
+                    let tag = if reason.is_empty() {
+                        String::new()
+                    } else {
+                        format!(" ({reason})")
+                    };
+                    format!("  ○ down{tag}")
+                };
+                format!("{head}@{}  {}", s.meta.host, state)
+            }
+            None => "no session".to_string(),
+        };
+        draw_text(fb, &mut self.cache, &info, 6, base, self.font_px, CHROME_FG);
+
+        // Right: fleet triage, only when non-zero (a fully healthy, idle fleet draws nothing).
+        let down = self
+            .app
+            .tabs
+            .iter()
+            .filter(|t| !t.alive() && t.kind() != "pty")
+            .count();
+        let busy = self
+            .activity_flags()
+            .iter()
+            .enumerate()
+            .filter(|&(i, &b)| b && i != self.app.active)
+            .count();
+        let (any_quiet, quiet_n, _) = self.quiet_flags();
+        let queued: usize = self.app.tabs.iter().map(|t| t.pending_bytes()).sum();
+        let mut triage = String::new();
+        if down > 0 {
+            triage += &format!("↓{down} ");
+        }
+        if busy > 0 {
+            triage += &format!("!{busy} ");
+        }
+        if queued > 0 {
+            triage += &format!("⏳{queued} ");
+        }
+        if any_quiet {
+            triage += &format!("⌛{quiet_n} ");
+        }
+        if self.dnd {
+            triage += "🔕 ";
+        }
+        if !triage.is_empty() {
+            let color = if down > 0 { CHROME_ERR } else { CHROME_DIM };
+            let tw = triage.chars().count() * self.cell_w as usize;
+            let x = width.saturating_sub(tw + 10);
+            // Clear the right column before redrawing so nothing shows through.
+            for py in base.saturating_sub(self.font_px as usize)..(base + self.font_px as usize) {
+                for px in x..width {
+                    if py < height {
+                        fb.pixels[py * width + px] = CHROME_BG_PX;
+                    }
+                }
+            }
+            draw_text(fb, &mut self.cache, &triage, x, base, self.font_px, color);
+        }
+
+        // While the prefix is armed, show the waiting chip so a typed prefix chord is legible.
+        if self.prefix_down {
+            let chip = format!("  {} ", crate::keys::prefix_label(&self.prefix_key));
+            let cw = text_width(&mut self.cache, &chip, self.font_px);
+            let px0 = 64;
+            let top_chip = base.saturating_sub(self.font_px as usize);
+            fill_rect(
+                fb,
+                px0,
+                top_chip,
+                cw,
+                self.font_px as usize + 4,
+                CHROME_ACTIVE_BG,
+            );
+            draw_text(fb, &mut self.cache, &chip, px0, base, self.font_px, WHITE);
         }
     }
 
