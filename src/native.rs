@@ -7438,7 +7438,7 @@ impl Application {
         // identity (custom name, else engine@host) so separate agent tabs are distinguishable in the
         // system title-bar tab bar even before an engine announces a title. Only call set_title (a
         // platform round-trip) when the resolved title actually changed.
-        let title = match self.app.tabs.get(tab) {
+        let base = match self.app.tabs.get(tab) {
             Some(s) => match s.live_title() {
                 Some(t) => format!("{t} — harness-terminal"),
                 None => {
@@ -7451,6 +7451,20 @@ impl Application {
                 }
             },
             None => "harness-terminal".to_string(),
+        };
+        // Mirror the in-app `!N` unread badge onto a backgrounded tab's OS title so a multi-window
+        // fleet scan (or Mission Control) shows at a glance WHICH agent still has unseen output.
+        // The focused window clears its unread each frame, so this only ever decorates backgrounded
+        // tabs; a persistent need re-focuses via the system tab bar.
+        let title = if !focused {
+            let n = self.unread.get(tab).copied().unwrap_or(0);
+            if n > 0 {
+                format!("{base} (!{})", n.min(999))
+            } else {
+                base
+            }
+        } else {
+            base
         };
         if self.hosts[i].title != title {
             self.hosts[i].window.set_title(&title);
