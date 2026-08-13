@@ -59,7 +59,7 @@ same command mode:
 | `Ctrl+H` `,` | rename the active tab (persisted, shown in tab bar) |
 | `Ctrl+H` `a` | broadcast a line (per-session checkboxes target it) |
 | `Ctrl+H` `y` | peek the tail of every session, then jump (`/` filters the list by host/engine/name/`down`) |
-| `Ctrl+H` `e` | fleet grid: live tails of every session at once (war-room view; `Space` mark a tile, `b` broadcast to marked, `C` Ctrl-C marked, `m` mute selected, `x`/`X` close sel/all marked, `R` reconnect marked) |
+| `Ctrl+H` `e` | fleet grid: live tails of every session at once (war-room view; `Space` mark a tile, `b` broadcast to marked, `C` Ctrl-C marked, `m` mute selected, `p` pin selected, `x`/`X` close sel/all marked, `R` reconnect marked) |
 | `Ctrl+H` `d` | copy the whole scrollback to the clipboard |
 | `Ctrl+H` `j` | copy the session identity (`engine@host`) to the clipboard |
 | `Ctrl+H` `E` | copy a one-line summary of every open tab (the fleet, grep-friendly) |

@@ -21,6 +21,10 @@ entries record user-visible and architectural changes since the last tagged mile
   a bulk close — defeating the "marks required so a stray press is never destructive" guard. Marks
   now clear on grid close, matching the broadcast overlay's fresh-reset behavior.
 ### Added
+- **Peek and the fleet grid gain a per-row `p` pin.** `Ctrl+H y` and `Ctrl+H e` now toggle pin
+  (protect-from-close) on the selected pane/tile with `p`, so an important agent can be shielded
+  from any bulk close (`X`, `prefix+close_quiet`) while triaging a fleet — the per-row sibling of
+  prefix pin.
 - **Fleet grid gains a per-tile `m` mute.** `Ctrl+H e` (the war-room grid) now toggles mute on the
   selected tile with `m` — the per-tile sibling of peek's `m` and prefix mute — so a noisy
   backgrounded agent is silenced straight from the grid without a drill-in. Consistent with the

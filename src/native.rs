@@ -2012,6 +2012,27 @@ impl Application {
         }
     }
 
+    /// Toggle pin (protect-from-close) on an arbitrary tab — the per-row sibling of
+    /// `toggle_pin_active`, used by the peek and fleet-grid triage so a diver can shield an agent
+    /// straight from the list. Mirrors the active-arm's resize-into-range guard against a fresh tab.
+    fn toggle_pin_at(&mut self, i: usize) {
+        if i >= self.app.tabs.len() {
+            return;
+        }
+        let on = !self.pinned.get(i).copied().unwrap_or(false);
+        self.pinned.resize(i + 1, false);
+        self.pinned[i] = on;
+        let state = if on { "PINNED 🔒" } else { "unpinned" };
+        let head = self
+            .app
+            .tabs
+            .get(i)
+            .map(|s| s.meta.name.clone().unwrap_or_else(|| s.meta.engine.clone()))
+            .unwrap_or_default();
+        self.flash = Some((format!("{head} {state}"), std::time::Instant::now()));
+        self.save_pin_state();
+    }
+
     /// `prefix+v`: toggle focus mode — hide the tab bar + status line so the grid fills the whole
     /// window for a distraction-free dive. The resize runs `redraw` which re-sizes the session to the
     /// now-larger grid. Toggle again to bring the chrome back.
@@ -3742,8 +3763,8 @@ impl Application {
                 "reconnect this host / broadcast to this host",
             ),
             (
-                "Peek · / filter · n down · r reconnect · m mute · x close",
-                "narrow by host/engine/name · up/down/busy/quiet (compose: \"build05 down\") · n/r/m/x",
+                "Peek · / filter · n down · r reconnect · m mute · p pin · x close",
+                "narrow by host/engine/name · up/down/busy/quiet (compose: \"build05 down\") · n/r/m/p/x",
             ),
             (
                 "Broadcast · Space · ⇧Space",
@@ -4395,7 +4416,7 @@ impl Application {
             fb,
             &mut self.cache,
             &format!(
-                "  fleet grid · {} session{} · ↑/↓/PgUp/PgDn/1-9 select · n→next trouble · Space mark · b→broadcast · C→Ctrl-C · m→mute · x/X→close sel/all · r/R→reconnect · Enter dive · Esc close  ",
+                "  fleet grid · {} session{} · ↑/↓/PgUp/PgDn/1-9 select · n→next trouble · Space mark · b→broadcast · C→Ctrl-C · m mute · p pin · x/X→close sel/all · r/R→reconnect · Enter dive · Esc close  ",
                 n,
                 if n == 1 { "" } else { "s" }
             ),
@@ -4670,7 +4691,7 @@ impl Application {
         let rest = if self.peek_filtering {
             "↑/↓ · Enter jump · Esc clear  "
         } else {
-            "↑/↓ preview · PgUp/Dn page · n down · r reconnect · m mute · x close · Enter jump · Esc close  "
+            "↑/↓ preview · PgUp/Dn page · n down · r reconnect · m mute · p pin · x close · Enter jump · Esc close  "
         };
         let header = format!("{filter_prefix}{health}{rest}");
         draw_text(
@@ -6330,6 +6351,14 @@ impl Application {
                                     self.save_muted_state();
                                 }
                             }
+                        } else if c == "p" || c == "P" {
+                            // Toggle pin on the selected pane straight from triage — shields it from
+                            // any bulk close while triaging. Non-destructive; toggle again to unpin.
+                            let shown = self.peek_filtered.len();
+                            if shown > 0 {
+                                let real = self.peek_filtered[self.peek_sel.min(shown - 1)];
+                                self.toggle_pin_at(real);
+                            }
                         } else if c == "x" {
                             // Close the selected pane straight from triage — the per-row sibling of
                             // the fleet grid's `x`. Honours the pin guard (flashes instead) and
@@ -6597,6 +6626,11 @@ impl Application {
                                 self.flash =
                                     Some((format!("{id} {state}"), std::time::Instant::now()));
                             }
+                        } else if ch == Some('p') {
+                            // `p` toggles pin on the selected tile — shields it from any bulk close
+                            // (`X`, `prefix+close_quiet`) while triaging the war-room. Per-tile
+                            // sibling of peek's `p` and of prefix pin.
+                            self.toggle_pin_at(self.grid_sel);
                         } else if ch == Some('C') {
                             // `C` sends Ctrl-C to every marked tile (falling back to all non-muted) —
                             // the "stop the batch job" sibling of `R` reconnect and `b` broadcast.
