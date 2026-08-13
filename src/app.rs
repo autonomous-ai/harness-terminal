@@ -55,6 +55,9 @@ pub struct App {
     pub remote_host: String,
     /// Cached harness fleet status (best-effort from the local daemon's /api/status).
     pub fleet: crate::harness::FleetStatus,
+    /// Where the background fleet-status fetcher writes its latest snapshot. The main loop only
+    /// takes from here (never blocks on the HTTP fetch), so a wedged daemon can't freeze the UI.
+    fleet_cache: std::sync::Arc<std::sync::Mutex<Option<crate::harness::FleetStatus>>>,
     /// Time of the next reconnect sweep (monotonic), so a dead daemon can't hammer it every frame.
     next_reconnect: std::time::Instant,
     /// The most recently closed tab's spec, so `prefix+u` can undo a mistaken close.
@@ -104,6 +107,7 @@ impl App {
             size,
             remote_host: String::new(),
             fleet: crate::harness::FleetStatus::default(),
+            fleet_cache: std::sync::Arc::new(std::sync::Mutex::new(None)),
             next_reconnect: std::time::Instant::now(),
             last_closed: None,
             spawn_counter: counter,
@@ -239,9 +243,18 @@ impl App {
             }
         }
         // Refresh link-health + fleet state used by the status-line badge and the fleet overlay.
-        if let Ok(st) = crate::harness::HarnessClient::local().status() {
+        // The fetch runs on a background thread and lands in a shared cache, so a wedged daemon
+        // can't stall the main loop for the HTTP timeout; we just take whatever snapshot arrived.
+        if let Some(st) = self
+            .fleet_cache
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .take()
+        {
             self.fleet = st;
         }
+        crate::harness::HarnessClient::local()
+            .status_into(std::sync::Arc::clone(&self.fleet_cache));
     }
 
     /// Record that `engine_id` was just used, so the new-session picker can float it to the top.
@@ -552,6 +565,7 @@ mod tests {
             size,
             remote_host: String::new(),
             fleet: crate::harness::FleetStatus::default(),
+            fleet_cache: std::sync::Arc::new(std::sync::Mutex::new(None)),
             next_reconnect: std::time::Instant::now(),
             last_closed: None,
             spawn_counter: 0,

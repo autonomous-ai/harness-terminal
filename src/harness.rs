@@ -12,6 +12,7 @@
 //! "unknown" instead of failing the terminal. Terminal bytes still flow through our own
 //! `Transport`; the harness only feeds the *status chrome*.
 
+use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
 use serde::Deserialize;
@@ -69,6 +70,36 @@ impl HarnessClient {
     /// On the default loopback port — the common case.
     pub fn local() -> HarnessClient {
         HarnessClient::on_port(HARNESS_PORT_DEFAULT)
+    }
+
+    /// Fetch `GET /api/status` on a BACKGROUND thread, writing the result into `slot` on success.
+    /// Never blocks the caller: a wedged daemon (accepts the connection but stops responding) would
+    /// otherwise stall the main loop for the full 800ms timeout on every 5s sweep, freezing the whole
+    /// terminal — the exact freeze the Remote-Attach path already guards against with
+    /// `connect_timeout`. On failure the previous cached value is left untouched.
+    pub fn status_into(&self, slot: Arc<Mutex<Option<FleetStatus>>>) {
+        let base = self.base.clone();
+        std::thread::spawn(move || {
+            let client = match reqwest::blocking::Client::builder()
+                .timeout(Duration::from_millis(800))
+                .build()
+            {
+                Ok(c) => c,
+                Err(_) => return,
+            };
+            let resp = match client.get(format!("{base}/api/status")).send() {
+                Ok(r) => r,
+                Err(_) => return,
+            };
+            if !resp.status().is_success() {
+                return;
+            }
+            if let Ok(st) = resp.json::<FleetStatus>() {
+                if let Ok(mut slot) = slot.lock() {
+                    *slot = Some(st);
+                }
+            }
+        });
     }
 
     /// Fetch `GET /api/status`. Returns None when the daemon is absent/unjoined or the JSON errs.

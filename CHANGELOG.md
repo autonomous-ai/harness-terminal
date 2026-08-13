@@ -17,6 +17,15 @@ entries record user-visible and architectural changes since the last tagged mile
   config degrades rather than panics) — 114→116 unit tests.
 
 ### Fixed
+- **The fleet-status poll can no longer freeze the UI.** `reconnect_sweep_refresh` called
+  `HarnessClient::local().status()` synchronously on the main event-loop thread every 5s, so a wedged
+  daemon that accepts the connection but never responds would stall the whole terminal for the full
+  800ms HTTP timeout on every sweep — the same freeze the Remote-Attach path already guards against.
+  The periodic status refresh now runs on a background thread that lands its snapshot in a shared
+  cache; the main loop only takes the latest value (non-blocking), and a failed fetch leaves the
+  previous snapshot intact.
+
+### Fixed
 - **Native-tab mode now runs the per-frame activity pass (notifications + 60fps pump).** With
   `native_tabs = true`, the in-app chrome is hidden, so the busy/bell/recover activity pass only ran
   on demand (prefix+o) — native mode never fired the coalesced "agent went busy / your run finished
