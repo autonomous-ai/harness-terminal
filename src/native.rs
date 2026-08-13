@@ -4287,7 +4287,7 @@ impl Application {
             _ => String::new(),
         };
         let prompt = if self.broadcast_query.is_empty() {
-            format!("  send line to {n} of {} session{}{qtag} (↑/↓ focus · Space=toggle · ⇧Space=all · ⇧↑/⇧↓ history · Enter=broadcast · Esc=cancel)  ",
+            format!("  send line to {n} of {} session{}{qtag} (↑/↓ focus · PgUp/Dn page · Space=toggle · ⇧Space=all · ⇧↑/⇧↓ history · Enter=broadcast · Esc=cancel)  ",
                 self.app.tabs.len(), if n == 1 { "" } else { "s" })
         } else {
             format!(
@@ -6081,6 +6081,16 @@ impl Application {
                                 } else {
                                     self.broadcast_sel = self.broadcast_sel.saturating_sub(1);
                                 }
+                            }
+                            // PgDn/PgUp page the target list by a full window (the same 20-row slice
+                            // the renderer shows), so a broadcast to a large fleet doesn't need one
+                            // keypress per row — mirroring the fleet/palette/broadcast list overlays.
+                            winit::keyboard::NamedKey::PageDown => {
+                                self.broadcast_sel = (self.broadcast_sel + 20)
+                                    .min(self.app.tabs.len().saturating_sub(1));
+                            }
+                            winit::keyboard::NamedKey::PageUp => {
+                                self.broadcast_sel = self.broadcast_sel.saturating_sub(20);
                             }
                             winit::keyboard::NamedKey::Backspace => {
                                 self.broadcast_query.pop();

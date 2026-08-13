@@ -11,6 +11,9 @@ entries record user-visible and architectural changes since the last tagged mile
   a bulk close — defeating the "marks required so a stray press is never destructive" guard. Marks
   now clear on grid close, matching the broadcast overlay's fresh-reset behavior.
 ### Added
+- **Broadcast list pages with PgUp/PgDn.** The broadcast (`prefix+b`) target list now jumps a full
+  20-row window per keypress, so fanning a line out to a large fleet doesn't require arrowing past
+  every session — matching the fleet/palette list overlays. Header hint updated.
 - **Fleet grid `n` hops to the next trouble tile.** The war-room sibling of peek's `n`: `n` in the
   grid jumps the selection to the next DOWN pane (else the next busy one), wrapping around, so a
   large fleet's trouble spots are triaged pane-to-pane instead of one tile at a time. A healthy
