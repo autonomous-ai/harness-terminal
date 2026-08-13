@@ -3714,7 +3714,7 @@ impl Application {
             ),
             (
                 "Fleet grid · Space mark · b/C/x/X/r/R",
-                "mark · broadcast · Ctrl-C · close · bulk-close · reconnect sel/all down",
+                "mark · broadcast · Ctrl-C · close · bulk-close · reconnect sel/all · n next/prev trouble",
             ),
         ] {
             all.push((k.to_string(), d.to_string()));
@@ -4358,7 +4358,7 @@ impl Application {
             fb,
             &mut self.cache,
             &format!(
-                "  fleet grid · {} session{} · ↑/↓/PgUp/PgDn/1-9 select · Space mark · b→broadcast · C→Ctrl-C · x/X→close sel/all · r/R→reconnect · Enter dive · Esc close  ",
+                "  fleet grid · {} session{} · ↑/↓/PgUp/PgDn/1-9 select · n→next trouble · Space mark · b→broadcast · C→Ctrl-C · x/X→close sel/all · r/R→reconnect · Enter dive · Esc close  ",
                 n,
                 if n == 1 { "" } else { "s" }
             ),

@@ -11,6 +11,8 @@ entries record user-visible and architectural changes since the last tagged mile
   a bulk close — defeating the "marks required so a stray press is never destructive" guard. Marks
   now clear on grid close, matching the broadcast overlay's fresh-reset behavior.
 ### Added
+- **Help + fleet-grid hint document the `n` triage hop.** The `prefix+?` help and the fleet grid's
+  header now advertise `n` (next/prev trouble tile), so the recently-added walk matches the docs.
 - **Broadcast list pages with PgUp/PgDn.** The broadcast (`prefix+b`) target list now jumps a full
   20-row window per keypress, so fanning a line out to a large fleet doesn't require arrowing past
   every session — matching the fleet/palette list overlays. Header hint updated.
