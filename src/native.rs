@@ -1343,7 +1343,21 @@ impl Application {
             let down = !self.app.tabs[i].alive() && self.app.tabs[i].kind() != "pty"; // live local PTY is never "down"
             if down {
                 let id = self.tab_identity(i);
-                self.flash = Some((format!("down — {id}"), std::time::Instant::now()));
+                // Say *why* it's down alongside where it landed, so a diver knows at a glance
+                // whether it's a reconnect in flight or a hard failure (auth/refused/timeout).
+                let reason = self
+                    .app
+                    .tabs
+                    .get(i)
+                    .and_then(|s| s.down_reason())
+                    .unwrap_or_else(|| "reconnecting…".to_string());
+                let reason = clip_dots(&reason.trim().to_string(), 26);
+                let msg = if reason.is_empty() {
+                    format!("down — {id}")
+                } else {
+                    format!("down — {id} ({reason})")
+                };
+                self.flash = Some((msg, std::time::Instant::now()));
                 self.set_active(i);
                 return;
             }

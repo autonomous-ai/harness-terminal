@@ -6,6 +6,9 @@ entries record user-visible and architectural changes since the last tagged mile
 ## Unreleased / 0.1.0 (in progress)
 
 ### Added
+- **`prefix+Q` (next down) names the failure.** The jump toast now appends the reconnect reason
+  (`down — claude@build02 (refused)`) so a diver knows whether a pane is mid-reconnect or hard-down
+  without tab-hopping.
 - **Down panes are tagged in the peek list.** Rows for down remote panes now render red with a `○`
   and their reconnect reason, so the diver sees the nature of every outage at a glance alongside the
   new "land on the first down pane" behavior.
