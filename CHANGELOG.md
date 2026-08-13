@@ -11,6 +11,10 @@ entries record user-visible and architectural changes since the last tagged mile
   a bulk close — defeating the "marks required so a stray press is never destructive" guard. Marks
   now clear on grid close, matching the broadcast overlay's fresh-reset behavior.
 ### Added
+- **Fleet grid `n` hops to the next trouble tile.** The war-room sibling of peek's `n`: `n` in the
+  grid jumps the selection to the next DOWN pane (else the next busy one), wrapping around, so a
+  large fleet's trouble spots are triaged pane-to-pane instead of one tile at a time. A healthy
+  fleet flashes a legible no-op. Precedence/wrap logic is unit-tested.
 - **Fleet grid is color-coded by session status.** Each tile's border and header are tinted so the
   war-room is scannable at a glance: down = red, busy/output = amber, quiet/awaiting-you = blue,
   just-reconnected = green, idle local = neutral. The precedence (down > busy > quiet) is unit-tested.
