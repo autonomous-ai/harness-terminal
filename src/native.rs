@@ -1423,19 +1423,52 @@ impl Application {
             .unwrap_or(0);
         let fname = format!("{}{}-{}.log", slug, host_tag, stamp);
         let now = std::time::Instant::now();
+        // Prefix a self-describing header so a handed-off log file says what it is without opening
+        // it: engine@host, transport kind, the live task title if the shell set one, and a
+        // human-readable export time. Epoch-ms is used for the collision-safe filename; the header
+        // uses `date` (macOS) for a readable timestamp, falling back to the epoch on any failure so
+        // the header always renders. Export is a rare explicit action, so one process spawn is fine.
+        let engine_host = format!(
+            "{}@{}",
+            s.meta.engine,
+            if s.meta.host.is_empty() {
+                "local"
+            } else {
+                &s.meta.host
+            }
+        );
+        let task = s.live_title().unwrap_or_default();
+        let task = task.replace('\n', " ");
+        let task = if task.trim().is_empty() {
+            "-".to_string()
+        } else {
+            task
+        };
+        let human = std::process::Command::new("date")
+            .output()
+            .ok()
+            .filter(|o| o.status.success())
+            .map(|o| String::from_utf8_lossy(&o.stdout).trim_end().to_string())
+            .filter(|s| !s.is_empty())
+            .unwrap_or_else(|| format!("epoch-ms {stamp}"));
+        let header = format!(
+            "# harness-terminal scrollback export\n# session: {engine_host}  ({})\n# task: {task}\n# exported: {human}\n\n",
+            s.kind()
+        );
+        let out = format!("{header}{text}");
         // Try the current directory first; if that isn't writable (e.g. an unwritable cwd) fall back
         // to the guaranteed-writable temp dir so the export never silently does nothing.
         let mut path = base.join(&fname);
-        let mut res = std::fs::write(&path, &text);
+        let mut res = std::fs::write(&path, &out);
         if res.is_err() {
             let alt = std::env::temp_dir().join(&fname);
-            res = std::fs::write(&alt, &text);
+            res = std::fs::write(&alt, &out);
             path = alt;
         }
         match res {
             Ok(_) => {
                 self.flash = Some((
-                    format!("wrote {} bytes → {}", text.len(), path.to_string_lossy()),
+                    format!("wrote {} bytes → {}", out.len(), path.to_string_lossy()),
                     now,
                 ));
             }
