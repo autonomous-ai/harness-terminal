@@ -3938,15 +3938,7 @@ impl Application {
         if full.is_empty() {
             // A query with no hit is otherwise completely silent (`n`/`N` and Enter just leave the
             // cursor put) — flash the miss so a diver isn't wondering why the jump didn't fire.
-            let q = clip_dots(query.trim(), 40);
-            self.flash = Some((
-                if q.is_empty() {
-                    "copy: no match".to_string()
-                } else {
-                    format!("copy: no match /{q}")
-                },
-                std::time::Instant::now(),
-            ));
+            self.flash = Some((copy_no_match_flash(&query), std::time::Instant::now()));
             self.copy_pos = (cur_line, 0);
             return;
         }
@@ -7669,6 +7661,18 @@ fn clip_dots(s: &str, max: usize) -> String {
     }
 }
 
+/// Format the copy-mode-search "no match" flash text for the given live query. A query that
+/// matched nothing is otherwise silent (`n`/`N`/Enter just leave the cursor put), so the miss is
+/// surfaced; blank/whitespace queries get the generic message. Pure so it's easy to unit-test.
+fn copy_no_match_flash(query: &str) -> String {
+    let q = clip_dots(query.trim(), 40);
+    if q.is_empty() {
+        "copy: no match".to_string()
+    } else {
+        format!("copy: no match /{q}")
+    }
+}
+
 /// One-line reconnect-all summary: how many panes came back, and — when any didn't — which hosts and
 /// why (clipped so the toast stays short even in a large fleet). Pure so it's unit-testable.
 fn fmt_reconnect_summary(ok: usize, still: &[(String, String)]) -> String {
@@ -8665,11 +8669,11 @@ fn move_slot<T>(v: &mut Vec<T>, from: usize, to: usize) {
 mod tests {
     use super::{
         argb_to_rgb, arrow_seq, broadcast_bytes, clip_dots, cmd_shortcut, collect_fleet_matches,
-        engine_accent, expand_click_word, extra_named_seq, first_down_session, fleet_host_line,
-        fmt_duration, fmt_reconnect_summary, format_engine_mix, fuzzy_match, grid_tile_at,
-        group_notifications, host_color, host_engine_breakdown, host_tally, join_labels, move_slot,
-        next_host_index, parse_remote_attach, reanchor_active_after_batch, recall_index,
-        scroll_top, session_indices_for_host, swap_slot, CmdShortcut, FleetMatch,
+        copy_no_match_flash, engine_accent, expand_click_word, extra_named_seq, first_down_session,
+        fleet_host_line, fmt_duration, fmt_reconnect_summary, format_engine_mix, fuzzy_match,
+        grid_tile_at, group_notifications, host_color, host_engine_breakdown, host_tally,
+        join_labels, move_slot, next_host_index, parse_remote_attach, reanchor_active_after_batch,
+        recall_index, scroll_top, session_indices_for_host, swap_slot, CmdShortcut, FleetMatch,
     };
 
     use std::sync::Arc;
@@ -9281,6 +9285,29 @@ mod tests {
         assert_eq!(clip_dots("主机 refused—retrying", 3), "主机 …");
         // Zero bound collapses to just the ellipsis.
         assert_eq!(clip_dots("anything", 0), "…");
+    }
+
+    /// The copy-mode-search "no match" flash names the missy query so a diver can see what failed,
+    /// trims whitespace, stays generic for a blank query, and clips a very long query.
+    #[test]
+    fn copy_no_match_flash_names_the_query() {
+        assert_eq!(copy_no_match_flash("fix"), "copy: no match /fix");
+        assert_eq!(
+            copy_no_match_flash("  fix  "),
+            "copy: no match /fix",
+            "query text is trimmed"
+        );
+        assert_eq!(
+            copy_no_match_flash("   "),
+            "copy: no match",
+            "blank query falls back to the generic message"
+        );
+        let long = "x".repeat(100);
+        assert_eq!(
+            copy_no_match_flash(&long),
+            format!("copy: no match /{}…", "x".repeat(40)),
+            "over-long query is clipped with an ellipsis"
+        );
     }
 
     /// `fmt_reconnect_summary` reports the count and clips the still-down host+reason detail so a
