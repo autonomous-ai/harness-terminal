@@ -4246,7 +4246,7 @@ impl Application {
             _ => String::new(),
         };
         let prompt = if self.broadcast_query.is_empty() {
-            format!("  send line to {n} of {} session{}{qtag} (↑/↓ focus · Space=toggle · ⇧↑/⇧↓ history · Enter=broadcast · Esc=cancel)  ",
+            format!("  send line to {n} of {} session{}{qtag} (↑/↓ focus · Space=toggle · ⇧Space=all · ⇧↑/⇧↓ history · Enter=broadcast · Esc=cancel)  ",
                 self.app.tabs.len(), if n == 1 { "" } else { "s" })
         } else {
             format!(
@@ -5931,8 +5931,15 @@ impl Application {
                 match key {
                     Key::Character(c) => {
                         if c == " " {
-                            // Space toggles the focused session's target.
-                            if let Some(on) = self.broadcast_targets.get_mut(self.broadcast_sel) {
+                            // Space toggles the focused session's target. Shift+Space toggles the whole
+                            // selection between all-on and all-off — a quick reset after hand-curating
+                            // a set, or a one-key fan-out to every session (the common open state).
+                            if mods.shift_key() {
+                                let all_on = self.broadcast_targets.iter().all(|&t| t);
+                                self.broadcast_targets.iter_mut().for_each(|t| *t = !all_on);
+                            } else if let Some(on) =
+                                self.broadcast_targets.get_mut(self.broadcast_sel)
+                            {
                                 *on = !*on;
                             }
                         } else {

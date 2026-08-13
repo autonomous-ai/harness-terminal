@@ -6,6 +6,9 @@ entries record user-visible and architectural changes since the last tagged mile
 ## Unreleased / 0.1.0 (in progress)
 
 ### Added
+- **Broadcast `Shift+Space` selects/clears every target at once.** In the broadcast overlay,
+  `Shift+Space` toggles the whole selection between all-on and all-off — a one-key reset after
+  hand-curating a set, or a fast fan-out to every session (the common open state).
 - **Reconnect straight from peek triage (`r`).** In the peek overlay (`prefix+s`), `r` reconnects
   the selected pane immediately — no drill-in needed — and the row stays selected so a down `○` flips
   to live when the transport comes back. Aimed at the common "one of my hosts dropped" flow.
