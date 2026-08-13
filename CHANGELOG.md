@@ -5,6 +5,12 @@ entries record user-visible and architectural changes since the last tagged mile
 
 ## Unreleased / 0.1.0 (in progress)
 
+### Fixed
+- **Fleet overlay scrolls past the first 20 sessions.** `prefix+s` now uses a scrolling viewport
+  that keeps the highlighted row on screen, so a fleet bigger than a screenful no longer hides every
+  session after the first 20 behind an invisible selection (Up/Down could select a row you couldn't
+  see). The header shows `▲N above` / `▼N below` when rows are scrolled out of view.
+
 ### Added
 - **Fleet list shows each agent by name.** The `prefix+s` fleet overlay now surfaces the daemon's
   per-session agent name/task (not just engine glyph + truncated id), so a diver can tell which

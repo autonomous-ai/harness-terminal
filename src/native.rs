@@ -2505,6 +2505,7 @@ impl Application {
     /// a live/stale marker. Esc (or any key) dismisses; `s` re-fetches. Never writes to a pane.
     fn render_fleet(&mut self, fb: &mut Framebuffer) {
         let (base_y, line_px) = self.overlay_base_y();
+        const ROWS: usize = 20;
         // Recompute the filter each frame so typing filters live (mirrors the palette overlay).
         self.fleet_refresh_filter();
         let f = &self.app.fleet;
@@ -2525,15 +2526,28 @@ impl Application {
         } else {
             format!("/{} ", self.fleet_query)
         };
+        // Viewport for the scrolling list below; also feeds a "more above/below" hint in the header.
+        let total = self.fleet_filtered.len();
+        let hi = self.app.selected.min(total.saturating_sub(1));
+        let top = if hi >= ROWS { hi - ROWS + 1 } else { 0 }.min(total.saturating_sub(ROWS));
+        let hidden_up = top;
+        let hidden_down = total.saturating_sub(top + ROWS);
+        let scroll = match (hidden_up, hidden_down) {
+            (0, 0) => String::new(),
+            (0, d) => format!(" · ▼{d} below"),
+            (u, 0) => format!(" · ▲{u} above"),
+            (u, d) => format!(" · ▲{u} ▼{d}"),
+        };
         draw_text(
             fb,
             &mut self.cache,
             &format!(
-                "  fleet · {} · {} · {} session{} · {}type to filter · Up/Down+Enter to dive  ",
+                "  fleet · {} · {} · {} session{} · {}{}type to filter · Up/Down+Enter to dive  ",
                 mid,
                 tunnel,
                 n,
                 if n == 1 { "" } else { "s" },
+                scroll,
                 q
             ),
             32,
@@ -2565,13 +2579,17 @@ impl Application {
             );
             return;
         }
-        for (row, &real) in self.fleet_filtered.iter().enumerate().take(20) {
+        // Scrolling viewport: keep the highlighted row on screen. Once the selection passes the
+        // window it rides the bottom edge (classic terminal-list scroll), so a fleet bigger than a
+        // screenful never hides sessions past the first 20 behind an invisible selection.
+        for (row, &real) in self.fleet_filtered.iter().enumerate().skip(top).take(ROWS) {
+            let scr = row - top;
             let s = &f.fleet[real];
             let live = s.is_live();
             let sel = row == self.app.selected;
             let mark = if live { "●" } else { "○" };
             if sel {
-                overlay_row_sel(fb, base_y + (row + 1) * line_px, line_px, 18);
+                overlay_row_sel(fb, base_y + (scr + 1) * line_px, line_px, 18);
             }
             let color = if sel {
                 WHITE
@@ -2614,7 +2632,7 @@ impl Application {
                 &mut self.cache,
                 &line,
                 32,
-                base_y + (row + 1) * line_px,
+                base_y + (scr + 1) * line_px,
                 self.font_px,
                 color,
             );
