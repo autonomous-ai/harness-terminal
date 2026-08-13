@@ -965,9 +965,36 @@ impl Application {
         ));
     }
 
-    /// One line per open tab for the fleet-summary copy: `●/○ engine (N)@host · name · live · ⏳`.
+    /// Fleet-summary copy: a per-host health block (`● build02 2/2 live`) followed by one line per
+    /// open tab (`●/○ engine (N)@host · name · live · ⏳`). The host block is the at-a-glance "which
+    /// machines are up" snapshot for a fleet spread across many computers.
     fn fleet_summary_text(&self) -> String {
         let mut lines: Vec<String> = Vec::new();
+        let hosts = host_tally(
+            self.app
+                .tabs
+                .iter()
+                .map(|s| (s.meta.host.as_str(), s.alive())),
+        );
+        for (h, alive, total) in hosts {
+            let label = if h.is_empty() { "local" } else { h };
+            let mark = if alive == 0 {
+                "○"
+            } else if alive == total {
+                "●"
+            } else {
+                "◐"
+            };
+            let state = if alive == 0 {
+                "down".to_string()
+            } else if alive < total {
+                format!("{alive}/{total} live")
+            } else {
+                "live".to_string()
+            };
+            lines.push(format!("{mark} {label} · {state}"));
+        }
+        lines.push(String::new());
         for (i, s) in self.app.tabs.iter().enumerate() {
             let head = s.meta.name.clone().unwrap_or_else(|| s.meta.engine.clone());
             let state = if s.alive() { "●" } else { "○" };
@@ -6349,6 +6376,25 @@ fn scroll_top(total: usize, selected: usize, rows: usize) -> usize {
     by_bottom.min(total.saturating_sub(rows))
 }
 
+/// Aggregate `(host, alive)` pairs into a per-host tally of `(host, alive_count, total_count)`,
+/// preserving first-seen host order. Pure and unit-tested so the fleet-summary host block and any
+/// future chrome can share one grouping.
+fn host_tally<'a>(tabs: impl Iterator<Item = (&'a str, bool)>) -> Vec<(&'a str, usize, usize)> {
+    let mut out: Vec<(&str, usize, usize)> = Vec::new();
+    for (h, alive) in tabs {
+        match out.iter_mut().find(|(host, _, _)| *host == h) {
+            Some((_, a, t)) => {
+                *t += 1;
+                if alive {
+                    *a += 1;
+                }
+            }
+            None => out.push((h, if alive { 1 } else { 0 }, 1)),
+        }
+    }
+    out
+}
+
 fn collect_fleet_matches(
     terms: &[Arc<
         alacritty_terminal::sync::FairMutex<
@@ -7028,9 +7074,9 @@ fn next_host_index(hosts: &[&str], active: usize) -> Option<usize> {
 mod tests {
     use super::{
         argb_to_rgb, broadcast_bytes, cmd_shortcut, collect_fleet_matches, engine_accent,
-        expand_click_word, fmt_duration, fuzzy_match, group_notifications, host_color, join_labels,
-        next_host_index, parse_remote_attach, reanchor_active_after_batch, recall_index,
-        scroll_top, CmdShortcut, FleetMatch,
+        expand_click_word, fmt_duration, fuzzy_match, group_notifications, host_color, host_tally,
+        join_labels, next_host_index, parse_remote_attach, reanchor_active_after_batch,
+        recall_index, scroll_top, CmdShortcut, FleetMatch,
     };
 
     use std::sync::Arc;
@@ -7453,6 +7499,27 @@ mod tests {
         // Empty / total == 1.
         assert_eq!(scroll_top(0, 0, 20), 0);
         assert_eq!(scroll_top(1, 0, 20), 0);
+    }
+
+    /// Host tally groups by machine in first-seen order with live/total counts, so the fleet
+    /// summary's ``host · 2/2 live`` snapshot is correct across a multi-machine farm.
+    #[test]
+    fn host_tally_groups_by_machine() {
+        let tabs = [
+            ("build02", true),
+            ("edge1", false),
+            ("build02", true),
+            ("edge1", false),
+            ("build02", false),
+        ];
+        let tally = host_tally(tabs.iter().copied());
+        assert_eq!(
+            tally,
+            vec![("build02", 2, 3), ("edge1", 0, 2)],
+            "engine@host grouping with partial-live counts"
+        );
+        // Empty fleet → no hosts.
+        assert!(host_tally(std::iter::empty()).is_empty());
     }
 
     /// Idle-age formatting stays compact and readable at every scale — seconds, minutes, hours,

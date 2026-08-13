@@ -35,6 +35,11 @@ entries record user-visible and architectural changes since the last tagged mile
   see). The header shows `▲N above` / `▼N below` when rows are scrolled out of view.
 
 ### Added
+- **Copied fleet summary opens with a per-host health block.** `copy_fleet` now prepends a
+  machine-by-machine snapshot (``● build02 · 2/2 live`` / ``○ edge1 · down``) before the per-session
+  lines, so pasting fleet status answers "which machines are up" at a glance across a multi-computer
+  farm. Grouping is a pure `host_tally` helper (unit-tested).
+
 - **`Cmd+Shift+R` force-reconnects every down pane at once** (the browser "reload" muscle memory),
   mirroring the `reconnect_all` prefix action — one key to bring a whole fleet back instead of
   hopping host by host. Plain `Cmd+R` stays with the shell. Listed in the help overlay.
