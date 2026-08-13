@@ -36,6 +36,10 @@ entries record user-visible and architectural changes since the last tagged mile
   reconnect.
 
 ### Fixed
+- **Pin now protects a native-mode tab from Cmd+W.** `Cmd+W` / the menu's Close Tab closed a pinned
+  session in native window-tabs, even though the shield is a documented promise ("won't close until
+  unpinned") honored everywhere else. Our close now refuses with the same 🔒 flash as the in-app `x`;
+  closing via the OS traffic-light remains a deliberate, unblocked on-window gesture.
 - **A configured `default_engine` now actually pins the new-session picker.** Previously any engine
   usage at all made recency override the config, so setting `default_engine = "codex"` but having once
   used `claude` kept preselected `claude`. An explicitly-set default (anything other than the built-in

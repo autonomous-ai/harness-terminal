@@ -7693,6 +7693,19 @@ impl ApplicationHandler for Application {
         if self.close_active_requested {
             self.close_active_requested = false;
             if self.native_tabs && !self.hosts.is_empty() {
+                // Respect pin in native mode too: our Cmd+W / menu CloseTab must not close a pinned
+                // session any more than the in-app `x` does. The OS traffic-light close is a separate
+                // deliberate gesture on the window (handled via CloseRequested, not here) and is not
+                // blocked — but our own close stays honest to the shield.
+                let tab = self.hosts[self.active_host].tab;
+                if self.pinned.get(tab).copied().unwrap_or(false) {
+                    self.flash = Some((
+                        "🔒 pinned — prefix A to unpin first".to_string(),
+                        std::time::Instant::now(),
+                    ));
+                    self.request_redraw();
+                    return;
+                }
                 self.close_native_tab(self.active_host, event_loop);
             } else if !self.app.tabs.is_empty() {
                 self.close_tab_at(self.app.active);
