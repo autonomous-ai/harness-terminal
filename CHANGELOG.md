@@ -194,6 +194,10 @@ entries record user-visible and architectural changes since the last tagged mile
   drag-reorder paths.
 
 ### Added
+- **Next-* jumps say when there's nothing left to find.** `prefix+z` (next quiet), `prefix+o`
+  (next busy), `prefix+Q` (next down), `prefix+P` (next pinned) and `prefix+H` (next host) now flash
+  `no quiet tabs` / `no busy tabs` / `no down tabs` / `no other pinned tab` / `no other host`
+  instead of silently doing nothing — so a no-op jump is explained, like the copy-mode no-match cue.
 - **The hosts drill-in shows how long a quiet session has been waiting.** Drilling into a host
   (`Ctrl+H .` → `→`) now tags a quiet (awaiting-you) session `⌛3m` — matching the fleet grid and
   peek — so per-host triage tells you which agents on that machine are parked the longest.

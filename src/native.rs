@@ -1348,6 +1348,8 @@ impl Application {
                 return;
             }
         }
+
+        self.flash = Some(("no busy tabs".to_string(), std::time::Instant::now()));
     }
 
     /// Which live, backgrounded, unprotected tabs have sat silent past the quiet threshold — the
@@ -1434,6 +1436,8 @@ impl Application {
                 return;
             }
         }
+
+        self.flash = Some(("no quiet tabs".to_string(), std::time::Instant::now()));
     }
 
     /// `prefix+Q`: jump to the next tab whose session is down (disconnected / in reconnect backoff),
@@ -1469,6 +1473,8 @@ impl Application {
                 return;
             }
         }
+
+        self.flash = Some(("no down tabs".to_string(), std::time::Instant::now()));
     }
 
     /// `prefix+P`: jump to the next pinned tab (wrapping). Pinned tabs are the long-running agents
@@ -1488,6 +1494,8 @@ impl Application {
                 return;
             }
         }
+
+        self.flash = Some(("no other pinned tab".to_string(), std::time::Instant::now()));
     }
 
     /// `prefix+H`: jump to the next unique host in the fleet, wrapping. For a fleet spread across
@@ -1501,6 +1509,8 @@ impl Application {
             let target = self.app.tabs[i].meta.host.clone();
             self.flash = Some((format!("host {target}"), std::time::Instant::now()));
             self.set_active(i);
+        } else {
+            self.flash = Some(("no other host".to_string(), std::time::Instant::now()));
         }
     }
 
