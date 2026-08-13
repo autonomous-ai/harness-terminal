@@ -6,6 +6,8 @@ entries record user-visible and architectural changes since the last tagged mile
 ## Unreleased / 0.1.0 (in progress)
 
 ### Added
+- **Help overlay now lists the in-overlay shortcuts** (peek `r`/`n`, broadcast `Space`/`⇧Space`,
+  fleet-grid marking) so the keybindings you can use inside the triage overlays are discoverable.
 - **Broadcast `Shift+Space` selects/clears every target at once.** In the broadcast overlay,
   `Shift+Space` toggles the whole selection between all-on and all-off — a one-key reset after
   hand-curating a set, or a fast fan-out to every session (the common open state).

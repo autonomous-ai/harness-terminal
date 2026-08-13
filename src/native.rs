@@ -3698,12 +3698,16 @@ impl Application {
                 "reconnect this host / broadcast to this host",
             ),
             (
-                "Peek · / then type",
-                "filter the peek list (host/engine/name/down) · Esc clears",
+                "Peek · / filter · n down · r reconnect",
+                "narrow by host/engine/name/down · next down · reconnect selection",
             ),
             (
-                "Fleet grid · b / C / x / X / R",
-                "broadcast · Ctrl-C · close sel · close all marked · reconnect",
+                "Broadcast · Space · ⇧Space",
+                "toggle one target · select all / clear all",
+            ),
+            (
+                "Fleet grid · Space mark · b/C/x/X/R",
+                "mark · broadcast · Ctrl-C · close · bulk-close · reconnect",
             ),
         ] {
             all.push((k.to_string(), d.to_string()));
