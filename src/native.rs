@@ -3993,6 +3993,24 @@ impl Application {
         }
     }
 
+    /// Open the peek overlay. A diver dropping in wants to land on the host that needs
+    /// attention, so if any remote pane is down the selection starts on the first one (and the
+    /// scroll is positioned so its preview is already on screen); otherwise the top of the list.
+    fn open_peek(&mut self) {
+        self.app.overlay = Overlay::Peek;
+        self.peek_sel = 0;
+        self.peek_scroll = 0;
+        let kinds: Vec<&str> = self.app.tabs.iter().map(|t| t.kind()).collect();
+        let alive: Vec<bool> = self.app.tabs.iter().map(|t| t.alive()).collect();
+        if let Some(i) = first_down_session(&kinds, &alive) {
+            self.peek_sel = i;
+            // Slide the window up so the down session's preview is visible even near the bottom.
+            self.peek_scroll = i
+                .saturating_sub(9)
+                .min(self.app.tabs.len().saturating_sub(10));
+        }
+    }
+
     fn render_peek(&mut self, fb: &mut Framebuffer) {
         let (base_y, line_px) = self.overlay_base_y();
         draw_text(
@@ -4181,11 +4199,7 @@ impl Application {
                 self.broadcast_sel = 0;
                 self.app.overlay = Overlay::Broadcast;
             }
-            Peek => {
-                self.app.overlay = Overlay::Peek;
-                self.peek_sel = 0;
-                self.peek_scroll = 0;
-            }
+            Peek => self.open_peek(),
             FleetGrid => {
                 self.grid_sel = 0;
                 self.app.overlay = Overlay::FleetGrid;
@@ -4648,11 +4662,7 @@ impl Application {
                 Some("export_scrollback") => self.export_scrollback(),
                 Some("copy_identity") => self.copy_identity(),
                 Some("copy_fleet") => self.copy_fleet(),
-                Some("peek") => {
-                    self.app.overlay = Overlay::Peek;
-                    self.peek_sel = 0;
-                    self.peek_scroll = 0;
-                }
+                Some("peek") => self.open_peek(),
                 Some("undo_close") => self.app.reopen_last_closed(),
                 Some("duplicate") => {
                     self.duplicate_active_preserving_pin();
@@ -7805,6 +7815,16 @@ pub(crate) fn parse_remote_attach(raw: &str) -> (String, Option<String>) {
     }
 }
 
+/// The first session that is a down remote pane (a non-PTY transport that has dropped) —
+/// the host a fleet diver most needs to notice when they open the peek list. Pure so the
+/// peek-landing rule is unit-testable without building real transports.
+fn first_down_session(kinds: &[&str], alive: &[bool]) -> Option<usize> {
+    kinds
+        .iter()
+        .zip(alive.iter())
+        .position(|(&k, &a)| k != "pty" && !a)
+}
+
 /// Case-insensitive fuzzy (subsequence) matcher for palette filtering: every query character must
 /// appear in `hay`, in order, but not necessarily contiguously. So `crd` matches "cursor codex",
 /// `fleet` matches "fleet grid", and a blank query matches everything. Pure, so it's unit-testable.
@@ -7927,9 +7947,9 @@ fn move_slot<T>(v: &mut Vec<T>, from: usize, to: usize) {
 mod tests {
     use super::{
         argb_to_rgb, arrow_seq, broadcast_bytes, clip_dots, cmd_shortcut, collect_fleet_matches,
-        engine_accent, expand_click_word, extra_named_seq, fleet_host_line, fmt_duration,
-        fmt_reconnect_summary, format_engine_mix, fuzzy_match, group_notifications, host_color,
-        host_engine_breakdown, host_tally, join_labels, move_slot, next_host_index,
+        engine_accent, expand_click_word, extra_named_seq, first_down_session, fleet_host_line,
+        fmt_duration, fmt_reconnect_summary, format_engine_mix, fuzzy_match, group_notifications,
+        host_color, host_engine_breakdown, host_tally, join_labels, move_slot, next_host_index,
         parse_remote_attach, reanchor_active_after_batch, recall_index, scroll_top,
         session_indices_for_host, swap_slot, CmdShortcut, FleetMatch,
     };
@@ -8249,6 +8269,28 @@ mod tests {
             parse_remote_attach("build.example.com/"),
             ("build.example.com/".to_string(), None)
         );
+    }
+
+    /// Peek lands on the first still-down remote pane, skipping live PTYs, and falls back to the
+    /// top of the list when the fleet is healthy.
+    #[test]
+    fn first_down_session_picks_the_down_remote_pane() {
+        // Live pty, live ssh, down tunnel, live tmux -> lands on index 2.
+        let kinds = ["pty", "ssh", "tunnel", "tmux"];
+        let alive = [true, true, false, true];
+        assert_eq!(first_down_session(&kinds, &alive), Some(2));
+        // A down pty is not a remote pane — ignored, falls back to None.
+        let kinds2 = ["pty", "pty"];
+        let alive2 = [true, false];
+        assert_eq!(first_down_session(&kinds2, &alive2), None);
+        // All healthy -> none.
+        let kinds3 = ["ssh", "tmux", "tunnel"];
+        let alive3 = [true, true, true];
+        assert_eq!(first_down_session(&kinds3, &alive3), None);
+        // First down remote at index 0 wins even though a later one is also down.
+        let kinds4 = ["tmux", "ssh", "tunnel"];
+        let alive4 = [false, true, false];
+        assert_eq!(first_down_session(&kinds4, &alive4), Some(0));
     }
 
     /// Fuzzy palette matching: subsequence (not just substring), case-insensitive, blank matches all.

@@ -6,6 +6,10 @@ entries record user-visible and architectural changes since the last tagged mile
 ## Unreleased / 0.1.0 (in progress)
 
 ### Added
+- **The peek list opens on the first pane that's down.** Previously `prefix+y` (peek) always landed
+  on the top of the fleet, so a diver had to page back through live hosts to find the one that
+  dropped. It now selects and scrolls to the first still-down remote pane (if any), so trouble is
+  front and center the moment the list opens.
 - **Copying the whole scrollback now confirms it worked.** `prefix+d` copied silently — no flash,
   unlike every other copy action. It now flashes `copied N chars of scrollback` so a diver dumping a
   long agent log knows the paste landed without second-guessing the clipboard.
