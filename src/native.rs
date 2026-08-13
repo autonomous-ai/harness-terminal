@@ -235,6 +235,11 @@ struct Application {
     /// by `activity_flags`; the tab bar shows it as the badge magnitude so a diver reads how hot a
     /// pane is, not just *that* it moved.
     grew_delta: Vec<usize>,
+    /// Cumulative unread scrollback lines per tab since the user last looked (or marked read), used
+    /// solely for the persistent `!N` badge. Unlike `grew_delta` (a per-frame delta that feeds the
+    /// busy detector and live-pump), this accumulates across frames and only resets when the tab is
+    /// focused or `mark_all_read` runs, so a settled agent's badge lingers per the docs.
+    unread: Vec<usize>,
     /// Whether any tab produced output the last frame we rendered (the live "busy" signal used to
     /// decide if the render loop should keep pumping at full rate vs. drop to its idle tick). Set
     /// during `render` from the same `activity_flags` pass that draws the badges, so it reflects
@@ -597,6 +602,7 @@ impl Application {
             muted,
             pinned,
             grew_delta: vec![0; tab_count],
+            unread: vec![0; tab_count],
             live_busy: false,
             detect_len: Vec::new(),
             content_sig: Vec::new(),
@@ -893,6 +899,7 @@ impl Application {
         self.muted.resize(n, false);
         self.pinned.resize(n, false);
         self.grew_delta.resize(n, 0);
+        self.unread.resize(n, 0);
         self.grid_marks.resize(n, false);
         // `last_output` is otherwise only shaped by forget_tab (shrink) — every other tab-parallel
         // vector is resized here. New tabs start stamped "now" so they don't instantly read quiet.
@@ -907,11 +914,20 @@ impl Application {
                 self.seen_history[i] = s.history_len();
                 self.notified[i] = false;
                 self.grew_delta[i] = 0;
+                // Looking at it clears the cumulative unread badge (the same re-baseline a
+                // `mark_all_read` applies). The count starts fresh next time it's backgrounded.
+                self.unread[i] = 0;
                 continue;
             }
             let len = s.history_len();
             let grew = self.seen_history[i] != usize::MAX && len > self.seen_history[i];
-            self.grew_delta[i] = len.saturating_sub(self.seen_history[i]);
+            let delta = len.saturating_sub(self.seen_history[i]);
+            self.grew_delta[i] = delta;
+            // Accumulate the fresh output into the cumulative unread count so the `!N` badge
+            // lingers after the agent settles (it only resets when this tab is looked at / read).
+            if !self.muted[i] {
+                self.unread[i] = self.unread[i].saturating_add(delta);
+            }
             self.seen_history[i] = len;
             if grew {
                 // This is genuine fresh output from a session we're not looking at — a timestamp of
@@ -991,6 +1007,7 @@ impl Application {
         swap_slot(&mut self.pinned, a, b);
         swap_slot(&mut self.seen_history, a, b);
         swap_slot(&mut self.grew_delta, a, b);
+        swap_slot(&mut self.unread, a, b);
         swap_slot(&mut self.last_output, a, b);
         swap_slot(&mut self.notified, a, b);
         swap_slot(&mut self.grid_marks, a, b);
@@ -1014,6 +1031,7 @@ impl Application {
         move_slot(&mut self.pinned, from, to);
         move_slot(&mut self.seen_history, from, to);
         move_slot(&mut self.grew_delta, from, to);
+        move_slot(&mut self.unread, from, to);
         move_slot(&mut self.last_output, from, to);
         move_slot(&mut self.notified, from, to);
         move_slot(&mut self.grid_marks, from, to);
@@ -2062,6 +2080,7 @@ impl Application {
                 self.seen_history[i] = s.history_len();
             }
             self.grew_delta[i] = 0;
+            self.unread[i] = 0;
             self.notified[i] = false;
             // Drop any bell/recovery badges still fading.
             self.bell_until[i] = None;
@@ -2279,8 +2298,11 @@ impl Application {
                 // A magnitude badge shows how much a backgrounded tab produced since we last looked
                 // (rooted at 1 so one line displays as "!1", capped so it doesn't eat the bar); a muted
                 // tab is dimmed and shows M instead so its silence is read at a glance.
-                let delta = self.grew_delta.get(i).copied().unwrap_or(0);
-                let flag = if activity[i] {
+                // Cumulative unread lines since last looked (fed by `unread`, cleared on focus /
+                // mark-read) — shown whenever non-zero so a settled agent's badge lingers, per the
+                // doc comment, instead of vanishing the instant output pauses.
+                let delta = self.unread.get(i).copied().unwrap_or(0);
+                let flag = if delta > 0 {
                     format!("!{}", delta.min(999))
                 } else {
                     String::new()
@@ -8154,6 +8176,9 @@ impl Application {
         }
         if i < self.grew_delta.len() {
             self.grew_delta.remove(i);
+        }
+        if i < self.unread.len() {
+            self.unread.remove(i);
         }
         for v in [
             &mut self.notified,

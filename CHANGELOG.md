@@ -6,6 +6,14 @@ entries record user-visible and architectural changes since the last tagged mile
 ## Unreleased / 0.1.0 (in progress)
 
 ### Fixed
+- **The `!N` unread badge now actually means "new lines since you last looked."** Previously the
+  count was a per-frame delta gated on the tab producing output *that very frame*, so a burst that
+  settled (an agent that wrote 43 lines and paused) flashed `!43` for a split second and then
+  vanished even if you never glanced at the tab. It's now a cumulative count in a dedicated `unread`
+  slot that lingers until you look at the tab (or `prefix+I` mark-read) — the documented behavior.
+  Muted tabs still show `M` and accumulate nothing, the live spinner is unchanged, and idle CPU is
+  unaffected (unread only grows with actual output). The per-frame busy flag (`grew_delta`) that
+  drives the peeks/fleet/palette is untouched.
 - **A new native tab now takes focus.** Opening a session in `native_tabs` mode (Cmd+T/N, New
   Session, Remote Attach, duplicate, reopen) created a window spliced into the tab group but never
   surfaced it, so the new agent sat hidden behind the old tab until you clicked or tab-switched. Now
