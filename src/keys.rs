@@ -147,6 +147,29 @@ pub fn binding_for(cfg: &BTreeMap<String, String>, action: &str) -> String {
         .unwrap_or_default()
 }
 
+/// Build the key → action dispatch table actually used to route a prefix key to its command.
+///
+/// Unlike [`resolve`] (an action → key map, which can't express what happens when two actions
+/// share a key), this returns the map the command handler looks up. Defaults are inserted first,
+/// then explicit `[keybindings]` remaps overwrite — so a remap **always wins**, even when the
+/// remapped key is also a *different* action's default. (Reversing `resolve`'s action-sorted map
+/// previously let a remap like `broadcast → "x"` be silently shadowed by `close_tab`'s default
+/// `x`, depending on alphabetical order — this guarantees the user's intent wins.)
+pub fn resolve_inverted(cfg: &BTreeMap<String, String>) -> BTreeMap<String, String> {
+    let mut out = BTreeMap::new();
+    for (action, key) in ACTIONS {
+        out.insert(key.to_string(), action.to_string());
+    }
+    for (action, key) in cfg {
+        let is_known = ACTIONS.iter().any(|(a, _)| a == action);
+        let key = key.trim();
+        if is_known && !key.is_empty() {
+            out.insert(key.to_string(), action.clone());
+        }
+    }
+    out
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -199,6 +222,44 @@ mod tests {
         assert_eq!(resolved["new_session"], "N");
         assert_eq!(resolved["fleet"], "s");
         assert_eq!(resolved.len(), ACTIONS.len());
+    }
+
+    #[test]
+    fn inverted_defaults_map_every_unique_key_to_its_action() {
+        let out = resolve_inverted(&BTreeMap::new());
+        assert_eq!(out.len(), ACTIONS.len());
+        // Every default key maps to the action bound to it.
+        for (action, key) in ACTIONS {
+            assert_eq!(out.get(*key).map(String::as_str), Some(*action));
+        }
+        // Swapping a default pair round-trips through both resolvers.
+        let mut cfg = BTreeMap::new();
+        cfg.insert("search".to_string(), "F".to_string());
+        let out = resolve_inverted(&cfg);
+        assert_eq!(out["F"], "search");
+    }
+
+    #[test]
+    fn inverted_explicit_remap_beats_another_actions_default() {
+        // `broadcast`'s default is "a", `close_tab`'s is "x". Remapping broadcast → "x" (a key
+        // close_tab already owns) must keep the USER's choice, not be shadowed alphabetically.
+        let mut cfg = BTreeMap::new();
+        cfg.insert("broadcast".to_string(), "x".to_string());
+        let out = resolve_inverted(&cfg);
+        assert_eq!(out["x"], "broadcast", "explicit remap must win the shared key");
+        // And the displaced action's original key is gone from dispatch (one key = one action).
+        assert!(out.values().all(|a| a != "close_tab") || out.len() == ACTIONS.len());
+    }
+
+    #[test]
+    fn inverted_ignores_unknown_or_empty_remaps() {
+        let mut cfg = BTreeMap::new();
+        cfg.insert("does_not_exist".to_string(), "z".to_string());
+        cfg.insert("search".to_string(), "".to_string());
+        let out = resolve_inverted(&cfg);
+        for (action, key) in ACTIONS {
+            assert_eq!(out.get(*key).map(String::as_str), Some(*action));
+        }
     }
 
     #[test]

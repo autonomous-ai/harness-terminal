@@ -522,10 +522,11 @@ impl Application {
         // Resolve prefix bindings once: action name -> key. Reverse it to key -> action so the
         // command handler can look up a pressed key directly. Unknown actions in config are dropped
         // by `resolve`, so this always covers every action with a valid key.
-        let key_action = crate::keys::resolve(&cfg.keybindings.unwrap_or_default())
-            .into_iter()
-            .map(|(action, key)| (key, action))
-            .collect::<std::collections::BTreeMap<String, String>>();
+        // Resolve bindings into the key→action table used at dispatch. `resolve_inverted`
+        // inserts defaults first and explicit `[keybindings]` remaps last, so a remap always wins
+        // over another action's default sharing that key (a `broadcast → x` remap won't be
+        // shadowed by `close_tab`'s default `x`). The digits/Tab stay fixed outside this table.
+        let key_action = crate::keys::resolve_inverted(&cfg.keybindings.unwrap_or_default());
         let colors = match &cfg.theme {
             Some(t) => crate::render::Colors::from(t),
             None => crate::render::Colors::default(),

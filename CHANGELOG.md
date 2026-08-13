@@ -6,6 +6,12 @@ entries record user-visible and architectural changes since the last tagged mile
 ## Unreleased / 0.1.0 (in progress)
 
 ### Fixed
+- **A `[keybindings]` remap can no longer be silently shadowed by another action's default.** The
+  dispatch table was built by reversing a sorted action-name map, so a remap like `broadcast → "x"`
+  would quietly lose to `close_tab`'s default `x` (precedence was alphabetical, not "the user's
+  explicit choice wins"). Resolution now inserts defaults first and explicit remaps last, so your
+  `[keybindings]` override always wins a shared key; the digits/Tab stays fixed regardless.
+  Covered by new `resolve_inverted` unit tests.
 - **Mouse-drag state no longer sticks after the pointer leaves the window.** If you pressed inside
   a mouse-mode app (vim/tmux/htop), dragged out, and released *outside* the window, no release
   event arrived, so `mouse_left_down` stayed true and the app kept receiving drag-motion (code 32)
