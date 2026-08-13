@@ -762,6 +762,9 @@ impl Application {
         self.pinned.resize(n, false);
         self.grew_delta.resize(n, 0);
         self.grid_marks.resize(n, false);
+        // `last_output` is otherwise only shaped by forget_tab (shrink) — every other tab-parallel
+        // vector is resized here. New tabs start stamped "now" so they don't instantly read quiet.
+        self.last_output.resize(n, std::time::Instant::now());
         let mut flags = vec![false; n];
         // Collect the indices that first went busy so we can queue after the immutable tab-borrow
         // loop ends (`queue_notify` needs `&mut self`).

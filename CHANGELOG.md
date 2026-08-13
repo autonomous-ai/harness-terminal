@@ -6,7 +6,20 @@ entries record user-visible and architectural changes since the last tagged mile
 ## Unreleased / 0.1.0 (in progress)
 
 ### Performance
+- **The fleet's quiet detector no longer reads the config file on every frame.** `quiet_flags`
+  (the per-frame triage count and status line) plus the fleet-grid and `prefix+z` quiet checks each
+  called `Config::load()` — a disk read + TOML parse — up to twice per rendered frame. The
+  `quiet_after_secs` threshold is now resolved once at startup and cached, eliminating all
+  hot-path config I/O.
+
 ### Fixed
+- **Adding a session no longer risks an out-of-bounds panic.** `last_output` (the per-tab "quiet
+  since" timestamp) was the only tab-indexed vector never grown when a new tab spawned — every
+  other parallel vector is resized to the tab count each frame. With two or more *remote* (non-pty)
+  tabs, a backgrounded pane producing output, or the info overlay on a newly-added remote pane,
+  indexed `last_output[i]` past its length would panic. It's now resized alongside the other
+  per-frame vectors (new tabs stamped "now" so they don't instantly read quiet).
+
 - **Closing tabs no longer desyncs the internal per-tab bookkeeping.** The palette / context-menu /
   `prefix+D` close path (and "close all quiet tabs") removed a session from the tab list without
   re-syncing the per-tab vectors (`last_output`, `was_down`, `bell_until`, `recover_until`,
@@ -15,12 +28,6 @@ entries record user-visible and architectural changes since the last tagged mile
   "close all quiet" path also drops the matching native window (no orphaned windows) and correctly
   re-anchors focus when a quiet tab below the active one is peeled off. Covered by an exhaustive
   `reanchor_active_after_batch` regression test (111→112 unit tests).
-
-- **The fleet's quiet detector no longer reads the config file on every frame.** `quiet_flags`
-  (the per-frame triage count and status line) plus the fleet-grid and `prefix+z` quiet checks each
-  called `Config::load()` — a disk read + TOML parse — up to twice per rendered frame. The
-  `quiet_after_secs` threshold is now resolved once at startup and cached, eliminating all
-  hot-path config I/O.
 
 ### Fixed
 - **`retry_backoff_ladder_caps_at_60` silently wasn't running.** A stray `#[test]` attribute had
