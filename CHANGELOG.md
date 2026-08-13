@@ -6,6 +6,12 @@ entries record user-visible and architectural changes since the last tagged mile
 ## Unreleased / 0.1.0 (in progress)
 
 ### Added
+- **Jump flashes say where you landed.** `prefix+z` (next quiet), `prefix+Q` (next down), and
+  `prefix+P` (next pinned) now flash the target tab's identity (`quiet — claude@build02`) like
+  `prefix+H` already did for host jumps, so a fleet triage hop is legible at a glance instead of a
+  silent tab switch.
+
+### Added
 - **Configurable remote-attach connect timeout (`config.connect_timeout_secs`).** A tunnel
   spawn/attach waits up to 4s by default on the main thread, so a wedged host freezes the UI that
   long. The timeout is now tunable (clamped 1..=30): lower it to cap the freeze, raise it for a slow

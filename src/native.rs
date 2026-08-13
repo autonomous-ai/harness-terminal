@@ -1178,6 +1178,8 @@ impl Application {
             }
             let idle = std::time::Instant::now() - self.last_output[i];
             if idle >= threshold {
+                let id = self.tab_identity(i);
+                self.flash = Some((format!("quiet — {id}"), std::time::Instant::now()));
                 self.set_active(i);
                 return;
             }
@@ -1197,6 +1199,8 @@ impl Application {
             let i = (self.app.active + step) % n;
             let down = !self.app.tabs[i].alive() && self.app.tabs[i].kind() != "pty"; // live local PTY is never "down"
             if down {
+                let id = self.tab_identity(i);
+                self.flash = Some((format!("down — {id}"), std::time::Instant::now()));
                 self.set_active(i);
                 return;
             }
@@ -1214,6 +1218,8 @@ impl Application {
         for step in 1..=n {
             let i = (self.app.active + step) % n;
             if self.pinned.get(i).copied().unwrap_or(false) {
+                let id = self.tab_identity(i);
+                self.flash = Some((format!("pinned — {id}"), std::time::Instant::now()));
                 self.set_active(i);
                 return;
             }
@@ -1231,6 +1237,18 @@ impl Application {
             let target = self.app.tabs[i].meta.host.clone();
             self.flash = Some((format!("host {target}"), std::time::Instant::now()));
             self.set_active(i);
+        }
+    }
+
+    /// Short legible identity for a tab, e.g. `claude@build02` (name falls back to engine).
+    /// Used by `next_quiet`/`next_down`/`next_pinned` so a jump flash says *where* it landed.
+    fn tab_identity(&self, i: usize) -> String {
+        match self.app.tabs.get(i) {
+            Some(s) => {
+                let head = s.meta.name.clone().unwrap_or_else(|| s.meta.engine.clone());
+                format!("{head}@{}", s.meta.host)
+            }
+            None => "?".to_string(),
         }
     }
 
