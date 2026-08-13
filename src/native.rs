@@ -874,6 +874,9 @@ impl Application {
         swap_slot(&mut self.bell_until, a, b);
         swap_slot(&mut self.was_down, a, b);
         swap_slot(&mut self.recover_until, a, b);
+        swap_slot(&mut self.broadcast_targets, a, b);
+        swap_slot(&mut self.detect_len, a, b);
+        swap_slot(&mut self.content_sig, a, b);
     }
 
     /// Apply the same remove/insert relocation as `App::move_tab_from_to` to every tab-parallel
@@ -890,6 +893,9 @@ impl Application {
         move_slot(&mut self.bell_until, from, to);
         move_slot(&mut self.was_down, from, to);
         move_slot(&mut self.recover_until, from, to);
+        move_slot(&mut self.broadcast_targets, from, to);
+        move_slot(&mut self.detect_len, from, to);
+        move_slot(&mut self.content_sig, from, to);
     }
 
     /// Persist the current tab list to disk. Called right after a successful spawn so a freshly
@@ -6527,6 +6533,12 @@ impl Application {
         if i < self.last_output.len() {
             self.last_output.remove(i);
         }
+        if i < self.detect_len.len() {
+            self.detect_len.remove(i);
+        }
+        if i < self.content_sig.len() {
+            self.content_sig.remove(i);
+        }
         // Stale pointer state referencing the removed slot is reset so it can't dangle.
         self.hover_tab = None;
         self.drag_tab = None;
@@ -8378,5 +8390,45 @@ mod tests {
         // A host with no sessions is empty.
         assert!(session_indices_for_host(tabs.into_iter(), "nope").is_empty());
         assert!(session_indices_for_host(std::iter::empty(), "local").is_empty());
+    }
+    /// Every element type the tab-parallel vectors use (bool, usize, u64, Instant, Option<Instant>)
+    /// must survive the swap/remove-insert relocation with its session, not drift to another slot.
+    /// Guards the move/drag path against a newly-routed vector silently misaligning.
+    #[test]
+    fn parallel_swap_and_reorder_keep_every_element_type_aligned() {
+        let t0 = std::time::Instant::now();
+        let t1 = t0 + std::time::Duration::from_millis(1);
+        let t2 = t0 + std::time::Duration::from_millis(2);
+        // All "vectors" share a session identity via their slot; values tag the original session.
+        let mut muted: Vec<bool> = vec![false, true, false];
+        let mut detect_len: Vec<usize> = vec![0, 1, 2];
+        let mut content_sig: Vec<u64> = vec![10, 11, 12];
+        let mut last_output: Vec<std::time::Instant> = vec![t0, t1, t2];
+        let mut recover_until: Vec<Option<std::time::Instant>> = vec![None, Some(t1), None];
+
+        // Swap slots 0 and 1 (like a prefix move of the active tab).
+        swap_slot(&mut muted, 0, 1);
+        swap_slot(&mut detect_len, 0, 1);
+        swap_slot(&mut content_sig, 0, 1);
+        swap_slot(&mut last_output, 0, 1);
+        swap_slot(&mut recover_until, 0, 1);
+        // Session 1 (originally muted, sig 11, t1) moved to slot 0 with all its flags.
+        assert_eq!(muted, vec![true, false, false]);
+        assert_eq!(detect_len, vec![1, 0, 2]);
+        assert_eq!(content_sig, vec![11, 10, 12]);
+        assert_eq!(last_output, vec![t1, t0, t2]);
+        assert_eq!(recover_until, vec![Some(t1), None, None]);
+
+        // Reorder (remove slot 0 -> insert at 2) like a drag; all stay aligned.
+        move_slot(&mut muted, 0, 2);
+        move_slot(&mut detect_len, 0, 2);
+        move_slot(&mut content_sig, 0, 2);
+        move_slot(&mut last_output, 0, 2);
+        move_slot(&mut recover_until, 0, 2);
+        assert_eq!(muted, vec![false, false, true]);
+        assert_eq!(detect_len, vec![0, 2, 1]);
+        assert_eq!(content_sig, vec![10, 12, 11]);
+        assert_eq!(last_output, vec![t0, t2, t1]);
+        assert_eq!(recover_until, vec![None, None, Some(t1)]);
     }
 }

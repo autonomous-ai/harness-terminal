@@ -5,6 +5,16 @@ entries record user-visible and architectural changes since the last tagged mile
 
 ## Unreleased / 0.1.0 (in progress)
 
+### Fixed
+- **Moving or drag-reordering a tab no longer leaves fleet broadcast marks or the content-change
+  detector on the wrong session.** The tab-move fix covered pin/mute/busy/badge state, but three
+  more tab-parallel vectors were left behind: `broadcast_targets` (a `b` broadcast mark could fire
+  on the wrong session after a move) and the per-session change-detection snapshots
+  `detect_len`/`content_sig` (a spurious idle-wake / missed redraw). They now follow the session
+  like the rest; closing a tab also drops all three consistently. A test proves every element type
+  used by these vectors (bool/usize/u64/Instant/Option) stays aligned through both the swap and
+  drag-reorder paths.
+
 ### Added
 - **Host overview shows each machine's agent mix.** `prefix+.` now lists not just how many
   sessions are up per host but which agents are running there (`● build02 · live · 2 sessions ·
