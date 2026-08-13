@@ -11,6 +11,9 @@ entries record user-visible and architectural changes since the last tagged mile
   a bulk close — defeating the "marks required so a stray press is never destructive" guard. Marks
   now clear on grid close, matching the broadcast overlay's fresh-reset behavior.
 ### Added
+- **Peek `/` filter understands `busy` and `quiet`.** On top of `up`/`down` and substring matching,
+  the peek triage (`prefix+s`) now narrows to agents that just produced output (`busy`) or have been
+  parked past the quiet threshold (`quiet`) — so a diver can go straight to "who needs attention".
 - **Help overlay now lists the in-overlay shortcuts** (peek `r`/`n`, broadcast `Space`/`⇧Space`,
   fleet-grid marking) so the keybindings you can use inside the triage overlays are discoverable.
 - **Broadcast `Shift+Space` selects/clears every target at once.** In the broadcast overlay,

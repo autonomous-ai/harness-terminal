@@ -3699,7 +3699,7 @@ impl Application {
             ),
             (
                 "Peek · / filter · n down · r reconnect",
-                "narrow by host/engine/name/down · next down · reconnect selection",
+                "narrow by host/engine/name · up/down/busy/quiet · n next down · r reconnect",
             ),
             (
                 "Broadcast · Space · ⇧Space",
@@ -4518,9 +4518,26 @@ impl Application {
     /// before; a query that matches nothing clamps to an empty list (no rows, never a panic).
     fn peek_refresh_filter(&mut self) {
         let n = self.app.tabs.len();
-        self.peek_filtered = (0..n)
-            .filter(|&i| self.app.tabs[i].matches_filter(&self.peek_q))
-            .collect();
+        // The `/` filter understands a few live keywords on top of plain substring matching: `up`
+        // / `down` (remote alive/dead), and — since peek triage is about *who needs attention* — a
+        // `busy` (just produced output) or `quiet` (parked past the threshold, waiting on you)
+        // row. `busy`/`quiet` need native per-tab sampling (`grew_delta`/`quiet_for`), so they are
+        // resolved here rather than in the session's own `matches_filter`.
+        let q = self.peek_q.trim().to_lowercase();
+        let mut filtered = Vec::with_capacity(n);
+        for i in 0..n {
+            let keep = if q == "busy" {
+                self.grew_delta.get(i).copied().unwrap_or(0) > 0
+            } else if q == "quiet" {
+                self.quiet_for(i)
+            } else {
+                self.app.tabs[i].matches_filter(&self.peek_q)
+            };
+            if keep {
+                filtered.push(i);
+            }
+        }
+        self.peek_filtered = filtered;
         if self.peek_sel >= self.peek_filtered.len() {
             self.peek_sel = self.peek_filtered.len().saturating_sub(1);
         }
