@@ -6,6 +6,12 @@ entries record user-visible and architectural changes since the last tagged mile
 ## Unreleased / 0.1.0 (in progress)
 
 ### Fixed
+- **Native-tab windows now rescale when you focus a tab on a different display.** Each session
+  window can sit on a different-density screen (e.g. a Retina laptop next to an external monitor);
+  switching focus to a tab on another display keeps terminal text at a sensible size by re-deriving
+  the font/grid metrics from the focused window's backing scale factor instead of the first
+  window's. Single-window mode is unaffected (all windows share one scale there).
+
 - **Distinct remote agents on one host no longer share persisted state.** Scrollback, mute, and
   pin state were all keyed only on kind+host+engine, so attaching two different tmux sessions of
   the same engine on one host (`host/session-a` vs `host/session-b`) collapsed them into one

@@ -5592,6 +5592,10 @@ impl Application {
             self.app.active = tab;
         }
         self.alias_active();
+        // Each window may sit on a different display with a different backing scale; recompute the
+        // font/grid metrics for the window we just switched to so text isn't stuck at the previous
+        // display's density.
+        self.metrics_from_scale();
         self.request_redraw();
     }
 
