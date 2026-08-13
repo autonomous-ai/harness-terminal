@@ -6,6 +6,16 @@ entries record user-visible and architectural changes since the last tagged mile
 ## Unreleased / 0.1.0 (in progress)
 
 ### Performance
+### Fixed
+- **Closing tabs no longer desyncs the internal per-tab bookkeeping.** The palette / context-menu /
+  `prefix+D` close path (and "close all quiet tabs") removed a session from the tab list without
+  re-syncing the per-tab vectors (`last_output`, `was_down`, `bell_until`, `recover_until`,
+  `broadcast_targets`, …), so after closing a tab every subsequent tab's mute/pin/quiet/status
+  state silently shifted. All close paths now drain the tab through `forget_tab`, and the batch
+  "close all quiet" path also drops the matching native window (no orphaned windows) and correctly
+  re-anchors focus when a quiet tab below the active one is peeled off. Covered by an exhaustive
+  `reanchor_active_after_batch` regression test (111→112 unit tests).
+
 - **The fleet's quiet detector no longer reads the config file on every frame.** `quiet_flags`
   (the per-frame triage count and status line) plus the fleet-grid and `prefix+z` quiet checks each
   called `Config::load()` — a disk read + TOML parse — up to twice per rendered frame. The

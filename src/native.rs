@@ -1277,11 +1277,20 @@ impl Application {
                 name: s.meta.name.clone(),
             });
         }
+        // Peel off each quiet tab high→low, keeping every tab-parallel bookkeeping vector in sync
+        // (`forget_tab`) and—in native mode—dropping the matching window host. Native host removal
+        // also re-derives focus from the active window, so the active index is only re-anchored
+        // manually in the single-window path.
+        let active = self.app.active;
         for &i in doomed.iter().rev() {
+            self.forget_tab(i);
             self.app.tabs.remove(i);
+            if self.native_tabs {
+                self.native_remove_host(i);
+            }
         }
-        if self.app.active >= self.app.tabs.len() {
-            self.app.active = self.app.tabs.len().saturating_sub(1);
+        if !self.native_tabs {
+            self.app.active = reanchor_active_after_batch(active, &doomed);
         }
         crate::restore::save(&self.app.tab_specs());
         self.save_pin_state();
@@ -1418,8 +1427,11 @@ impl Application {
         };
         self.flash = Some((note, std::time::Instant::now()));
         let closed = self.app.active;
-        if crate::native::close_tab(&mut self.app, false) && self.native_tabs {
-            self.native_remove_host(closed);
+        if crate::native::close_tab(&mut self.app, false) {
+            self.forget_tab(closed);
+            if self.native_tabs {
+                self.native_remove_host(closed);
+            }
         }
     }
 
@@ -3984,13 +3996,18 @@ impl Application {
                 Some("close_tab") => {
                     let pin = self.pinned.get(self.app.active).copied().unwrap_or(false);
                     let closed = self.app.active;
-                    if !close_tab(&mut self.app, pin) && pin {
+                    let closed_ok = close_tab(&mut self.app, pin);
+                    if !closed_ok && pin {
                         self.flash = Some((
                             "🔒 pinned — prefix A to unpin first".to_string(),
                             std::time::Instant::now(),
                         ));
-                    } else if self.native_tabs {
-                        self.native_remove_host(closed);
+                    }
+                    if closed_ok {
+                        self.forget_tab(closed);
+                        if self.native_tabs {
+                            self.native_remove_host(closed);
+                        }
                     }
                     self.save_pin_state();
                 }
@@ -5249,6 +5266,11 @@ impl Application {
                 h.tab -= 1;
             }
         }
+        // A non-active window closing before the focused one shifts the focused host down too, so
+        // keep focus on the same session. (Closing the focused host itself is handled by the clamp.)
+        if closed < self.active_host {
+            self.active_host -= 1;
+        }
         if self.active_host >= self.hosts.len() {
             self.active_host = self.hosts.len().saturating_sub(1);
         }
@@ -5761,13 +5783,18 @@ impl Application {
             CtxAction::CloseTab => {
                 let pin = self.pinned.get(self.app.active).copied().unwrap_or(false);
                 let closed = self.app.active;
-                if !close_tab(&mut self.app, pin) && pin {
+                let closed_ok = close_tab(&mut self.app, pin);
+                if !closed_ok && pin {
                     self.flash = Some((
                         "🔒 pinned — prefix A to unpin first".to_string(),
                         std::time::Instant::now(),
                     ));
-                } else if self.native_tabs {
-                    self.native_remove_host(closed);
+                }
+                if closed_ok {
+                    self.forget_tab(closed);
+                    if self.native_tabs {
+                        self.native_remove_host(closed);
+                    }
                 }
                 self.save_pin_state();
             }
@@ -6240,6 +6267,13 @@ pub(crate) fn close_tab(app: &mut App, pinned: bool) -> bool {
     }
     crate::restore::save(&app.tab_specs());
     true
+}
+
+/// Re-anchor the active index after a batch of tab closes, none of which is the active tab
+/// itself. Each closed tab at an index below the active slot shifts focus down by one; a closed tab
+/// above it leaves focus untouched. Returns the new active index.
+pub(crate) fn reanchor_active_after_batch(active: usize, closed: &[usize]) -> usize {
+    active.saturating_sub(closed.iter().filter(|&&i| i < active).count())
 }
 
 fn scroll_active(app: &Application, delta: i32) {
@@ -6781,7 +6815,8 @@ mod tests {
     use super::{
         argb_to_rgb, broadcast_bytes, cmd_shortcut, collect_fleet_matches, engine_accent,
         expand_click_word, fmt_duration, fuzzy_match, group_notifications, host_color, join_labels,
-        next_host_index, parse_remote_attach, recall_index, CmdShortcut, FleetMatch,
+        next_host_index, parse_remote_attach, reanchor_active_after_batch, recall_index,
+        CmdShortcut, FleetMatch,
     };
 
     use std::sync::Arc;
@@ -7192,5 +7227,34 @@ mod tests {
     fn next_host_is_none_for_single_or_empty_fleet() {
         assert_eq!(next_host_index(&[], 0), None);
         assert_eq!(next_host_index(&["only-host", "only-host"], 0), None);
+    }
+
+    /// Re-anchoring focus after a batch close: the active tab is never itself closed, but a closed
+    /// tab BELOW it shifts focus down one slot per such close; a closed tab above it does not move
+    /// it. Exhaustive over all active positions and close subsets.
+    #[test]
+    fn reanchor_active_after_batch_is_shifted_only_by_below_closes() {
+        let n = 5usize;
+        for active in 0..n {
+            // Enumerate every non-empty subset of the other 4 tabs being closed.
+            let others: Vec<usize> = (0..n).filter(|&i| i != active).collect();
+            for mask in 1usize..(1 << others.len()) {
+                let closed: Vec<usize> = others
+                    .iter()
+                    .enumerate()
+                    .filter(|(bit, _)| mask & (1 << bit) != 0)
+                    .map(|(_, &i)| i)
+                    .collect();
+                let expected =
+                    active.saturating_sub(closed.iter().filter(|&&i| i < active).count());
+                assert_eq!(
+                    reanchor_active_after_batch(active, &closed),
+                    expected,
+                    "active={active} closed={closed:?}"
+                );
+            }
+        }
+        // Sanity: empty close set leaves the active index untouched.
+        assert_eq!(reanchor_active_after_batch(3, &[]), 3);
     }
 }
