@@ -86,6 +86,11 @@ entries record user-visible and architectural changes since the last tagged mile
   a bulk close — defeating the "marks required so a stray press is never destructive" guard. Marks
   now clear on grid close, matching the broadcast overlay's fresh-reset behavior.
 ### Added
+- **Right-click fleet actions on any tab.** The context menu now offers **Interrupt (Ctrl-C)**,
+  **Reconnect** (only when that pane is actually down), **Duplicate Session**, and **Mute / Unmute**
+  alongside copy/paste — so a diver can stop, revive, or fork an agent without reaching for the
+  prefix chord. Each routes through the same tested method as its prefix binding, and the menu
+  stays non-destructive (interrupt/duplicate only ever target the tab you clicked).
 - **`prefix+G` jumps straight to the top of the active tab's scrollback.** Until now only page-up
   (`g`) and jump-to-bottom (`b`) existed, so reading a long agent run from its start meant paging
   through every screenful. `prefix+G` (and the palette action) land you at the oldest line and pin

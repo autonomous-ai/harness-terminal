@@ -484,6 +484,10 @@ enum CtxAction {
     SearchSelection,
     /// A non-selectable divider row.
     Separator,
+    Interrupt,
+    Reconnect,
+    Duplicate,
+    MuteToggle,
     NewSession,
     CloseTab,
 }
@@ -512,6 +516,10 @@ fn ctx_label(a: CtxAction) -> &'static str {
         CtxAction::SelectAll => "Select All",
         CtxAction::SearchSelection => "Search for Selection",
         CtxAction::Separator => "",
+        CtxAction::Interrupt => "Interrupt (Ctrl-C)",
+        CtxAction::Reconnect => "Reconnect",
+        CtxAction::Duplicate => "Duplicate Session",
+        CtxAction::MuteToggle => "Mute / Unmute",
         CtxAction::NewSession => "New Session",
         CtxAction::CloseTab => "Close Tab",
     }
@@ -8238,6 +8246,20 @@ impl Application {
             items.push(CtxAction::SearchSelection);
         }
         items.push(CtxAction::Separator);
+        // Fleet actions reachable by right-click so a diver can act on the hovered tab without
+        // reaching for the prefix chord. Reconnect only appears for a truly down (non-PTY) pane.
+        items.push(CtxAction::Interrupt);
+        if self
+            .app
+            .active_session()
+            .map(|s| !s.alive() && s.kind() != "pty")
+            .unwrap_or(false)
+        {
+            items.push(CtxAction::Reconnect);
+        }
+        items.push(CtxAction::Duplicate);
+        items.push(CtxAction::MuteToggle);
+        items.push(CtxAction::Separator);
         items.push(CtxAction::NewSession);
         items.push(CtxAction::CloseTab);
 
@@ -8350,6 +8372,16 @@ impl Application {
             }
             CtxAction::SearchSelection => self.search_selection(),
             CtxAction::Separator => {}
+            CtxAction::Interrupt => {
+                self.interrupt_active();
+                self.flash = Some(("interrupted".to_string(), std::time::Instant::now()));
+            }
+            CtxAction::Reconnect => self.reconnect_active(),
+            CtxAction::Duplicate => {
+                self.duplicate_active_preserving_pin();
+                self.flash = Some(("duplicated".to_string(), std::time::Instant::now()));
+            }
+            CtxAction::MuteToggle => self.toggle_mute_active(),
             CtxAction::NewSession => {
                 // Match Cmd+T / palette: pre-select the default engine and pre-fill the last repo
                 // so the picker is predictable no matter how it's opened.
