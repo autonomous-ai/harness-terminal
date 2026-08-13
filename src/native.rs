@@ -6240,7 +6240,30 @@ impl Application {
         let queued: usize = self.app.tabs.iter().map(|t| t.pending_bytes()).sum();
         let mut triage = String::new();
         if down > 0 {
-            triage += &format!("↓{down} ");
+            // Name the machine(s) when only a couple are down so a diver knows WHERE to look, not
+            // just the count; beyond that the count is the signal (the hosts overview has the rest).
+            if down <= 2 {
+                let mut hosts: Vec<String> = Vec::new();
+                for t in self
+                    .app
+                    .tabs
+                    .iter()
+                    .filter(|t| !t.alive() && t.kind() != "pty")
+                {
+                    let h = if t.meta.host.is_empty() {
+                        "?".to_string()
+                    } else {
+                        t.meta.host.clone()
+                    };
+                    if !hosts.contains(&h) {
+                        hosts.push(h);
+                    }
+                }
+                let joined = clip_dots(&hosts.join(", "), 16);
+                triage += &format!("↓{down} {joined} ");
+            } else {
+                triage += &format!("↓{down} ");
+            }
         }
         if busy > 0 {
             triage += &format!("!{busy} ");
