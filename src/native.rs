@@ -2988,6 +2988,26 @@ impl Application {
             };
             let sess = if *total == 1 { "session" } else { "sessions" };
             let mix_s = format_engine_mix(mix);
+            // A host that's fully down should say why, matching the rest of the app: pull the first
+            // down pane's reconnect reason so a diver sees at a glance it's auth/refused/timeout
+            // rather than a generic "down".
+            let reason_tag = if *alive == 0 {
+                let reason = self
+                    .app
+                    .tabs
+                    .iter()
+                    .filter(|t| t.meta.host == *host && t.kind() != "pty" && !t.alive())
+                    .find_map(|t| t.down_reason())
+                    .unwrap_or_else(|| "reconnecting…".to_string());
+                let reason = clip_dots(&reason.trim().to_string(), 24);
+                if reason.is_empty() {
+                    String::new()
+                } else {
+                    format!(" ({reason})")
+                }
+            } else {
+                String::new()
+            };
             if sel {
                 overlay_row_sel(fb, base_y + (scr + 1) * line_px, line_px, 18);
             }
@@ -3002,7 +3022,7 @@ impl Application {
                 fb,
                 &mut self.cache,
                 &format!(
-                    "  {mark} {label} · {state} · {total} {sess} · {mix_s}{}",
+                    "  {mark} {label} · {state}{reason_tag} · {total} {sess} · {mix_s}{}",
                     if sel { "  ◄" } else { "" }
                 ),
                 32,

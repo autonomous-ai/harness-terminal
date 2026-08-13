@@ -6,6 +6,8 @@ entries record user-visible and architectural changes since the last tagged mile
 ## Unreleased / 0.1.0 (in progress)
 
 ### Added
+- **The hosts overview names why a host is down.** A fully-down machine (`prefix+.`) now shows its
+  first pane's reconnect reason (`○ build02 · down (refused)`) instead of a bare "down".
 - **Peek rows show the engine for renamed tabs.** A custom-named session now reads `name (engine)`
   in the peek list, so a multi-engine fleet stays legible after renaming.
 - **The native status bar is optional.** A new `native_status_bar` config key (default `true`)
