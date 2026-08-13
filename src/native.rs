@@ -2915,10 +2915,19 @@ impl Application {
             }
             let selected = row == self.fleet_sel;
             let color = if selected { WHITE } else { CHROME_DIM };
-            // Tab label: user name → engine id @ host.
+            // Tab label: user name (with engine when renamed) @ host; local (hostless) tabs get no @.
             let s = &self.app.tabs[m.tab];
-            let name = s.meta.name.clone().unwrap_or_else(|| s.meta.engine.clone());
-            let label = format!("{}@{}", name, s.meta.host);
+            let base = s.meta.name.clone().unwrap_or_else(|| s.meta.engine.clone());
+            let identity = if base != s.meta.engine {
+                format!("{base} ({})", s.meta.engine)
+            } else {
+                base
+            };
+            let label = if s.meta.host.is_empty() {
+                identity
+            } else {
+                format!("{identity}@{}", s.meta.host)
+            };
             // The matched line text, read live from that session's grid at render time.
             let raw: String = {
                 let g = s.term.lock();

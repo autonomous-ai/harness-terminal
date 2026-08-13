@@ -6,6 +6,9 @@ entries record user-visible and architectural changes since the last tagged mile
 ## Unreleased / 0.1.0 (in progress)
 
 ### Added
+- **Fleet-search results label renamed tabs with their engine.** Matches now read
+  `name (engine)@host` (and drop the trailing `@` for local tabs), matching the peek list, so a
+  cross-session search stays attributable after renaming.
 - **Fixed: `b` in the fleet grid actually broadcasts the marked tiles.** It was dead code — a stray
   branch toggled a tile's mark on any letter, so `b` never fired. Now, after marking tiles with
   Space, `b` opens the broadcast overlay scoped to exactly those marked sessions.
