@@ -7094,6 +7094,7 @@ impl Application {
             self.hosts.pop();
         }
         // A tab was added: extend hosts to match, splicing each new window into the group.
+        let mut grew = false;
         while self.hosts.len() < target {
             let i = self.hosts.len();
             match self.create_host(event_loop, i) {
@@ -7103,6 +7104,7 @@ impl Application {
                     self.hosts.push(h);
                     let last = self.hosts.len() - 1;
                     self.hosts[last].grouped = true;
+                    grew = true;
                 }
                 None => break,
             }
@@ -7114,6 +7116,15 @@ impl Application {
         self.active_host = self.active_host.min(self.hosts.len().saturating_sub(1));
         if self.app.active >= self.app.tabs.len() && !self.app.tabs.is_empty() {
             self.app.active = self.app.tabs.len().saturating_sub(1);
+        }
+        // A tab was created this pass (hosts grew): bring its window to front and make it the
+        // visible native tab. Every tab-creation path (`spawn_local`/`spawn_remote`/`spawn_tunnel`
+        // /attach/reopen/duplicate) already points `app.active` at the new session, so focusing the
+        // active host selects the just-opened tab — matching iTerm2, where a new tab takes focus.
+        // Guarded by `grew` so a steady-state `about_to_wait` never steals focus, and the startup
+        // splash/restore branch above deliberately does NOT focus (it honors the restored tab).
+        if grew {
+            self.set_active(self.app.active);
         }
         self.alias_active();
     }
