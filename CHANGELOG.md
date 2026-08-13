@@ -17,6 +17,15 @@ entries record user-visible and architectural changes since the last tagged mile
   config degrades rather than panics) — 114→116 unit tests.
 
 ### Fixed
+- **Opening the fleet overlay (prefix+e) and the fleet overlay's `s` refresh no longer freeze the UI
+  on a wedged daemon.** Both called `HarnessClient::local().status()` synchronously on the main
+  event-loop thread, stalling the whole terminal for up to 800ms when the local daemon accepted the
+  connection but stopped responding. They now route through the same cached/background path as the
+  periodic sweep (`refresh_fleet_nonblocking`): show the latest cached fleet snapshot and kick a
+  fresh fetch on a background thread, so the fleet view stays responsive even when a remote/flaky
+  host makes the daemon slow.
+
+### Fixed
 - **The fleet-status poll can no longer freeze the UI.** `reconnect_sweep_refresh` called
   `HarnessClient::local().status()` synchronously on the main event-loop thread every 5s, so a wedged
   daemon that accepts the connection but never responds would stall the whole terminal for the full

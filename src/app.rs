@@ -257,6 +257,25 @@ impl App {
             .status_into(std::sync::Arc::clone(&self.fleet_cache));
     }
 
+    /// Refresh the fleet status for the fleet overlay WITHOUT blocking the main thread. The
+    /// blocking `status()` would freeze the whole terminal for the full HTTP timeout when the
+    /// local daemon is wedged (accepts the connection but stops responding) — the same freeze the
+    /// periodic sweep already routes around. Instead we take whatever snapshot the background
+    /// fetcher has landed in `fleet_cache` (populated every frame) and kick a fresh fetch so the
+    /// overlay's data is close to live and the UI never stalls.
+    pub fn refresh_fleet_nonblocking(&mut self) {
+        if let Some(st) = self
+            .fleet_cache
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .take()
+        {
+            self.fleet = st;
+        }
+        crate::harness::HarnessClient::local()
+            .status_into(std::sync::Arc::clone(&self.fleet_cache));
+    }
+
     /// Record that `engine_id` was just used, so the new-session picker can float it to the top.
     pub fn note_engine_used(&mut self, engine_id: &str) {
         self.spawn_counter += 1;

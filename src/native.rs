@@ -3969,9 +3969,9 @@ impl Application {
                     self.app.selected = 0;
                     self.fleet_query.clear();
                     self.fleet_filtered.clear();
-                    if let Ok(st) = crate::harness::HarnessClient::local().status() {
-                        self.app.fleet = st;
-                    }
+                    // Non-blocking: falls back to the last cached fleet snapshot and kicks a fresh
+                    // background fetch instead of stalling the UI for the daemon's HTTP timeout.
+                    self.app.refresh_fleet_nonblocking();
                     self.app.overlay = Overlay::Fleet;
                 }
                 Some("fleet_grid") => {
@@ -4439,9 +4439,9 @@ impl Application {
                     },
                     // `s` re-fetches for a fresh view; any other character filters the list.
                     Key::Character(c) if c == "s" && self.fleet_query.is_empty() => {
-                        if let Ok(st) = crate::harness::HarnessClient::local().status() {
-                            self.app.fleet = st;
-                        }
+                        // Non-blocking refresh: take the cached snapshot and refetch in the
+                        // background rather than blocking the main loop on a wedged daemon.
+                        self.app.refresh_fleet_nonblocking();
                     }
                     Key::Character(c) => {
                         self.fleet_query.push_str(c);
