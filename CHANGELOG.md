@@ -6,6 +6,9 @@ entries record user-visible and architectural changes since the last tagged mile
 ## Unreleased / 0.1.0 (in progress)
 
 ### Fixed
+- **Close a pane straight from the fleet grid.** `x` prunes the selected tile (honoring the pin
+  guard + undo, exactly like the tab bar's ×), so a war-room can clear dead/finished panes without
+  leaving the overview — the counterpart to `b`/`C`/`R` marked bulk actions.
 - **Fleet interrupt: stop the whole batch with one key.** In the command palette,
   `send Ctrl-C to every session` fans an interrupt fleet-wide; in the fleet grid, `C` sends Ctrl-C
   to every marked tile (falling back to all non-muted when nothing is marked) — the "stop the

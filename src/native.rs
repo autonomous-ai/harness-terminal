@@ -3662,8 +3662,8 @@ impl Application {
                 "filter the peek list (host/engine/name/down) · Esc clears",
             ),
             (
-                "Fleet grid · b / C / R",
-                "broadcast marked · Ctrl-C marked · reconnect marked",
+                "Fleet grid · b / C / x / R",
+                "broadcast · Ctrl-C · close · reconnect (marked)",
             ),
         ] {
             all.push((k.to_string(), d.to_string()));
@@ -4277,7 +4277,7 @@ impl Application {
             fb,
             &mut self.cache,
             &format!(
-                "  fleet grid · {} session{} · ↑/↓/PgUp/PgDn/1-9 select · Space mark · b→broadcast · C→Ctrl-C · R→reconnect · Enter dive · Esc close  ",
+                "  fleet grid · {} session{} · ↑/↓/PgUp/PgDn/1-9 select · Space mark · b→broadcast · C→Ctrl-C · x→close · R→reconnect · Enter dive · Esc close  ",
                 n,
                 if n == 1 { "" } else { "s" }
             ),
@@ -6154,6 +6154,15 @@ impl Application {
                             // `C` sends Ctrl-C to every marked tile (falling back to all non-muted) —
                             // the "stop the batch job" sibling of `R` reconnect and `b` broadcast.
                             self.grid_interrupt_marked();
+                        } else if ch == Some('x') || ch == Some('X') {
+                            // `x` closes the selected tile (honoring the pin guard + undo, like the
+                            // tab bar's ×) so a war-room can prune dead/finished panes in place.
+                            self.close_tab_at(self.grid_sel);
+                            if self.app.tabs.is_empty() {
+                                self.app.overlay = Overlay::None;
+                            } else {
+                                self.grid_sel = self.grid_sel.min(self.app.tabs.len() - 1);
+                            }
                         }
                     }
                     _ => {}
