@@ -80,6 +80,13 @@ entries record user-visible and architectural changes since the last tagged mile
   a bulk close — defeating the "marks required so a stray press is never destructive" guard. Marks
   now clear on grid close, matching the broadcast overlay's fresh-reset behavior.
 ### Added
+- **A scrollback scrollbar with a live thumb now sits on the grid's right edge.** Whenever a
+  session has more history than the viewport, a translucent track and a thumb show your position
+  in the log (at live bottom the thumb hugs the bottom; scrolled to the top it hugs the top) —
+  the classic iTerm2/native-terminal cue, so a long agent log stays navigable without reading the
+  `▾ N%` status number. The thumb's height tracks the visible fraction of the total history, never
+  collapses away, and is painted translucently so text underneath stays legible. Pure rendering
+  (geometry is unit-tested); idle CPU is unaffected.
 - **Find-in-session now has case and whole-word toggles (iTerm2-style).** In the find bar over an
   active pane, press **`c`** to toggle case-sensitive matching and **`w`** to toggle whole-word
   matching while the query is empty; both default off. Active flags are shown in the bar

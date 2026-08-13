@@ -1123,6 +1123,92 @@ pub fn draw_grid(
             }
         }
     }
+    // Scrollbar overlay on the right edge, shown whenever the history overflows the viewport
+    // (iTerm2-style position indicator). Painted on top of the grid, translucently, so text under
+    // it stays legible. Idle CPU is unaffected — this only runs inside the per-frame render.
+    let hist = term.grid().history_size();
+    if hist > 0 {
+        let viewport = term.screen_lines().max(1);
+        let scrolled = term.grid().display_offset();
+        let track_h = buf.height;
+        if let Some((top, th)) = scrollbar_geom(hist, viewport, scrolled, track_h) {
+            let bw = 8usize.max(1);
+            let x0 = buf.width.saturating_sub(bw + 2);
+            let x1 = (x0 + bw).min(buf.width);
+            let track_col = argb(0, 0, 0, 0);
+            let thumb_col = argb(255, 0xdd, 0xdd, 0xdd);
+            for y in 0..buf.height {
+                for x in x0..x1 {
+                    let i = y * buf.width + x;
+                    buf.pixels[i] = blend(buf.pixels[i], track_col, 70);
+                    if y >= top && y < top + th {
+                        buf.pixels[i] = blend(buf.pixels[i], thumb_col, 130);
+                    }
+                }
+            }
+        }
+    }
+}
+
+/// Alpha-blend `over` (a 32-bit `argb` pixel) with `top` at opacity `alpha` (0–255),
+/// returning the resulting pixel. Used by the scrollbar overlay so its translucent thumb and
+/// track tint whatever content sits underneath instead of painting opaque blocks over text.
+pub fn blend(over: Pixel, top: Pixel, alpha: u8) -> Pixel {
+    let a = alpha as u32;
+    let inv = 255 - a;
+    let mix = |e: u32, t: u32| (e * inv + t * a) / 255;
+    let oe = (
+        (over >> 24) & 0xff,
+        (over >> 16) & 0xff,
+        (over >> 8) & 0xff,
+        over & 0xff,
+    );
+    let te = (
+        (top >> 24) & 0xff,
+        (top >> 16) & 0xff,
+        (top >> 8) & 0xff,
+        top & 0xff,
+    );
+    let a_out = mix(oe.0, te.0).max(oe.0);
+    argb(
+        a_out as u8,
+        mix(oe.1, te.1) as u8,
+        mix(oe.2, te.2) as u8,
+        mix(oe.3, te.3) as u8,
+    )
+}
+
+/// Compute the visible scrollbar thumb geometry for a terminal grid.
+///
+/// `hist` is the scrollback line count, `viewport` the visible screen lines, `scrolled` the display
+/// offset (0 = pinned at the live bottom, `hist` = fully scrolled back), and `track_h` the height
+/// of the scrollbar track in pixels. Returns `(thumb_top, thumb_height)` in pixels, or `None` when
+/// the whole content fits the viewport (nothing to scroll) or the track is degenerate.
+pub fn scrollbar_geom(
+    hist: usize,
+    viewport: usize,
+    scrolled: usize,
+    track_h: usize,
+) -> Option<(usize, usize)> {
+    if track_h == 0 || viewport == 0 {
+        return None;
+    }
+    let total = hist.saturating_add(viewport);
+    if total <= viewport {
+        return None;
+    }
+    let thumb = (((viewport as f64 / total as f64) * track_h as f64).round() as usize).max(8);
+    let thumb = thumb.min(track_h);
+    let scrolled = scrolled.min(hist);
+    let top = hist.saturating_sub(scrolled);
+    let scrollable = total - viewport;
+    let room = track_h.saturating_sub(thumb);
+    let thumb_top = if room == 0 {
+        0
+    } else {
+        (((top as f64 / scrollable as f64) * room as f64).round() as usize).min(room)
+    };
+    Some((thumb_top, thumb))
 }
 
 /// Extract the text of one grid line (history or visible) as a String, for case-insensitive search.
@@ -1365,6 +1451,53 @@ mod tests {
     #[test]
     fn argb_packing() {
         assert_eq!(argb(255, 10, 20, 30), 0xff0a141e);
+    }
+
+    /// blend exhaustively combines an opaque over an opaque; alpha 0 keeps the base and alpha 255
+    /// adopts the tint wholesale (channel-wise: (base*inv + tint*alpha)/255).
+    #[test]
+    fn blend_mixes_channels_by_alpha() {
+        // 50% of pure red over pure blue -> purple.
+        let base = argb(255, 0, 0, 255);
+        let tint = argb(255, 255, 0, 0);
+        let m = blend(base, tint, 127);
+        assert_eq!((m >> 16) & 0xff, 127); // r ≈ 127
+        assert_eq!((m >> 8) & 0xff, 0); // g stays 0
+        assert_eq!(m & 0xff, 128); // b ≈ 128
+        assert_eq!(blend(base, tint, 0), base);
+        assert_eq!(blend(tint, base, 255), base);
+    }
+
+    #[test]
+    fn scrollbar_hidden_when_content_fits() {
+        assert_eq!(scrollbar_geom(0, 40, 0, 600), None);
+        assert_eq!(scrollbar_geom(0, 40, 0, 0), None);
+        assert!(scrollbar_geom(5, 40, 0, 600).is_some()); // tiny overflow still shows
+        assert_eq!(scrollbar_geom(100, 0, 0, 600), None); // degenerate
+    }
+
+    #[test]
+    fn scrollbar_thumb_moves_bottom_to_top() {
+        // 4000 hist + 40 viewport; thumb is a fixed fraction; only the top offset should change.
+        let at_bottom = scrollbar_geom(4000, 40, 0, 600).unwrap();
+        let at_top = scrollbar_geom(4000, 40, 4000, 600).unwrap();
+        assert_eq!(at_bottom.1, at_top.1); // same height
+                                           // At bottom the thumb's bottom edge hugs the track; at top the thumb's top edge is 0.
+        assert_eq!(at_bottom.0 + at_bottom.1, 600);
+        assert_eq!(at_top.0, 0);
+        // Scrolling to the middle sits strictly between.
+        let mid = scrollbar_geom(4000, 40, 2000, 600).unwrap();
+        assert!(mid.0 > 0 && mid.0 + mid.1 < 600);
+    }
+
+    #[test]
+    fn scrollbar_height_tracks_visible_fraction() {
+        // Bigger history -> smaller (thinner) thumb for the same viewport/track.
+        let big = scrollbar_geom(4000, 40, 0, 600).unwrap().1;
+        let small = scrollbar_geom(400, 40, 0, 600).unwrap().1;
+        assert!(small > big);
+        // Thumb never collapses to zero even with a huge history.
+        assert!(scrollbar_geom(10_000_000, 40, 0, 600).unwrap().1 >= 8);
     }
 
     /// The default theme (a modern Tokyo Night-inspired dark palette) is what renders when no
