@@ -1558,19 +1558,29 @@ impl Application {
             return;
         }
         let mut ok = 0usize;
+        let mut still: Vec<(String, String)> = Vec::new();
         for i in &down {
-            if self.app.tabs[*i].reconnect_now().is_ok() {
-                ok += 1;
+            match self.app.tabs[*i].reconnect_now() {
+                Ok(()) => ok += 1,
+                Err(e) => {
+                    let host = {
+                        let h = self.app.tabs[*i].meta.host.clone();
+                        if h.is_empty() {
+                            "local".to_string()
+                        } else {
+                            h
+                        }
+                    };
+                    let reason = if e.to_string().is_empty() {
+                        e.kind().to_string()
+                    } else {
+                        e.to_string()
+                    };
+                    still.push((host, reason));
+                }
             }
         }
-        self.flash = Some((
-            format!(
-                "reconnect-all: {} reached, {} still down",
-                ok,
-                down.len() - ok
-            ),
-            std::time::Instant::now(),
-        ));
+        self.flash = Some((fmt_reconnect_summary(ok, &still), std::time::Instant::now()));
     }
 
     /// Kill the active tab's pane (remote tmux/ssh/tunnel), then close the tab so the watchdog
@@ -6986,6 +6996,24 @@ fn clip_dots(s: &str, max: usize) -> String {
     }
 }
 
+/// One-line reconnect-all summary: how many panes came back, and — when any didn't — which hosts and
+/// why (clipped so the toast stays short even in a large fleet). Pure so it's unit-testable.
+fn fmt_reconnect_summary(ok: usize, still: &[(String, String)]) -> String {
+    let base = format!("reconnect-all: {ok} reached");
+    if still.is_empty() {
+        return base;
+    }
+    let detail = clip_dots(
+        &still
+            .iter()
+            .map(|(h, r)| format!("{h}: {r}"))
+            .collect::<Vec<_>>()
+            .join("; "),
+        48,
+    );
+    format!("{base}, {} still down — {detail}", still.len())
+}
+
 fn recall_index(n: usize, delta: isize, cur: Option<usize>) -> usize {
     match cur {
         Some(i) => (i as isize + delta).rem_euclid(n as isize) as usize,
@@ -7895,10 +7923,10 @@ mod tests {
     use super::{
         argb_to_rgb, arrow_seq, broadcast_bytes, clip_dots, cmd_shortcut, collect_fleet_matches,
         engine_accent, expand_click_word, extra_named_seq, fleet_host_line, fmt_duration,
-        format_engine_mix, fuzzy_match, group_notifications, host_color, host_engine_breakdown,
-        host_tally, join_labels, move_slot, next_host_index, parse_remote_attach,
-        reanchor_active_after_batch, recall_index, scroll_top, session_indices_for_host, swap_slot,
-        CmdShortcut, FleetMatch,
+        fmt_reconnect_summary, format_engine_mix, fuzzy_match, group_notifications, host_color,
+        host_engine_breakdown, host_tally, join_labels, move_slot, next_host_index,
+        parse_remote_attach, reanchor_active_after_batch, recall_index, scroll_top,
+        session_indices_for_host, swap_slot, CmdShortcut, FleetMatch,
     };
 
     use std::sync::Arc;
@@ -8422,6 +8450,29 @@ mod tests {
         assert_eq!(clip_dots("主机 refused—retrying", 3), "主机 …");
         // Zero bound collapses to just the ellipsis.
         assert_eq!(clip_dots("anything", 0), "…");
+    }
+
+    /// `fmt_reconnect_summary` reports the count and clips the still-down host+reason detail so a
+    /// fleet-wide reconnect toast stays readable instead of dumping every failure line.
+    #[test]
+    fn reconnect_summary_reports_hosts_still_down() {
+        assert_eq!(fmt_reconnect_summary(2, &[]), "reconnect-all: 2 reached");
+        assert_eq!(
+            fmt_reconnect_summary(1, &[("build02".to_string(), "refused".to_string())]),
+            "reconnect-all: 1 reached, 1 still down — build02: refused"
+        );
+        // A long list is clipped to the 48-char toast budget while still saying how many are left.
+        let big: Vec<(String, String)> = (0..8)
+            .map(|i| {
+                (
+                    format!("host-{i}"),
+                    "tunnel timeout while retrying".to_string(),
+                )
+            })
+            .collect();
+        let s = fmt_reconnect_summary(0, &big);
+        assert!(s.starts_with("reconnect-all: 0 reached, 8 still down — "));
+        assert!(s.ends_with('…'));
     }
 
     /// `prefix+H` pages by host: from a three-host fleet it steps to the first tab of the next

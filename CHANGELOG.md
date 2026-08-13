@@ -6,6 +6,10 @@ entries record user-visible and architectural changes since the last tagged mile
 ## Unreleased / 0.1.0 (in progress)
 
 ### Added
+- **`reconnect-all` says which hosts still won't come back.** `prefix+T` / the palette's "force
+  reconnect ALL down panes" used to report only a count (`2 reached, 3 still down`). It now names
+  the still-down hosts and their failure reason (`build02: refused`), clipped so a large fleet's
+  toast stays short — so bringing a whole fleet back tells you which machines to go investigate.
 - **Exported agent logs are tagged with the host.** `prefix+w` already wrote a timestamped
   `<name>-<stamp>.log`; for a pane-backed session it now writes `<name>-<host>-<stamp>.log`, so a
   dump pulled from a multi-machine fleet is identifiable at a glance (local pty exports stay bare).
