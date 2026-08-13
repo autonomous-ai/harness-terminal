@@ -4067,7 +4067,14 @@ impl Application {
             } else {
                 CHROME_DIM
             };
-            let name = s.meta.name.clone().unwrap_or_else(|| s.meta.engine.clone());
+            // Custom-named tabs hide their agent engine, which matters in a multi-engine fleet;
+            // show `name (engine)` so a diver sees the agent type even after renaming.
+            let base = s.meta.name.clone().unwrap_or_else(|| s.meta.engine.clone());
+            let name = if base != s.meta.engine {
+                format!("{base} ({})", s.meta.engine)
+            } else {
+                base
+            };
             let live = s
                 .live_title()
                 .unwrap_or_else(|| s.meta.title.clone())

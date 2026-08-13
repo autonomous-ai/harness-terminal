@@ -6,6 +6,8 @@ entries record user-visible and architectural changes since the last tagged mile
 ## Unreleased / 0.1.0 (in progress)
 
 ### Added
+- **Peek rows show the engine for renamed tabs.** A custom-named session now reads `name (engine)`
+  in the peek list, so a multi-engine fleet stays legible after renaming.
 - **The native status bar is optional.** A new `native_status_bar` config key (default `true`)
   turns the bottom status strip on/off in native mode; `false` makes the grid full-bleed. Outside
   native mode the key is ignored and the in-app status line is unchanged.
