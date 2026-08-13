@@ -248,6 +248,11 @@ struct Application {
     /// down→alive recovery edge and nudge the diver once (a `↻` badge + one notification), so a box
     /// that comes back is announced rather than silently reappearing.
     was_down: Vec<bool>,
+    /// Per-tab: whether the session was alive (connected) on the previous frame. Used to detect the
+    /// alive→down edge and nudge the diver once — the fleet event alert that was previously missing
+    /// (only bell/busy/recover notified). New tabs start `false` so a pane restored already-dead
+    /// doesn't nag on its first frame.
+    was_alive: Vec<bool>,
     /// Monotonic instant until which each tab shows a `↻` recovery badge after its pane reconnected.
     /// Mirrors `bell_until`'s self-fading timeline.
     recover_until: Vec<Option<std::time::Instant>>,
@@ -623,6 +628,7 @@ impl Application {
             dnd: false,
             bell_until: vec![None; tab_count],
             was_down: vec![false; tab_count],
+            was_alive: vec![false; tab_count],
             recover_until: vec![None; tab_count],
             hover_tab: None,
             drag_tab: None,
@@ -672,11 +678,13 @@ impl Application {
         let n = self.app.tabs.len();
         self.bell_until.resize(n, None);
         self.was_down.resize(n, false);
+        self.was_alive.resize(n, false);
         self.recover_until.resize(n, None);
         let now = std::time::Instant::now();
         // Events drained together at the end of this frame so same-burst events coalesce.
         let mut bells: Vec<usize> = Vec::new();
         let mut recovered: Vec<usize> = Vec::new();
+        let mut went_down: Vec<usize> = Vec::new();
         for (i, s) in self.app.tabs.iter().enumerate() {
             if s.take_bell() {
                 // A bell while focused is a "your run finished" cue in view — just a badge. A bell in
@@ -704,6 +712,20 @@ impl Application {
                 }
             }
             self.was_down[i] = !alive_now;
+            // Down edge: a remote (non-PTY) pane was alive last frame and died. This is arguably
+            // the most important fleet event, so notify before the pane is forgotten to a diver —
+            // but only for backgrounded, unmuted panes (a pane you're watching or muted isn't a
+            // surprising drop). New tabs start `was_alive=false`, so a pane restored already-dead
+            // never trips its own first-frame nag.
+            if self.was_alive[i]
+                && !alive_now
+                && s.kind() != "pty"
+                && i != self.app.active
+                && !self.muted.get(i).copied().unwrap_or(false)
+            {
+                went_down.push(i);
+            }
+            self.was_alive[i] = alive_now;
             if let Some(until) = self.recover_until[i] {
                 if until < now {
                     self.recover_until[i] = None;
@@ -716,6 +738,9 @@ impl Application {
         }
         for i in recovered {
             self.queue_notify("recover", i);
+        }
+        for i in went_down {
+            self.queue_notify("down", i);
         }
     }
 
@@ -809,6 +834,21 @@ impl Application {
                     format!("{list} is back online.")
                 } else {
                     format!("Back online: {list}.")
+                };
+                notify_simple(&title, &body);
+            }
+            "down" => {
+                // A pane dying is the fleet event a diver must not miss — the counterpart to
+                // `recover`. `list` carries `name@host`, so "went down" is actionable at a glance.
+                let title = if n == 1 {
+                    format!("{list} · went down")
+                } else {
+                    format!("{n} sessions went down")
+                };
+                let body = if n == 1 {
+                    format!("{list} disappeared.")
+                } else {
+                    format!("Connections lost: {list}.")
                 };
                 notify_simple(&title, &body);
             }
@@ -919,6 +959,7 @@ impl Application {
         swap_slot(&mut self.grid_marks, a, b);
         swap_slot(&mut self.bell_until, a, b);
         swap_slot(&mut self.was_down, a, b);
+        swap_slot(&mut self.was_alive, a, b);
         swap_slot(&mut self.recover_until, a, b);
         swap_slot(&mut self.broadcast_targets, a, b);
         swap_slot(&mut self.detect_len, a, b);
@@ -941,6 +982,7 @@ impl Application {
         move_slot(&mut self.grid_marks, from, to);
         move_slot(&mut self.bell_until, from, to);
         move_slot(&mut self.was_down, from, to);
+        move_slot(&mut self.was_alive, from, to);
         move_slot(&mut self.recover_until, from, to);
         move_slot(&mut self.broadcast_targets, from, to);
         move_slot(&mut self.detect_len, from, to);
@@ -7323,6 +7365,7 @@ impl Application {
             &mut self.grid_marks,
             &mut self.broadcast_targets,
             &mut self.was_down,
+            &mut self.was_alive,
         ] {
             if i < v.len() {
                 v.remove(i);
@@ -8997,6 +9040,22 @@ mod tests {
         let batches = group_notifications(&pending);
         let recover = batches.iter().find(|(k, _)| k == "recover").unwrap();
         assert_eq!(recover.1, vec![2, 3]);
+    }
+
+    /// Down-edge events from several panes in one frame collapse into a single "down" batch so a
+    /// whole-fleet drop is one popup, not N osascript launches (same coalescing as busy/recover).
+    #[test]
+    fn group_notifications_keeps_down_its_own_kind() {
+        let pending = vec![
+            ("down".to_string(), 4),
+            ("busy".to_string(), 1),
+            ("down".to_string(), 7),
+        ];
+        let batches = group_notifications(&pending);
+        let down = batches.iter().find(|(k, _)| k == "down").unwrap();
+        assert_eq!(down.1, vec![4, 7]);
+        let busy = batches.iter().find(|(k, _)| k == "busy").unwrap();
+        assert_eq!(busy.1, vec![1]);
     }
 
     /// A fleet-wide broadcast produces N busy events; the list should collapse to "all N sessions"

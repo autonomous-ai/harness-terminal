@@ -6,6 +6,11 @@ entries record user-visible and architectural changes since the last tagged mile
 ## Unreleased / 0.1.0 (in progress)
 
 ### Fixed
+- **Fleet notifications now fire when a pane goes down.** The one missing edge — the most important
+  one — is covered: when a backgrounded (unmuted) remote pane that was alive dies, a single
+  coalesced OS notification reads `name@host · went down / … disappeared.` New tabs and panes
+  restored already-dead are exempt, so a fresh app launch never nags; PTYs and the pane you're
+  watching never fire. The counterpart to the existing `reconnected` alert.
 - **The peek preview no longer re-walks the whole scrollback every frame.** It now reads only the
   newest handful of history rows (bounded, cheap) instead of capturing the full scrollback each
   render — a real "fast" win when the peek is open over a long-running agent log.
