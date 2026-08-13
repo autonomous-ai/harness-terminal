@@ -69,6 +69,15 @@ entries record user-visible and architectural changes since the last tagged mile
   a bulk close — defeating the "marks required so a stray press is never destructive" guard. Marks
   now clear on grid close, matching the broadcast overlay's fresh-reset behavior.
 ### Added
+- **Mouse reporting to terminals that request it.** TUIs like vim, tmux, and htop that enable
+  mouse mode (`ESC [?1000h` / `1002` / `1003`) now receive proper SGR mouse reports
+  (`ESC [ < ... M`) for clicks, wheel, drag, and motion — the same sequence real terminals send,
+  so mouse-driven editors and pager UIs work like they do in iTerm2. Right-click stays reserved for
+  the app's context menu (hold Ctrl+Right-click to hand it through); motion is throttled per grid
+  cell so fast sweeps can't flood the PTY; and the whole path is strictly gated on the focused
+  session having requested mouse mode, so normal selection/copy/scroll is byte-for-byte unchanged
+  for non-mouse programs. The SGR encoders are unit-tested byte-for-byte against the xterm 1006
+  spec.
 - **Fleet overview auto-refreshes while open.** `Ctrl+H s` (the remote-fleet list) now re-polls
   the daemon every few seconds in the background, so a host that comes back shows up without
   manually pressing `s`. Still non-blocking (falls back to the cached snapshot) and stops the

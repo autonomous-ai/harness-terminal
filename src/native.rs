@@ -12,6 +12,7 @@ use std::sync::Arc;
 use alacritty_terminal::grid::Dimensions;
 use alacritty_terminal::index::{Column, Line, Point, Side};
 use alacritty_terminal::selection::{Selection, SelectionType};
+use alacritty_terminal::term::TermMode;
 use winit::application::ApplicationHandler;
 use winit::dpi::{LogicalSize, PhysicalSize, Size};
 use winit::event::{ElementState, MouseButton, WindowEvent};
@@ -348,6 +349,12 @@ struct Application {
     mouse_anchor: Option<Point>,
     /// Latest cursor position in framebuffer px (winit's MouseInput has no position; we read this).
     cursor: (f64, f64),
+    /// Whether the left mouse button is currently held (for SGR drag-motion reporting to a
+    /// mouse-mode PTY). Set on every left press/release.
+    mouse_left_down: bool,
+    /// Last grid cell we forwarded a motion report to, so fast movement over a mouse-mode TUI
+    /// doesn't flood the pipe with a redundant sequence every pixel.
+    last_motion_cell: Option<(usize, usize)>,
     /// True while the pointer sits over a clickable URL so we show a hand instead of the arrow.
     /// Updated on CursorMoved so the affordance tracks the pointer without a full redraw.
     over_link: bool,
@@ -622,6 +629,8 @@ impl Application {
             fleet_filtered: Vec::new(),
             mouse_anchor: None,
             cursor: (0.0, 0.0),
+            mouse_left_down: false,
+            last_motion_cell: None,
             over_link: false,
             last_press: None,
             window_title: String::new(),
@@ -7671,6 +7680,97 @@ impl Application {
         ))
     }
 
+    /// Whether the focused session's PTY has requested SGR mouse reporting and the app isn't
+    /// otherwise in a mode that owns the pointer (an overlay, the context menu, or copy mode). When
+    /// true we forward mouse events to the PTY instead of driving our own selection/scroll, exactly
+    /// like a real terminal. Also returns whether motion/drag reporting is on (a subset of the
+    /// flags the caller needs). Pure read — strictly gated so the non-mouse path is untouched.
+    fn mouse_report_flags(&self) -> Option<(bool, bool)> {
+        if self.app.overlay != Overlay::None || self.ctx.is_some() || self.copy_mode {
+            return None;
+        }
+        self.app.active_session().and_then(|s| {
+            let m = s.term.lock();
+            let mode = m.mode();
+            if !(mode.contains(TermMode::MOUSE_MODE) && mode.contains(TermMode::SGR_MOUSE)) {
+                return None;
+            }
+            let motion =
+                mode.contains(TermMode::MOUSE_MOTION) || mode.contains(TermMode::MOUSE_DRAG);
+            Some((true, motion))
+        })
+    }
+
+    /// Forward a mouse button press/release as an SGR sequence to a mouse-mode PTY. Returns true
+    /// when consumed (the app must not also select/scroll). Right-click is kept for the app's
+    /// context menu unless Ctrl is held (the terminal convention), so the triage menu survives
+    /// inside a mouse-using TUI; pointer-over-chrome is not forwarded.
+    fn forward_mouse_button(&self, button: MouseButton, state: ElementState) -> bool {
+        if self.mouse_report_flags().is_none() {
+            return false;
+        }
+        if button == MouseButton::Right && !self.mods.control_key() {
+            return false;
+        }
+        let Some(pt) = self.mouse_to_cell(self.cursor.0, self.cursor.1) else {
+            return false;
+        };
+        let cb = sgr_button_code(button, state, &self.mods);
+        let seq = sgr_mouse(
+            cb,
+            pt.column.0 + 1,
+            pt.line.0 as usize + 1,
+            state == ElementState::Released,
+        );
+        if let Some(s) = self.app.active_session() {
+            s.write(&seq);
+        }
+        true
+    }
+
+    /// Forward pointer movement to a mouse-mode PTY when it asked for motion or drag reporting.
+    /// Throttles to a new grid cell so a fast flick doesn't flood the pipe. Returns true (consumed)
+    /// when a report was written.
+    fn forward_mouse_motion(&mut self) -> bool {
+        let Some((_, motion)) = self.mouse_report_flags() else {
+            return false;
+        };
+        if !motion {
+            return false;
+        }
+        let Some(pt) = self.mouse_to_cell(self.cursor.0, self.cursor.1) else {
+            return false;
+        };
+        let (col, row) = (pt.column.0 + 1, pt.line.0 as usize + 1);
+        if self.last_motion_cell == Some((col, row)) {
+            return true; // consumed but no duplicate report needed
+        }
+        self.last_motion_cell = Some((col, row));
+        let cb = sgr_motion_code(self.mouse_left_down, &self.mods);
+        let seq = sgr_mouse(cb, col, row, false);
+        if let Some(s) = self.app.active_session() {
+            s.write(&seq);
+        }
+        true
+    }
+
+    /// Forward a scroll-wheel notch to a mouse-mode PTY as wheel-up (64) / wheel-down (65). Returns
+    /// true when consumed (the app must not scroll the scrollback instead).
+    fn forward_mouse_wheel(&self, mag: f64) -> bool {
+        if self.mouse_report_flags().is_none() {
+            return false;
+        }
+        let Some(pt) = self.mouse_to_cell(self.cursor.0, self.cursor.1) else {
+            return false;
+        };
+        let cb = sgr_wheel_code(mag, &self.mods);
+        let seq = sgr_mouse(cb, pt.column.0 + 1, pt.line.0 as usize + 1, false);
+        if let Some(s) = self.app.active_session() {
+            s.write(&seq);
+        }
+        true
+    }
+
     /// Which tab the pointer is over in the tab bar (if any). Mirrors the render loop's label x
     /// positions so the preview tooltip lines up with the painted labels: starts at x=6, each label
     /// advances by its drawn width + 12, and the bar stops at `width - 20` the same way. Only the
@@ -8929,6 +9029,74 @@ fn extra_named_seq(n: &winit::keyboard::NamedKey) -> Option<&'static [u8]> {
     })
 }
 
+/// Encode one SGR (mode 1006) mouse event: `ESC [ < Cb ; Cx ; Cy M` for a press/motion, `m` for a
+/// release. Coordinates are 1-based (terminal grid cells), `cb` is the xterm button/motion code
+/// with modifier bits folded in (see the helpers below). Pure so it can be unit-tested byte-for-byte.
+fn sgr_mouse(cb: u16, col: usize, row: usize, release: bool) -> Vec<u8> {
+    format!(
+        "\x1b[<{};{};{}{}",
+        cb,
+        col,
+        row,
+        if release { "m" } else { "M" }
+    )
+    .into_bytes()
+}
+
+/// xterm button code for a MouseInput: 0/1/2 = left/middle/right press, 3 = any release, with the
+/// Shift(4)/Alt(8)/Ctrl(16) modifier bits added. Right-click releases use the same code as any
+/// other release; the caller decides whether right-click is forwarded at all.
+fn sgr_button_code(button: MouseButton, state: ElementState, mods: &ModifiersState) -> u16 {
+    let base: u16 = match (button, state) {
+        (MouseButton::Left, ElementState::Pressed) => 0,
+        (MouseButton::Middle, ElementState::Pressed) => 1,
+        (MouseButton::Right, ElementState::Pressed) => 2,
+        _ => 3,
+    };
+    let mut cb = base;
+    if mods.shift_key() {
+        cb += 4;
+    }
+    if mods.alt_key() {
+        cb += 8;
+    }
+    if mods.control_key() {
+        cb += 16;
+    }
+    cb
+}
+
+/// xterm wheel code: 64 = up, 65 = down (matching `mag`'s app convention where positive = up into
+/// history), plus the same modifier bits.
+fn sgr_wheel_code(mag: f64, mods: &ModifiersState) -> u16 {
+    let mut cb: u16 = if mag > 0.0 { 64 } else { 65 };
+    if mods.shift_key() {
+        cb += 4;
+    }
+    if mods.alt_key() {
+        cb += 8;
+    }
+    if mods.control_key() {
+        cb += 16;
+    }
+    cb
+}
+
+/// xterm motion code: 32 = drag with the left button held, 35 = buttonless motion, plus modifiers.
+fn sgr_motion_code(held: bool, mods: &ModifiersState) -> u16 {
+    let mut cb: u16 = if held { 32 } else { 35 };
+    if mods.shift_key() {
+        cb += 4;
+    }
+    if mods.alt_key() {
+        cb += 8;
+    }
+    if mods.control_key() {
+        cb += 16;
+    }
+    cb
+}
+
 fn cmd_shortcut(key: &Key, mods: &ModifiersState) -> CmdShortcut {
     use CmdShortcut::*;
     // Browser-style Ctrl+Tab / Ctrl+Shift+Tab cycle tabs too (many terminal users expect the
@@ -9188,6 +9356,11 @@ impl ApplicationHandler for Application {
             }
             WindowEvent::CursorMoved { position, .. } => {
                 self.cursor = (position.x, position.y);
+                // A mouse-mode PTY that asked for motion/drag owns pointer movement over the grid:
+                // forward it (throttled) and skip our hover/hand-cursor affordances for this event.
+                if self.forward_mouse_motion() {
+                    return;
+                }
                 // Track which tab the pointer is over so render can show a tail-preview tooltip.
                 // Only request a redraw when it changes (or exits) a tab, not on every mouse move.
                 let ht = self.tab_at(position.x, position.y);
@@ -9237,6 +9410,14 @@ impl ApplicationHandler for Application {
                 if mag == 0.0 {
                     return;
                 }
+                // A mouse-mode PTY owns the wheel over the grid: forward it as SGR wheel-up/down and
+                // skip our scrollback navigation (which only applies when no app asked for mouse).
+                if self.forward_mouse_wheel(mag) {
+                    if let Some(w) = &self.window {
+                        w.request_redraw();
+                    }
+                    return;
+                }
                 // Scrolling over the tab bar cycles tabs instead of scrolling the pane (iTerm2 /
                 // Chrome-style): wheel up steps left, down steps right, wrapping at the edges.
                 if self.cursor.1 < self.chrome_top() as f64 && self.app.tabs.len() > 1 {
@@ -9268,6 +9449,18 @@ impl ApplicationHandler for Application {
                 }
             }
             WindowEvent::MouseInput { state, button, .. } => {
+                // Track left-button state for drag-motion reporting, and forward the click to a
+                // mouse-mode PTY before our own selection/chrome logic runs (strictly gated, so the
+                // non-mouse path below is untouched).
+                if button == MouseButton::Left {
+                    self.mouse_left_down = state == ElementState::Pressed;
+                }
+                if self.forward_mouse_button(button, state) {
+                    if let Some(w) = &self.window {
+                        w.request_redraw();
+                    }
+                    return;
+                }
                 if self.app.overlay == Overlay::FleetGrid {
                     // The war-room is mouse-friendly: a left press selects the tile under the
                     // cursor; a double/triple click dives into that session. Other buttons/states
@@ -9702,9 +9895,12 @@ mod tests {
         grid_targets, grid_tile_at, group_notifications, host_color, host_engine_breakdown,
         host_tally, join_labels, move_slot, next_host_index, next_trouble_index,
         parse_remote_attach, prev_trouble_index, reanchor_active_after_batch, recall_index,
-        scroll_top, session_indices_for_host, should_busy_nudge, status_accent, swap_slot,
-        CmdShortcut, FleetMatch, CHROME_BUSY, CHROME_ERR, CHROME_QUIET, CHROME_RECOVER,
+        scroll_top, session_indices_for_host, sgr_button_code, sgr_motion_code, sgr_mouse,
+        sgr_wheel_code, should_busy_nudge, status_accent, swap_slot, CmdShortcut, FleetMatch,
+        CHROME_BUSY, CHROME_ERR, CHROME_QUIET, CHROME_RECOVER,
     };
+
+    use winit::event::{ElementState, MouseButton};
 
     use std::sync::Arc;
 
@@ -9899,6 +10095,81 @@ mod tests {
         assert_eq!(extra_named_seq(&K::PageDown), None);
         assert_eq!(extra_named_seq(&K::Escape), None);
         assert_eq!(extra_named_seq(&K::Enter), None);
+    }
+
+    #[test]
+    fn sgr_mouse_encodes_xterm_1006_sequences_byte_for_byte() {
+        // Press: ESC [ < Cb ; Cx ; Cy M, 1-based coordinates.
+        assert_eq!(sgr_mouse(0, 5, 6, false), b"\x1b[<0;5;6M");
+        assert_eq!(sgr_mouse(2, 1, 1, false), b"\x1b[<2;1;1M");
+        assert_eq!(sgr_mouse(69, 40, 24, false), b"\x1b[<69;40;24M");
+        // Release: trailing lowercase m.
+        assert_eq!(sgr_mouse(3, 5, 6, true), b"\x1b[<3;5;6m");
+        assert_eq!(sgr_mouse(35, 7, 8, true), b"\x1b[<35;7;8m");
+    }
+
+    #[test]
+    fn sgr_button_code_maps_buttons_modifiers_and_release() {
+        use winit::keyboard::ModifiersState as M;
+        let none = M::empty();
+        // Plain presses: left=0, middle=1, right=2.
+        assert_eq!(
+            sgr_button_code(MouseButton::Left, ElementState::Pressed, &none),
+            0
+        );
+        assert_eq!(
+            sgr_button_code(MouseButton::Middle, ElementState::Pressed, &none),
+            1
+        );
+        assert_eq!(
+            sgr_button_code(MouseButton::Right, ElementState::Pressed, &none),
+            2
+        );
+        // Any release is 3.
+        assert_eq!(
+            sgr_button_code(MouseButton::Left, ElementState::Released, &none),
+            3
+        );
+        assert_eq!(
+            sgr_button_code(MouseButton::Right, ElementState::Released, &none),
+            3
+        );
+        // Modifiers shift(4)/alt(8)/ctrl(16) fold in on top.
+        assert_eq!(
+            sgr_button_code(MouseButton::Left, ElementState::Pressed, &M::SHIFT),
+            4
+        );
+        assert_eq!(
+            sgr_button_code(MouseButton::Right, ElementState::Pressed, &M::ALT),
+            10
+        );
+        assert_eq!(
+            sgr_button_code(MouseButton::Left, ElementState::Pressed, &M::CONTROL),
+            16
+        );
+        assert_eq!(
+            sgr_button_code(
+                MouseButton::Left,
+                ElementState::Pressed,
+                &(M::SHIFT | M::ALT | M::CONTROL)
+            ),
+            28
+        );
+    }
+
+    #[test]
+    fn sgr_wheel_and_motion_codes_are_stable() {
+        use winit::keyboard::ModifiersState as M;
+        let none = M::empty();
+        // Wheel up=64, down=65, shift adds 4.
+        assert_eq!(sgr_wheel_code(1.0, &none), 64);
+        assert_eq!(sgr_wheel_code(-1.0, &none), 65);
+        assert_eq!(sgr_wheel_code(1.0, &M::SHIFT), 68);
+        // Motion: buttonless=35, left-drag=32, ctrl folds in.
+        assert_eq!(sgr_motion_code(false, &none), 35);
+        assert_eq!(sgr_motion_code(true, &none), 32);
+        assert_eq!(sgr_motion_code(false, &M::CONTROL), 51);
+        assert_eq!(sgr_motion_code(true, &M::SHIFT), 36);
     }
 
     /// Arrows honor the Ctr/Alt modifier encoding so readline gets word/paragraph moves (Ctrl+Left
