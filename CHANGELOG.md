@@ -194,6 +194,10 @@ entries record user-visible and architectural changes since the last tagged mile
   drag-reorder paths.
 
 ### Added
+- **The fleet grid is mouse-friendly now.** A left click selects the tile under the cursor (arrows
+  can still refine), and a double-click dives straight into that session — the war-room finally
+  responds to the pointer, not just keys. Hit-testing mirrors the renderer's exact tile layout and
+  is unit-tested.
 - **Host overview shows each machine's agent mix.** `prefix+.` now lists not just how many
   sessions are up per host but which agents are running there (`● build02 · live · 2 sessions ·
   claude×2, codex`), so a diver sees the whole fleet's engine spread at a glance. Backed by a pure,

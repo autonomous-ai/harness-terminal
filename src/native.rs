@@ -958,12 +958,27 @@ impl Application {
     /// If nothing is marked, fall back to opening broadcast on all sessions (safety — you can't
     /// silently broadcast to zero). Marks are consumed (cleared) once applied.
     /// The column count the fleet grid lays tiles into — the same the renderer uses, so the
-    /// PgUp/PgDn selection page matches what's actually on screen. Shared so the two never drift.
+    /// PgUp/PgDn selection page matches what's actually on screen. Derived from `fleet_grid_geom`
+    /// so the PgUp/Dn page, the mouse hit-test, and the renderer can never drift apart.
     fn fleet_grid_cols(&self) -> usize {
-        let n = self.app.tabs.len();
+        self.fleet_grid_geom().4
+    }
+
+    /// The fleet grid's tile geometry, mirroring the renderer's layout exactly: `(x0, y0, tw, th,
+    /// cols, n, height)`. `x0`/`y0` are the first tile's top-left, `tw`/`th` its cell size, `cols`
+    /// the column count, `n` the session count (at least 1), `height` the window height (so a click
+    /// in an un-drawn clipped row maps to nothing). Shared by the PgUp/PgDn page and the mouse.
+    fn fleet_grid_geom(&self) -> (usize, usize, usize, usize, usize, usize, usize) {
+        let n = self.app.tabs.len().max(1);
         let gcol = self.cell_w as usize;
-        let inner_w = (self.size.width as usize).saturating_sub(16);
-        (inner_w / (gcol.max(1) * 12)).max(1).min(n.max(1))
+        let x0 = 8usize;
+        let inner_w = (self.size.width as usize).saturating_sub(x0 + 8);
+        let cols = (inner_w / (gcol.max(1) * 12)).max(1).min(n);
+        let tw = inner_w / cols;
+        let th = self.cell_h as usize * 4;
+        let line_px = self.font_px as usize + 6;
+        let y0 = self.chrome_top() + 2 + line_px;
+        (x0, y0, tw, th, cols, n, self.size.height as usize)
     }
 
     /// `R` (fleet grid): force-reconnect every marked tile at once — the war-room cousin of the
@@ -7595,6 +7610,43 @@ fn recall_index(n: usize, delta: isize, cur: Option<usize>) -> usize {
     }
 }
 
+/// Map a window pixel point to the fleet-grid tile under it — the inverse of the renderer's tile
+/// layout — so click-to-select and double-click-to-dive work in the war-room. Returns the session
+/// index, or None when the point is over the header/gutter, right of the last column, below the last
+/// drawn row, or past the end of the session list. Pure so the geometry is unit-testable.
+fn grid_tile_at(
+    x: usize,
+    y: usize,
+    x0: usize,
+    y0: usize,
+    tw: usize,
+    th: usize,
+    cols: usize,
+    n: usize,
+    height: usize,
+) -> Option<usize> {
+    if x < x0 || y < y0 || cols == 0 || tw == 0 {
+        return None;
+    }
+    let sx = tw + 8;
+    let sy = th + 8;
+    let c = (x - x0) / sx;
+    if c >= cols {
+        return None;
+    }
+    let r = (y - y0) / sy;
+    let ty = y0 + r * sy;
+    // A row that the renderer would have clipped (break) has no tile to hit.
+    if ty + th > height {
+        return None;
+    }
+    let idx = r * cols + c;
+    if idx >= n {
+        return None;
+    }
+    Some(idx)
+}
+
 /// Top offset of a scrolling viewport given `total` rows and a 0-based `selected` index. Keeps the
 /// highlighted row on screen and rides the bottom edge once the list is taller than `rows`, so a
 /// fleet/palette/broadcast list bigger than the window never hides rows behind an invisible
@@ -8139,6 +8191,29 @@ impl ApplicationHandler for Application {
                 }
             }
             WindowEvent::MouseInput { state, button, .. } => {
+                if self.app.overlay == Overlay::FleetGrid {
+                    // The war-room is mouse-friendly: a left press selects the tile under the
+                    // cursor; a double/triple click dives into that session. Other buttons/states
+                    // (and clicks on gutter/header) are ignored while the overlay is open.
+                    if button == MouseButton::Left && state == ElementState::Pressed {
+                        let (x, y) = self.cursor;
+                        let (x0, y0, tw, th, cols, n, height) = self.fleet_grid_geom();
+                        if let Some(idx) =
+                            grid_tile_at(x as usize, y as usize, x0, y0, tw, th, cols, n, height)
+                        {
+                            self.grid_sel = idx;
+                            if self.click_count(x, y) >= 2 && idx < self.app.tabs.len() {
+                                self.app.active = idx;
+                                crate::restore::save_active(self.app.active);
+                                self.app.overlay = Overlay::None;
+                            }
+                            if let Some(w) = &self.window {
+                                w.request_redraw();
+                            }
+                        }
+                    }
+                    return;
+                }
                 if self.app.overlay != Overlay::None {
                     return;
                 }
@@ -8501,10 +8576,10 @@ mod tests {
     use super::{
         argb_to_rgb, arrow_seq, broadcast_bytes, clip_dots, cmd_shortcut, collect_fleet_matches,
         engine_accent, expand_click_word, extra_named_seq, first_down_session, fleet_host_line,
-        fmt_duration, fmt_reconnect_summary, format_engine_mix, fuzzy_match, group_notifications,
-        host_color, host_engine_breakdown, host_tally, join_labels, move_slot, next_host_index,
-        parse_remote_attach, reanchor_active_after_batch, recall_index, scroll_top,
-        session_indices_for_host, swap_slot, CmdShortcut, FleetMatch,
+        fmt_duration, fmt_reconnect_summary, format_engine_mix, fuzzy_match, grid_tile_at,
+        group_notifications, host_color, host_engine_breakdown, host_tally, join_labels, move_slot,
+        next_host_index, parse_remote_attach, reanchor_active_after_batch, recall_index,
+        scroll_top, session_indices_for_host, swap_slot, CmdShortcut, FleetMatch,
     };
 
     use std::sync::Arc;
@@ -8977,6 +9052,56 @@ mod tests {
         // Stepping newer from the oldest wraps to the newest.
         assert_eq!(recall_index(n, 1, Some(0)), 1);
         assert_eq!(recall_index(n, 1, Some(2)), 0);
+    }
+
+    /// Mouse hit-testing in the fleet grid mirrors the renderer's tile layout: it picks the tile
+    /// under a window pixel, and rejects header/gutter, out-of-column, clipped-row, and past-the-end
+    /// points — so click-to-select can't land on a neighbor or a non-existent session.
+    #[test]
+    fn grid_tile_at_matches_render_layout() {
+        let (x0, y0, tw, th, cols, n, height) =
+            (8usize, 30usize, 100usize, 72usize, 3usize, 8usize, 500usize);
+        // Top-left of the first tile.
+        assert_eq!(
+            grid_tile_at(8, 30, x0, y0, tw, th, cols, n, height),
+            Some(0)
+        );
+        // Bottom-right inside the first tile still maps to tile 0.
+        assert_eq!(
+            grid_tile_at(8 + 99, 30 + 71, x0, y0, tw, th, cols, n, height),
+            Some(0)
+        );
+        // Second column (stride tw+8), same row.
+        assert_eq!(
+            grid_tile_at(8 + 108, 30, x0, y0, tw, th, cols, n, height),
+            Some(1)
+        );
+        // Second row (stride th+8), first column -> index 3.
+        assert_eq!(
+            grid_tile_at(8, 30 + 80, x0, y0, tw, th, cols, n, height),
+            Some(3)
+        );
+        // Right of the last column -> None.
+        assert_eq!(
+            grid_tile_at(8 + 3 * 108, 30, x0, y0, tw, th, cols, n, height),
+            None
+        );
+        // Header / left gutter -> None.
+        assert_eq!(grid_tile_at(4, 30, x0, y0, tw, th, cols, n, height), None);
+        assert_eq!(grid_tile_at(8, 20, x0, y0, tw, th, cols, n, height), None);
+        // A row whose tile bottom would exceed the window height (clipped in render) -> None.
+        let _ = height; // (covered below via an explicit deep row)
+        assert_eq!(
+            grid_tile_at(8, 30 + 5 * 80, x0, y0, tw, th, cols, n, height),
+            None
+        );
+        // Past the end of the session list (idx 8 with n=8) -> None.
+        assert_eq!(
+            grid_tile_at(8 + 2 * 108, 30 + 2 * 80, x0, y0, tw, th, cols, n, height),
+            None
+        );
+        // Degenerate: zero columns or zero width -> None (no panic).
+        assert_eq!(grid_tile_at(8, 30, x0, y0, 0, th, 0, n, height), None);
     }
 
     /// The list viewport never hides the selected row, and rides the bottom edge once the list
