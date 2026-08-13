@@ -2777,7 +2777,10 @@ impl Application {
             ("Ctrl+Enter", "toggle fullscreen"),
             ("PgUp/PgDn", "scrollback"),
             ("Cmd/Ctrl+click", "open URL / file path"),
-            ("Cmd+T / Cmd+N", "new session (new native tab)"),
+            (
+                "Cmd+T / Cmd+N / Cmd+Shift+N",
+                "new session (new native tab)",
+            ),
             ("Cmd+W", "close active tab/window"),
             ("Cmd+Shift+T", "reopen last-closed tab"),
             ("Cmd+Shift+D", "duplicate active session"),
@@ -6306,7 +6309,7 @@ fn cmd_shortcut(key: &Key, mods: &ModifiersState) -> CmdShortcut {
     }
     match key {
         Key::Character(c) => match c.as_str() {
-            "t" | "n" => NewSession,
+            "t" | "n" | "N" => NewSession,
             "w" => CloseActive,
             "q" => Quit,
             // On a real US keyboard, holding Shift transforms the bracket into `}` / `{`, so we
@@ -6937,9 +6940,14 @@ mod tests {
         let chars =
             |c: &str, m: ModifiersState| cmd_shortcut(&Key::Character(c.to_string().into()), &m);
 
-        // Cmd+T / Cmd+N open the New-Session picker.
+        // Cmd+T / Cmd+N / Cmd+Shift+N open the New-Session picker.
         assert_eq!(chars("t", s), CmdShortcut::NewSession);
         assert_eq!(chars("n", s), CmdShortcut::NewSession);
+        assert_eq!(
+            chars("N", sc),
+            CmdShortcut::NewSession,
+            "Cmd+Shift+N also opens"
+        );
         // Cmd+W closes, Cmd+Q quits.
         assert_eq!(chars("w", s), CmdShortcut::CloseActive);
         assert_eq!(chars("q", s), CmdShortcut::Quit);

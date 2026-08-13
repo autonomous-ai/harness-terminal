@@ -6,6 +6,12 @@ entries record user-visible and architectural changes since the last tagged mile
 ## Unreleased / 0.1.0 (in progress)
 
 ### Added
+- **`Cmd+Shift+N` also opens a new session** (matching `Cmd+T`/`Cmd+N` and the browser/iTerm
+  "new window" muscle memory). `Cmd+Shift+T` still reopens the last-closed tab. Covered by the pure
+  `cmd_shortcut` unit test.
+
+
+### Added
 - **`Cmd+Shift+D` duplicates the active session** (VS Code / iTerm "Duplicate" muscle memory), reusing
   the same fork path as `prefix+k` so it preserves the engine@host identity and pin state. Plain
   `Cmd+D` is untouched (stays with the shell). Covered by the pure `cmd_shortcut` unit test.
