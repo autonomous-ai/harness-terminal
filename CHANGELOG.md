@@ -22,6 +22,32 @@ entries record user-visible and architectural changes since the last tagged mile
   terminal. `TcpStream::connect_timeout` now caps that at 4s and still returns the error, so the
   in-app `⚠ host:port: …` toast fires promptly instead of the app hanging.
 ### Added
+- **Native-tab window title updates are rate-limited.** The per-session `set_title`
+  (a platform round-trip) was called on every frame even when the OSC title hadn't changed;
+  native mode now caches each window's last title and only calls `set_title` on change, like
+  the single-window path already did.
+- **Offline sessions are no longer silently dropped on launch.** If a persisted session's
+  host is unreachable when the app starts, the first frame now flashes how many didn't reopen
+  and how to reconnect, so an agent on a down server isn't quietly missing from your fleet
+  with no explanation.
+- **Right-click "New Session" now pre-selects the default engine + last dir**, matching
+  `Cmd+T` / the palette, so the picker is predictable no matter how it's opened.
+- **Closing the find overlay clears the search highlight.** Dismissing `find` with Esc left
+  `find_hit`/`find_all` set, so the last match stayed frozen and highlighted in the grid
+  after find closed. Esc now clears it (opening find already did).
+- **New sessions persist immediately.** A tab opened via `Ctrl+H n`, `Cmd+T`, remote
+  spawn, local shell, or fleet attach was only written to disk later (on close/quit), so a
+  crash or force-quit right after spawning silently lost it on relaunch. Native spawn sites
+  now write the tab list to disk on success, matching the persistence guarantees of the
+  duplicate/attach/undo paths.
+- **Tunnel tabs keep their remote port across restart / duplicate / undo-close.** A tunnel
+  session opened on a non-default harness port (`host:20000`) was persisted with `port: None`,
+  so a relaunch, a duplicate, or an undo-close silently reconnected to the default 18473 and
+  missed your agent. The transport now exposes its port and it rides through the tab spec in
+  every path (save, duplicate, undo-close in both native and in-app close).
+- **`Cmd+Shift+T` reopens the last-closed tab.** The browser/iTerm recovery muscle memory now
+  restores the most recently closed session (same as `prefix+u` / the palette's Undo Close),
+  in both native-tab and in-app-tab modes. `Cmd+T` alone still opens a new tab.
 - **First-run empty state mentions Cmd+T.** The "no sessions" hint (shown on a fresh
   launch with zero tabs, in both in-app and native-tab modes) now leads with `Cmd+T` for a
   quick new tab, then the prefix new/attach/palette shortcuts, so a new user sees the

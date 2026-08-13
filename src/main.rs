@@ -68,9 +68,12 @@ fn run_native() -> Result<(), Box<dyn std::error::Error>> {
         lines: 24,
         cols: 80,
     });
-    // Reopen the tabs that were open last time (best-effort; failures drop silently).
+    // Reopen the tabs that were open last time (best-effort). Count any that fail so the first
+    // frame can flag an offline host instead of quietly dropping the session.
     for spec in harness_terminal::restore::load() {
-        app.restore_tab(&spec);
+        if !app.restore_tab(&spec) {
+            app.startup_offline += 1;
+        }
     }
     // Open on the tab that was focused last time (clamped to however many restored).
     if !app.tabs.is_empty() {

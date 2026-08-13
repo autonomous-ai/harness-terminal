@@ -84,8 +84,8 @@ pub fn is_prefix_press(key: &Key, mods: &ModifiersState, primary: &str) -> bool 
     // as Named(Space) on macOS) and Ctrl+\ — macOS can claim Ctrl+Space for its input-source
     // switcher when a second layout is enabled, and `|` is Shift+Ctrl+Backslash on US layouts
     // (winit lets SHIFT through), so accept it too.
-    let is_space = matches!(key, Key::Character(c) if c == " ")
-        || matches!(key, Key::Named(NamedKey::Space));
+    let is_space =
+        matches!(key, Key::Character(c) if c == " ") || matches!(key, Key::Named(NamedKey::Space));
     let is_backslash = matches!(key, Key::Character(c) if c == "\\" || c == "|");
     mods.control_key() && (is_primary || is_space || is_backslash)
 }
@@ -219,8 +219,16 @@ mod tests {
         ctrl.insert(ModifiersState::CONTROL);
         assert!(is_prefix_press(&Key::Character(" ".into()), &ctrl, "h"));
         assert!(is_prefix_press(&Key::Named(NamedKey::Space), &ctrl, "h"));
-        assert!(!is_prefix_press(&Key::Character(" ".into()), &ModifiersState::default(), "h"));
-        assert!(!is_prefix_press(&Key::Named(NamedKey::Space), &ModifiersState::default(), "h"));
+        assert!(!is_prefix_press(
+            &Key::Character(" ".into()),
+            &ModifiersState::default(),
+            "h"
+        ));
+        assert!(!is_prefix_press(
+            &Key::Named(NamedKey::Space),
+            &ModifiersState::default(),
+            "h"
+        ));
         // Control alone, on a non-prefix key, is never a prefix press.
         assert!(!is_prefix_press(&Key::Character("n".into()), &ctrl, "h"));
     }
@@ -231,12 +239,20 @@ mod tests {
         ctrl.insert(ModifiersState::CONTROL);
         assert!(is_prefix_press(&Key::Character("\\".into()), &ctrl, "h"));
         // Without control it's just a backslash, not a prefix.
-        assert!(!is_prefix_press(&Key::Character("\\".into()), &ModifiersState::default(), "h"));
+        assert!(!is_prefix_press(
+            &Key::Character("\\".into()),
+            &ModifiersState::default(),
+            "h"
+        ));
         // Shift+Ctrl+Backslash is the pipe on most layouts, and as a coincidental fallback should
         // still be a valid prefix press (the physical key is what the user is reaching for).
         let mut ctrl_shift = ctrl;
         ctrl_shift.insert(ModifiersState::SHIFT);
-        assert!(is_prefix_press(&Key::Character("|".into()), &ctrl_shift, "h"));
+        assert!(is_prefix_press(
+            &Key::Character("|".into()),
+            &ctrl_shift,
+            "h"
+        ));
     }
 
     #[test]
@@ -249,7 +265,11 @@ mod tests {
         assert!(is_prefix_press(&Key::Character("h".into()), &ctrl, "H"));
         assert_eq!(prefix_label("h"), "Ctrl+H");
         // Without control, h is just a letter.
-        assert!(!is_prefix_press(&Key::Character("h".into()), &ModifiersState::default(), "h"));
+        assert!(!is_prefix_press(
+            &Key::Character("h".into()),
+            &ModifiersState::default(),
+            "h"
+        ));
     }
 
     #[test]
@@ -265,11 +285,26 @@ mod tests {
     #[test]
     fn normalize_space_rewrites_named_space_to_a_character_space() {
         // The (macOS) spacebar arrives as Named(Space); it must become Character(" ").
-        assert_eq!(normalize_space(&Key::Named(NamedKey::Space)), Key::Character(" ".into()));
+        assert_eq!(
+            normalize_space(&Key::Named(NamedKey::Space)),
+            Key::Character(" ".into())
+        );
         // Everything else is untouched.
-        assert_eq!(normalize_space(&Key::Character("a".into())), Key::Character("a".into()));
-        assert_eq!(normalize_space(&Key::Named(NamedKey::Enter)), Key::Named(NamedKey::Enter));
-        assert_eq!(normalize_space(&Key::Named(NamedKey::Escape)), Key::Named(NamedKey::Escape));
-        assert_eq!(normalize_space(&Key::Named(NamedKey::ArrowUp)), Key::Named(NamedKey::ArrowUp));
+        assert_eq!(
+            normalize_space(&Key::Character("a".into())),
+            Key::Character("a".into())
+        );
+        assert_eq!(
+            normalize_space(&Key::Named(NamedKey::Enter)),
+            Key::Named(NamedKey::Enter)
+        );
+        assert_eq!(
+            normalize_space(&Key::Named(NamedKey::Escape)),
+            Key::Named(NamedKey::Escape)
+        );
+        assert_eq!(
+            normalize_space(&Key::Named(NamedKey::ArrowUp)),
+            Key::Named(NamedKey::ArrowUp)
+        );
     }
 }

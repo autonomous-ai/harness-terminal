@@ -305,7 +305,7 @@ struct Application {
     seen_history: Vec<usize>,
     /// Monotonic instant each tab last produced output (as observed by `activity_flags` — a grown
     /// scrollback while backgrounded). The focused tab is never stamped, so the tab you're actively
-    /// reading never counts as "quiet". Feeds the quiet/waiting triage count and `prefix+b`.
+    /// reading never counts as "quiet". Feeds the quiet/waiting triage count and `prefix+z`.
     last_output: Vec<std::time::Instant>,
     /// A transient status-line toast (text, shown-at) for one-shot confirmations like an export
     /// path. Displayed for a couple seconds, then fades on its own. None = no toast.
@@ -382,6 +382,9 @@ struct Host {
     tab: usize,
     /// True once this window has been spliced into the native tab group (AppKit `addTabbedWindow:`).
     grouped: bool,
+    /// Last OS window title we set for this host, so we only call `set_title` (a platform
+    /// round-trip) when the session's live title actually changes instead of every frame.
+    title: String,
 }
 
 /// A right-click context menu row.
@@ -448,7 +451,9 @@ impl Application {
         // Ctrl+Space can never break the prefix.
         let prefix_claimed = crate::macos::ctrl_space_claimed();
         let prefix_key = cfg.prefix_key.clone().unwrap_or_else(|| "h".to_string());
+        let chord = crate::keys::prefix_label(&prefix_key);
         let tab_count = app.tabs.len();
+        let offline = app.startup_offline;
         let seen_history = vec![usize::MAX; tab_count];
         // Quiet threshold from config: how long a live, backgrounded, unprotected tab can sit silent
         // before it counts as waiting-on-input. Fresh tabs start stamped "now" so they never read
@@ -538,7 +543,18 @@ impl Application {
             seen_history,
             last_output,
             notified: vec![false; tab_count],
-            flash: None,
+            flash: if offline > 0 {
+                Some((
+                    format!(
+                        "{offline} session{} not reached — host down · reconnect via {}+r or Ctrl+H r",
+                        if offline == 1 { "" } else { "s" },
+                        chord,
+                    ),
+                    std::time::Instant::now(),
+                ))
+            } else {
+                None
+            },
             peek_sel: 0,
             peek_scroll: 0,
             palette_q: String::new(),
@@ -804,6 +820,13 @@ impl Application {
         }
     }
 
+    /// Persist the current tab list to disk. Called right after a successful spawn so a freshly
+    /// opened session survives a crash/force-quit (otherwise a new tab only gets saved later, on
+    /// close/quit). Cheap idempotent file write; safe to call from the UI handlers only.
+    fn persist_tabs(&self) {
+        crate::restore::save(&self.app.tab_specs());
+    }
+
     /// Open the broadcast overlay pre-scoped to exactly the tiles marked in the fleet grid (`b`).
     /// If nothing is marked, fall back to opening broadcast on all sessions (safety — you can't
     /// silently broadcast to zero). Marks are consumed (cleared) once applied.
@@ -1033,8 +1056,8 @@ impl Application {
         // Prefer an open tab with the same engine id, so re-running the same session isn't duplicated.
         if let Some(i) = self.app.tabs.iter().position(|t| t.meta.engine == eng) {
             self.set_active(i);
-        } else if !eng.is_empty() {
-            self.app.spawn_tmux("this-host", &eng);
+        } else if !eng.is_empty() && self.app.spawn_tmux("this-host", &eng).is_none() {
+            self.persist_tabs();
         }
         self.app.overlay = Overlay::None;
     }
@@ -1255,7 +1278,7 @@ impl Application {
                 kind: s.kind().to_string(),
                 host: s.meta.host.clone(),
                 engine: s.meta.engine.clone(),
-                port: None,
+                port: s.port(),
                 session: s.attach_session.clone(),
                 name: s.meta.name.clone(),
             });
@@ -2719,6 +2742,7 @@ impl Application {
             ("Cmd/Ctrl+click", "open URL / file path"),
             ("Cmd+T / Cmd+N", "new session (new native tab)"),
             ("Cmd+W", "close active tab/window"),
+            ("Cmd+Shift+T", "reopen last-closed tab"),
             ("Cmd+Q", "quit"),
             ("Cmd+Shift+[ / ]", "previous / next tab"),
             ("Cmd+1-9 / 0", "jump straight to that tab (0 = last)"),
@@ -3908,11 +3932,14 @@ impl Application {
                 }
                 Some("remote_attach") => {
                     self.app.overlay = Overlay::RemoteAttach;
-                    self.app.remote_host = self.app.recent_hosts.first().cloned().unwrap_or_default();
+                    self.app.remote_host =
+                        self.app.recent_hosts.first().cloned().unwrap_or_default();
                     self.app.selected = 0;
                 }
                 Some("local_shell") => {
-                    self.app.spawn_tmux("this-host", "shell");
+                    if self.app.spawn_tmux("this-host", "shell").is_none() {
+                        self.persist_tabs();
+                    }
                 }
                 Some("quit") => return true,
                 Some("fleet") => {
@@ -4122,6 +4149,9 @@ impl Application {
                 self.palette_rows = PaletteAction::all_rows();
                 self.app.overlay = Overlay::CommandPalette;
             }
+            CmdShortcut::ReopenTab => {
+                self.app.reopen_last_closed();
+            }
             CmdShortcut::GotoTab(i) => {
                 if !self.app.tabs.is_empty() {
                     // `0` was encoded as usize::MAX → the last tab (mirrors prefix+0).
@@ -4182,11 +4212,13 @@ impl Application {
                                     Some(self.new_cwd.trim().to_string())
                                 };
                                 if let Some(err) = self.app.spawn_local("this-host", e, cwd) {
-                                    self.flash = Some((format!("⚠ {err}"), std::time::Instant::now()));
+                                    self.flash =
+                                        Some((format!("⚠ {err}"), std::time::Instant::now()));
                                     // Keep the picker open on failure so a bad cwd/engine can be
                                     // fixed and retried instead of forcing a full retype.
                                     return;
                                 }
+                                self.persist_tabs();
                                 self.app.overlay = Overlay::None;
                             }
                         }
@@ -4228,7 +4260,8 @@ impl Application {
                             } else {
                                 (addr, crate::harness::HARNESS_PORT_DEFAULT)
                             };
-                            let label = format!("{}:{port}", if host.is_empty() { "?" } else { &host });
+                            let label =
+                                format!("{}:{port}", if host.is_empty() { "?" } else { &host });
                             // Snapshot whether this is an attach (vs a fresh spawn) and the session
                             // name before `attach` is moved into the match below, so the success
                             // toast can describe what actually kicked off.
@@ -4238,18 +4271,17 @@ impl Application {
                                 Some(session) => {
                                     self.app.spawn_tunnel_attach(&host, port, &session)
                                 }
-                                None => self.app.selected_engine().and_then(|e| {
-                                    self.app.spawn_tunnel(&host, port, e)
-                                }),
+                                None => self
+                                    .app
+                                    .selected_engine()
+                                    .and_then(|e| self.app.spawn_tunnel(&host, port, e)),
                             };
                             // A failed remote connect must not be silent: flash the real reason so a
                             // diver knows the daemon/session wasn't reached (host down, wrong port,
                             // no such session) instead of the tab just never appearing.
                             if let Some(e) = err {
-                                self.flash = Some((
-                                    format!("⚠ {label}: {e}"),
-                                    std::time::Instant::now(),
-                                ));
+                                self.flash =
+                                    Some((format!("⚠ {label}: {e}"), std::time::Instant::now()));
                                 // Keep the overlay open (and the typed address) so a typo'd host can
                                 // be corrected and re-submitted rather than lost and retyped.
                                 return;
@@ -4266,6 +4298,7 @@ impl Application {
                                 )
                             };
                             self.flash = Some((ok, std::time::Instant::now()));
+                            self.persist_tabs();
                             self.app.overlay = Overlay::None;
                         }
                         winit::keyboard::NamedKey::Escape => self.app.overlay = Overlay::None,
@@ -4308,6 +4341,10 @@ impl Application {
                             self.find_recompute(None);
                         }
                         winit::keyboard::NamedKey::Escape => {
+                            // Clear the search highlight on dismiss so the frozen match doesn't
+                            // linger in the grid after find closes.
+                            self.find_hit = None;
+                            self.find_all = Vec::new();
                             self.app.overlay = Overlay::None;
                         }
                         _ => {}
@@ -4810,9 +4847,7 @@ impl Application {
                         // Shift+Tab must arrive as the reverse-tab sequence (`ESC [ Z`), not a bare
                         // `\t` — dropping the modifier makes Claude Code / shells read it as a plain
                         // Tab and their back-cycling (Shift+Tab) shortcuts silently stop working.
-                        winit::keyboard::NamedKey::Tab if mods.shift_key() => {
-                            s.write(b"\x1b[Z")
-                        }
+                        winit::keyboard::NamedKey::Tab if mods.shift_key() => s.write(b"\x1b[Z"),
                         winit::keyboard::NamedKey::Tab => s.write(b"\t"),
                         winit::keyboard::NamedKey::Escape => s.write(b"\x1b"),
                         winit::keyboard::NamedKey::ArrowUp => s.write(b"\x1b[A"),
@@ -4895,6 +4930,7 @@ impl Application {
             size: wsize,
             tab,
             grouped: false,
+            title: String::new(),
         })
     }
 
@@ -5035,10 +5071,14 @@ impl Application {
         self.render_host_grid(&mut fb, width, height, focused);
         self.app.active = prev;
 
-        // Sync the OS window title to its session's live OSC title.
+        // Sync the OS window title to its session's live OSC title, only when it changed (each
+        // set_title is a platform round-trip; the single-window path caches this the same way).
         if let Some(t) = self.app.tabs.get(tab).and_then(|s| s.live_title()) {
             let title = format!("{t} — harness-terminal");
-            self.hosts[i].window.set_title(&title);
+            if self.hosts[i].title != title {
+                self.hosts[i].window.set_title(&title);
+                self.hosts[i].title = title;
+            }
         }
 
         // Present this window's own framebuffer.
@@ -5176,7 +5216,7 @@ impl Application {
                 kind: s.kind().to_string(),
                 host: s.meta.host.clone(),
                 engine: s.meta.engine.clone(),
-                port: None,
+                port: s.port(),
                 session: s.attach_session.clone(),
                 name: s.meta.name.clone(),
             });
@@ -5718,7 +5758,11 @@ impl Application {
             CtxAction::SearchSelection => self.search_selection(),
             CtxAction::Separator => {}
             CtxAction::NewSession => {
+                // Match Cmd+T / palette: pre-select the default engine and pre-fill the last repo
+                // so the picker is predictable no matter how it's opened.
                 self.app.overlay = Overlay::NewSession;
+                self.app.select_default_engine();
+                self.new_cwd = self.app.last_dirs.first().cloned().unwrap_or_default();
             }
             CtxAction::CloseTab => {
                 let pin = self.pinned.get(self.app.active).copied().unwrap_or(false);
@@ -5840,7 +5884,7 @@ impl Application {
                 kind: s.kind().to_string(),
                 host: s.meta.host.clone(),
                 engine: s.meta.engine.clone(),
-                port: None,
+                port: s.port(),
                 session: s.attach_session.clone(),
                 name: s.meta.name.clone(),
             });
@@ -6138,6 +6182,8 @@ enum CmdShortcut {
     /// Cmd+1..9 — jump straight to that tab (1-based); Cmd+0 jumps to the last. The universal
     /// macOS/browser/iTerm way to page between many agent sessions without cycling.
     GotoTab(usize),
+    /// Cmd+Shift+T — reopen the last-closed tab (the browser/iTerm recovery muscle memory).
+    ReopenTab,
     /// Not a Cmd shortcut we own (forward as normal).
     None,
 }
@@ -6165,6 +6211,9 @@ fn cmd_shortcut(key: &Key, mods: &ModifiersState) -> CmdShortcut {
             d if d.len() == 1 && d.as_bytes()[0].is_ascii_digit() => {
                 GotoTab(d.as_bytes()[0] as usize - b'1' as usize)
             }
+            // Cmd+Shift+T reopens the last-closed tab (U is shift; T is shift-pressed too).
+            // Must be checked for the shifted 'T' since Cmd+T alone is NewSession.
+            "T" if mods.shift_key() => ReopenTab,
             // Plain Cmd+[ is left to the shell; only the Shift variant switches tabs.
             _ => None,
         },
@@ -6186,7 +6235,7 @@ pub(crate) fn close_tab(app: &mut App, pinned: bool) -> bool {
             kind: s.kind().to_string(),
             host: s.meta.host.clone(),
             engine: s.meta.engine.clone(),
-            port: None,
+            port: s.port(),
             name: s.meta.name.clone(),
             session: s.attach_session.clone(),
         });
@@ -6755,9 +6804,8 @@ mod tests {
         let mut no_cmd = ModifiersState::empty();
         no_cmd.insert(ModifiersState::SHIFT);
 
-        let chars = |c: &str, m: ModifiersState| {
-            cmd_shortcut(&Key::Character(c.to_string().into()), &m)
-        };
+        let chars =
+            |c: &str, m: ModifiersState| cmd_shortcut(&Key::Character(c.to_string().into()), &m);
 
         // Cmd+T / Cmd+N open the New-Session picker.
         assert_eq!(chars("t", s), CmdShortcut::NewSession);
@@ -6773,24 +6821,45 @@ mod tests {
         assert_eq!(chars("{", sc), CmdShortcut::PrevTab, "shifted [ glyph");
         // Cmd+Shift+P opens the command palette; plain Cmd+P is left alone.
         assert_eq!(chars("P", sc), CmdShortcut::CommandPalette);
-        assert_eq!(chars("p", sc), CmdShortcut::None, "plain Cmd+P is not hijacked");
-        assert_eq!(chars("]", s), CmdShortcut::None, "plain Cmd+] is not a shortcut");
-        assert_eq!(chars("[", s), CmdShortcut::None, "plain Cmd+[ stays with the shell");
+        assert_eq!(
+            chars("p", sc),
+            CmdShortcut::None,
+            "plain Cmd+P is not hijacked"
+        );
+        assert_eq!(
+            chars("]", s),
+            CmdShortcut::None,
+            "plain Cmd+] is not a shortcut"
+        );
+        assert_eq!(
+            chars("[", s),
+            CmdShortcut::None,
+            "plain Cmd+[ stays with the shell"
+        );
         // Cmd+number jumps to a tab: 1..9 are 1-based, 0 is the last tab (usize::MAX sentinel).
         assert_eq!(chars("1", s), CmdShortcut::GotoTab(0));
         assert_eq!(chars("5", s), CmdShortcut::GotoTab(4));
         assert_eq!(chars("9", s), CmdShortcut::GotoTab(8));
         assert_eq!(chars("0", s), CmdShortcut::GotoTab(usize::MAX));
+        // Cmd+Shift+T reopens the last-closed tab; plain Cmd+t stays NewSession.
+        assert_eq!(chars("T", sc), CmdShortcut::ReopenTab);
+        assert_eq!(
+            chars("t", s),
+            CmdShortcut::NewSession,
+            "plain Cmd+T unchanged"
+        );
         // Shifted digits ("!") are NOT tab jumps — they fall through to None.
         assert_eq!(chars("!", sc), CmdShortcut::None);
         // No Cmd at all: nothing is a shortcut (typing flows through).
         assert_eq!(chars("t", no_cmd), CmdShortcut::None);
-        assert_eq!(cmd_shortcut(&Key::Named(winit::keyboard::NamedKey::Enter), &s), CmdShortcut::None);
+        assert_eq!(
+            cmd_shortcut(&Key::Named(winit::keyboard::NamedKey::Enter), &s),
+            CmdShortcut::None
+        );
         // Cmd+C / Cmd+V are copy/paste, handled elsewhere — not a tab shortcut.
         assert_eq!(chars("c", s), CmdShortcut::None);
         assert_eq!(chars("v", s), CmdShortcut::None);
     }
-
 
     /// Fleet search spans multiple sessions and is sorted by tab then line. Build two real emulator
     /// Terms (no PTY needed), seed each with distinct text, and assert the collected matches are

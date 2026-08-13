@@ -34,7 +34,7 @@ pub struct Config {
     pub start_cwd: Option<String>,
     /// How many seconds a live, backgrounded, unprotected tab must sit without producing output
     /// before it counts as "quiet" (a likely-done / waiting-for-input signal) in the fleet triage
-    /// and `prefix+b` jump. Absent = 120s. Large values damp a chatty fleet; small values surface
+    /// and `prefix+z` jump. Absent = 120s. Large values damp a chatty fleet; small values surface
     /// a stuck run faster.
     #[serde(default)]
     pub quiet_after_secs: Option<u64>,

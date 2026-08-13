@@ -70,6 +70,10 @@ pub struct App {
     /// Remote hosts/sessions the diver attached to, most-recent first (MRU). Pre-fills the
     /// Remote-Attach overlay so re-connecting to the same server is one Enter.
     pub recent_hosts: Vec<String>,
+    /// How many persisted sessions failed to reopen at launch because their transport/host was
+    /// unreachable. Set by the launcher before the app draws; the first frame flashes a one-time
+    /// notice so an offline server isn't silently dropped from view.
+    pub startup_offline: usize,
 }
 
 impl App {
@@ -106,6 +110,7 @@ impl App {
             engine_last_used: recency,
             last_dirs: crate::restore::load_recent_dirs(),
             recent_hosts: crate::restore::load_recent_hosts(),
+            startup_offline: 0,
         }
     }
 
@@ -119,7 +124,12 @@ impl App {
 
     /// Create a new session tab running a local engine, and focus it. `cwd` is an optional per-tab
     /// working directory; None falls back to the config `start_cwd` / the binary's cwd.
-    pub fn spawn_local(&mut self, host: &str, engine_id: &str, cwd: Option<String>) -> Option<String> {
+    pub fn spawn_local(
+        &mut self,
+        host: &str,
+        engine_id: &str,
+        cwd: Option<String>,
+    ) -> Option<String> {
         let program = engine_cmd(engine_id).unwrap_or("bash");
         let meta = self.meta_for(host, engine_id);
         if let Some(dir) = &cwd {
@@ -274,7 +284,12 @@ impl App {
     /// Push a newly-spawned session tab (focused) on success; on failure return the error message so
     /// the caller can surface it in-UI (a remote attach/spawn that silently does nothing leaves a
     /// diver guessing why their tab never appeared).
-    fn push_ok(&mut self, res: std::io::Result<Session>, engine_id: &str, host: &str) -> Option<String> {
+    fn push_ok(
+        &mut self,
+        res: std::io::Result<Session>,
+        engine_id: &str,
+        host: &str,
+    ) -> Option<String> {
         match res {
             Ok(session) => {
                 self.note_engine_used(engine_id);
@@ -410,7 +425,7 @@ impl App {
             kind: kind.to_string(),
             host: active.meta.host.clone(),
             engine: active.meta.engine.clone(),
-            port: None,
+            port: active.port(),
             session: active.attach_session.clone(),
             name: None,
         };
@@ -425,7 +440,9 @@ impl App {
     /// Reopen a previously-persisted tab. Chooses the right transport from `kind` so a session
     /// comes back with the same identity (local pane vs remote ssh vs tunnel). Best-effort: a
     /// failed re-spawn just leaves no tab.
-    pub fn restore_tab(&mut self, spec: &crate::restore::TabSpec) {
+    /// Returns `true` if the session was reopened, `false` if its host/transport was unreachable
+    /// (the launcher counts these to show an offline notice).
+    pub fn restore_tab(&mut self, spec: &crate::restore::TabSpec) -> bool {
         let program = engine_cmd(&spec.engine).unwrap_or("bash");
         let meta = self.meta_for(&spec.host, &spec.engine);
         let res = match spec.kind.as_str() {
@@ -454,18 +471,20 @@ impl App {
             }
             _ => Session::local(meta, program, Vec::new(), self.size, None),
         };
-        if let Ok(mut session) = res {
-            session.meta.name = spec.name.clone();
-            // Replay the persisted scrollback into the fresh emulator so a session comes back with
-            // its history intact (before live bytes arrive; the reconnect sweep appends on top).
-            let history = crate::restore::load_scrollback(&spec.kind, &spec.host, &spec.engine);
-            session.restore_history(&history);
-            self.tabs.push(session);
-            // Don't steal focus on restore — keep whatever was active (usually tab 0) meaningful.
-            if self.tabs.len() == 1 {
-                self.active = 0;
-            }
+        let Ok(mut session) = res else {
+            return false;
+        };
+        session.meta.name = spec.name.clone();
+        // Replay the persisted scrollback into the fresh emulator so a session comes back with
+        // its history intact (before live bytes arrive; the reconnect sweep appends on top).
+        let history = crate::restore::load_scrollback(&spec.kind, &spec.host, &spec.engine);
+        session.restore_history(&history);
+        self.tabs.push(session);
+        // Don't steal focus on restore — keep whatever was active (usually tab 0) meaningful.
+        if self.tabs.len() == 1 {
+            self.active = 0;
         }
+        true
     }
 }
 
@@ -539,6 +558,7 @@ mod tests {
             engine_last_used: std::collections::HashMap::new(),
             last_dirs: Vec::new(),
             recent_hosts: Vec::new(),
+            startup_offline: 0,
         };
         for i in 0..n {
             let meta = SessionMeta {
@@ -601,6 +621,30 @@ mod tests {
         assert_eq!(app.active, 1, "focus untouched");
     }
 
+    /// A restored tunnel tab whose host/port is unreachable must NOT reopen a broken tab: it
+    /// returns false (and leaves the tab list empty) so the launcher can count it as offline and
+    /// surface a notice. Uses a just-closed ephemeral port so connection-refused is guaranteed.
+    #[test]
+    fn restore_unreachable_tunnel_returns_false() {
+        // Bind then drop an ephemeral port so it is guaranteed closed for the connect attempt.
+        let port = {
+            let l = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+            l.local_addr().unwrap().port()
+        };
+        let mut app = app_with(0);
+        let spec = crate::restore::TabSpec {
+            kind: "tunnel".into(),
+            host: "127.0.0.1".into(),
+            engine: "shell".into(),
+            port: Some(port),
+            session: None,
+            name: None,
+        };
+        let ok = app.restore_tab(&spec);
+        assert!(!ok, "unreachable tunnel must not reopen as a broken tab");
+        assert!(app.tabs.is_empty(), "no tab should be left behind");
+    }
+
     /// The engine picker floats the most-recently-used engine to the top, ties broken
     /// alphabetically (and never-used ones sort after every used one).
     #[test]
@@ -633,7 +677,6 @@ mod tests {
         a2.move_tab_from_to(9, 0); // from out of range
         assert_eq!(a2.tabs.len(), 3);
     }
-
 
     /// Remote-host MRU: most-recent first, deduped on re-use, capped at 8, empty strings skipped.
     #[test]

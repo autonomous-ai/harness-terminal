@@ -42,6 +42,12 @@ pub trait Transport: Send {
     /// Kill the session's pane (and its underlying tmux session) so it stops consuming resources on
     /// its host. Default no-op for a local PTY, which already dies with its child.
     fn destroy(&self) {}
+    /// The harness control port this transport reaches, if it's a tunnel transport. Lets the app
+    /// persist/duplicate a non-default remote port instead of reconnecting to the default. None for
+    /// local, tmux and ssh transports.
+    fn port(&self) -> Option<u16> {
+        None
+    }
 }
 
 // ── local PTY (alacritty event loop) ────────────────────────────────────────────────────────────
@@ -589,15 +595,7 @@ impl TunnelTransport {
         echo: Arc<EchoCanceller>,
     ) -> io::Result<TunnelTransport> {
         let (tx, alive) = TunnelTransport::build_connection(
-            host,
-            port,
-            session,
-            "bash",
-            size,
-            &term,
-            &echo,
-            false,
-            true,
+            host, port, session, "bash", size, &term, &echo, false, true,
         )?;
         Ok(TunnelTransport {
             host: host.to_string(),
@@ -643,10 +641,15 @@ impl TunnelTransport {
         // returning the error (so the in-app toast fires), instead of freezing the UI.
         let addr = format!("{host}:{port}");
         let tcp = std::net::ToSocketAddrs::to_socket_addrs(addr.as_str())
-            .map_err(|e| io::Error::new(io::ErrorKind::Other, format!("tunnel resolve {addr}: {e}")))?
+            .map_err(|e| {
+                io::Error::new(io::ErrorKind::Other, format!("tunnel resolve {addr}: {e}"))
+            })?
             .next()
             .ok_or_else(|| {
-                io::Error::new(io::ErrorKind::Other, format!("tunnel resolve {addr}: no address"))
+                io::Error::new(
+                    io::ErrorKind::Other,
+                    format!("tunnel resolve {addr}: no address"),
+                )
             })
             .and_then(|sa| {
                 std::net::TcpStream::connect_timeout(&sa, std::time::Duration::from_secs(4))
@@ -779,6 +782,9 @@ impl TunnelTransport {
 impl Transport for TunnelTransport {
     fn kind(&self) -> &'static str {
         "tunnel"
+    }
+    fn port(&self) -> Option<u16> {
+        Some(self.port)
     }
 
     fn write(&self, bytes: &[u8]) {

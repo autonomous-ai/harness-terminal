@@ -37,7 +37,7 @@ impl App {
                 kind: s.kind().to_string(),
                 host: s.meta.host.clone(),
                 engine: s.meta.engine.clone(),
-                port: None,
+                port: s.port(),
                 session: s.attach_session.clone(),
                 name: s.meta.name.clone(),
             })
@@ -612,20 +612,13 @@ mod tests {
     fn recent_hosts_roundtrip_in_order() {
         with_isolated_dir(|_| {
             assert!(load_recent_hosts().is_empty(), "no file yet");
-            save_recent_hosts(&[
-                "10.0.0.4:18473/claude".to_string(),
-                "builder".to_string(),
-            ]);
+            save_recent_hosts(&["10.0.0.4:18473/claude".to_string(), "builder".to_string()]);
             assert_eq!(
                 load_recent_hosts(),
-                vec![
-                    "10.0.0.4:18473/claude".to_string(),
-                    "builder".to_string(),
-                ]
+                vec!["10.0.0.4:18473/claude".to_string(), "builder".to_string(),]
             );
         });
     }
-
 
     /// Window geometry round-trips through its own file; a zero size is refused/tolerated.
     #[test]

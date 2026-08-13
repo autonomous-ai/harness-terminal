@@ -449,6 +449,12 @@ impl Session {
         self.transport.kind()
     }
 
+    /// The harness control port this session reaches over, if it's a tunnel transport (used to keep
+    /// a non-default remote port when persisting, duplicating, or undoing-close). None otherwise.
+    pub fn port(&self) -> Option<u16> {
+        self.transport.port()
+    }
+
     /// Whether the session's transport is still live. Local PTYs are always alive; tmux/ssh/tunnel
     /// transports report false once their connection or pane dies.
     pub fn alive(&self) -> bool {
@@ -861,7 +867,6 @@ mod tests {
     /// captured snapshot can be replayed to a fresh emulator and reconstruct the same history.
     #[test]
     fn capture_returns_scrollback_text_in_order() {
-
         let size = TermSize {
             lines: 24,
             cols: 40,
