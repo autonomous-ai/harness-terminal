@@ -547,6 +547,29 @@ pub fn load_find_history() -> Vec<String> {
     serde_json::from_str(&raw).unwrap_or_default()
 }
 
+/// Persist the find-in-session options (case-sensitivity + whole-word) so a diver's preference
+/// survives a restart, the way the find MRU does. Stored as a `[case, whole_word]` boolean pair in
+/// its own file; missing/corrupt data reads back as the defaults (both off).
+pub fn save_find_opts(case_sensitive: bool, whole_word: bool) {
+    let _ = std::fs::create_dir_all(config_dir());
+    let _ = std::fs::write(
+        find_path("find-opts.json"),
+        serde_json::to_string_pretty(&(case_sensitive, whole_word)).unwrap_or_default(),
+    );
+}
+
+/// Load the persisted find options (both off on a missing/corrupt file).
+pub fn load_find_opts() -> (bool, bool) {
+    let Ok(raw) = std::fs::read_to_string(find_path("find-opts.json")) else {
+        return (false, false);
+    };
+    serde_json::from_str(&raw).unwrap_or((false, false))
+}
+
+fn find_path(name: &str) -> std::path::PathBuf {
+    config_dir().join(name)
+}
+
 fn pinned_path() -> std::path::PathBuf {
     config_dir().join("pinned.json")
 }
@@ -601,6 +624,21 @@ mod tests {
         set_config_override(None);
         let _ = std::fs::remove_dir_all(&dir);
         assert!(r.is_ok());
+    }
+
+    /// Find options persist as a boolean pair and read back defaults when absent/corrupt.
+    #[test]
+    fn find_opts_roundtrip_through_isolated_dir() {
+        with_isolated_dir(|_| {
+            // Nothing written yet → both off.
+            assert_eq!(load_find_opts(), (false, false));
+            save_find_opts(true, false);
+            assert_eq!(load_find_opts(), (true, false));
+            save_find_opts(false, true);
+            assert_eq!(load_find_opts(), (false, true));
+            save_find_opts(true, true);
+            assert_eq!(load_find_opts(), (true, true));
+        });
     }
 
     /// A spec round-trips through JSON losslessly, including a tunnelled (port-carrying) tab.

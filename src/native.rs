@@ -605,7 +605,13 @@ impl Application {
             last_active: None,
             find_query: String::new(),
             find_history: crate::restore::load_find_history(),
-            find_opts: Default::default(),
+            find_opts: {
+                let (cs, ww) = crate::restore::load_find_opts();
+                let mut o = crate::render::FindOptions::default();
+                o.case_sensitive = cs;
+                o.whole_word = ww;
+                o
+            },
             rename_query: String::new(),
             broadcast_query: String::new(),
             last_broadcast: crate::restore::load_last_broadcast(),
@@ -4142,6 +4148,11 @@ impl Application {
         crate::restore::save_find_history(&self.find_history);
     }
 
+    /// Persist the current find options so they survive a restart (iTerm2-style state memory).
+    fn persist_find_opts(&self) {
+        crate::restore::save_find_opts(self.find_opts.case_sensitive, self.find_opts.whole_word);
+    }
+
     /// Recompute the occurrence list after a query edit; focuses the first match (or the match
     /// nearest the previous focus) so the viewport tracks the user.
     fn find_recompute(&mut self, _start: Option<i32>) {
@@ -6012,11 +6023,13 @@ impl Application {
                     // search containing those letters isn't hijacked mid-entry.
                     Key::Character(c) if c == "c" && self.find_query.is_empty() => {
                         self.find_opts.case_sensitive = !self.find_opts.case_sensitive;
+                        self.persist_find_opts();
                         self.find_query.clear();
                         self.find_recompute(None);
                     }
                     Key::Character(c) if c == "w" && self.find_query.is_empty() => {
                         self.find_opts.whole_word = !self.find_opts.whole_word;
+                        self.persist_find_opts();
                         self.find_query.clear();
                         self.find_recompute(None);
                     }

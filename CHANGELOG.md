@@ -86,6 +86,10 @@ entries record user-visible and architectural changes since the last tagged mile
   a bulk close — defeating the "marks required so a stray press is never destructive" guard. Marks
   now clear on grid close, matching the broadcast overlay's fresh-reset behavior.
 ### Added
+- **Find-in-session remembers your case / whole-word toggles across restarts** (iTerm2-style
+  state memory, the same way query history is remembered). Toggle `c` / `w` in the find bar once
+  and the `[Aa]` / `[whole-word]` flags come back on next launch; no re-toggling each session.
+  Persisted to its own file with a round-trip unit test.
 - **A scrollback scrollbar with a live thumb now sits on the grid's right edge.** Whenever a
   session has more history than the viewport, a translucent track and a thumb show your position
   in the log (at live bottom the thumb hugs the bottom; scrolled to the top it hugs the top) —

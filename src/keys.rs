@@ -246,7 +246,10 @@ mod tests {
         let mut cfg = BTreeMap::new();
         cfg.insert("broadcast".to_string(), "x".to_string());
         let out = resolve_inverted(&cfg);
-        assert_eq!(out["x"], "broadcast", "explicit remap must win the shared key");
+        assert_eq!(
+            out["x"], "broadcast",
+            "explicit remap must win the shared key"
+        );
         // And the displaced action's original key is gone from dispatch (one key = one action).
         assert!(out.values().all(|a| a != "close_tab") || out.len() == ACTIONS.len());
     }
