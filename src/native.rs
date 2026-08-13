@@ -4263,11 +4263,26 @@ impl Application {
             } else {
                 String::new()
             };
+            // A quiet (awaiting-you) row says how long it has been parked, matching the fleet grid.
+            // Down wins (its ○ reason is the more urgent signal): an idle duration only reads when
+            // the pane is live and hasn't been flagged busy/active this frame.
+            let idle_tag = if !down && self.quiet_for(i) {
+                let idle = std::time::Instant::now()
+                    - self
+                        .last_output
+                        .get(i)
+                        .copied()
+                        .unwrap_or(std::time::Instant::now());
+                format!(" · ⌛{}", fmt_duration(idle))
+            } else {
+                String::new()
+            };
             let line = format!(
-                "  {} · {} · {}{}{}",
+                "  {} · {} · {}{}{}{}",
                 s.meta.host,
                 name,
                 live,
+                idle_tag,
                 reason_tag,
                 if sel { " ◄" } else { "" }
             );

@@ -6,6 +6,9 @@ entries record user-visible and architectural changes since the last tagged mile
 ## Unreleased / 0.1.0 (in progress)
 
 ### Added
+- **The peek list shows how long a quiet tab has been waiting.** A quiet (awaiting-you) row now
+  reads `⌛3m` (or `5s`/`2h`/`1d`), matching the fleet grid — so triaging "which agents are parked
+  longest" works from the peek too, not just the war-room grid.
 - **The fleet grid shows how long a quiet tab has been waiting.** A `⌛` tile now reads `⌛3m`
   (or `5s`/`2h`/`1d`), so the war-room tells you at a glance which agents have been parked the
   longest — not just that one is idle.
