@@ -2102,10 +2102,17 @@ impl Application {
             // that's sat silent past the threshold is likely done / parked waiting on you. Shown as
             // a dim `⌛N` alongside busy's `!M` so the two triage counters read together.
             let (any_quiet, quiet_n, _) = self.quiet_flags();
-            if down > 0 || busy > 0 || queued > 0 || any_quiet || self.dnd {
+            // Panes that just came back (transient `↻` recovery badge) — the peek header already
+            // reports these; echo them here so the always-on triage matches and a fleet-wide burst
+            // of recovery is visible on the status line, not just when the peek is open.
+            let rec_n = self.recover_until.iter().filter(|r| r.is_some()).count();
+            if down > 0 || busy > 0 || queued > 0 || any_quiet || rec_n > 0 || self.dnd {
                 let mut triage = String::new();
                 if down > 0 {
                     triage += &format!("↓{down} ");
+                }
+                if rec_n > 0 {
+                    triage += &format!("↻{rec_n} ");
                 }
                 if busy > 0 {
                     triage += &format!("!{busy} ");

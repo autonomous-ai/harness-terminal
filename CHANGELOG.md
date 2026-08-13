@@ -6,6 +6,10 @@ entries record user-visible and architectural changes since the last tagged mile
 ## Unreleased / 0.1.0 (in progress)
 
 ### Added
+- **The always-on status line reports panes that just reconnected.** Alongside `↓N down`, `!M busy`,
+  `⏳N queued` and `⌛N quiet`, the triage now shows `↻N` for panes that came back online in the last
+  few seconds — matching the peek header, so a fleet-wide burst of recovery is visible on the status
+  line without opening the peek.
 - **The broadcast overlay shows where you are in history while recalling.** Shift+Up/Shift+Down
   now annotate the staged line with a `⇧↑ i/n` position (0 = newest), so before you hit Enter you
   can see which prior fan-out you recalled instead of only a bare echoed line.
