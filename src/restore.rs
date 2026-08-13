@@ -523,6 +523,30 @@ pub fn load_broadcast_history() -> Vec<String> {
 
 // ── pin persistence ─────────────────────────────────────────────────────────
 
+// ── find history persistence ────────────────────────────────────────────────
+
+fn find_history_path() -> std::path::PathBuf {
+    config_dir().join("find-history.json")
+}
+
+/// Persist the MRU of find queries actually run (most-recent first, already capped by the caller),
+/// so recalling a search (Up in the find bar with an empty query) survives a restart. Best-effort.
+pub fn save_find_history(hist: &[String]) {
+    let _ = std::fs::create_dir_all(config_dir());
+    let _ = std::fs::write(
+        find_history_path(),
+        serde_json::to_string_pretty(hist).unwrap_or_default(),
+    );
+}
+
+/// Load the find history (empty on missing file / bad JSON).
+pub fn load_find_history() -> Vec<String> {
+    let Ok(raw) = std::fs::read_to_string(find_history_path()) else {
+        return Vec::new();
+    };
+    serde_json::from_str(&raw).unwrap_or_default()
+}
+
 fn pinned_path() -> std::path::PathBuf {
     config_dir().join("pinned.json")
 }

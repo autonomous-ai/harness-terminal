@@ -75,6 +75,10 @@ entries record user-visible and architectural changes since the last tagged mile
   a bulk close — defeating the "marks required so a stray press is never destructive" guard. Marks
   now clear on grid close, matching the broadcast overlay's fresh-reset behavior.
 ### Added
+- **Find remembers your recent searches.** The find bar now keeps an MRU of queries you actually
+  ran (deduped, capped at 16, persisted across restarts like broadcast history). Press **Up** with
+  an empty query to recall the most recent search — iTerm2-style search memory, so a regex or a
+  phrase you used to hunt a bug earlier is one keystroke away next time.
 - **Cmd+F now opens find-in-session (and Cmd+G / Cmd+Shift+G step the results).** Previously the
   universal iTerm/editor find key did nothing special here — search lived only behind the prefix
   chord. Cmd+F now opens the find bar over the active pane's scrollback (same fresh-state init as

@@ -203,6 +203,9 @@ struct Application {
     last_active: Option<usize>,
     /// Active search query ("" when the Find overlay is closed).
     find_query: String,
+    /// MRU of find queries actually run, most-recent first (cap 16), persisted across restarts.
+    /// Up in the find bar with an empty query recalls the most recent — iTerm2-style search memory.
+    find_history: Vec<String>,
     /// In-progress rename for the active tab ("" when the Rename overlay is closed).
     rename_query: String,
     /// In-progress broadcast line ("" when the Broadcast overlay is closed). Enter sends it to every
@@ -598,6 +601,7 @@ impl Application {
             quiet_secs,
             last_active: None,
             find_query: String::new(),
+            find_history: crate::restore::load_find_history(),
             rename_query: String::new(),
             broadcast_query: String::new(),
             last_broadcast: crate::restore::load_last_broadcast(),
@@ -4127,6 +4131,13 @@ impl Application {
         self.find_index = 0;
     }
 
+    /// Record the current find query into the MRU (most-recent first, capped) and persist it, so
+    /// Up-recall survives a restart. No-op for an empty query. Uses the shared pure `prepend_capped`.
+    fn record_find_query(&mut self) {
+        prepend_capped(&mut self.find_history, &self.find_query, 16);
+        crate::restore::save_find_history(&self.find_history);
+    }
+
     /// Recompute the occurrence list after a query edit; focuses the first match (or the match
     /// nearest the previous focus) so the viewport tracks the user.
     fn find_recompute(&mut self, _start: Option<i32>) {
@@ -5976,6 +5987,7 @@ impl Application {
                     }
                     Key::Named(n) => match n {
                         winit::keyboard::NamedKey::Enter if mods.shift_key() => {
+                            self.record_find_query();
                             self.find_jump(-1);
                         }
                         // Shift+Tab goes to the previous match (mirroring Shift+Enter and the other
@@ -5983,14 +5995,27 @@ impl Application {
                         winit::keyboard::NamedKey::Tab if mods.shift_key() => {
                             self.find_jump(-1);
                         }
-                        winit::keyboard::NamedKey::Enter | winit::keyboard::NamedKey::Tab => {
+                        winit::keyboard::NamedKey::Enter => {
+                            self.record_find_query();
+                            self.find_jump(1);
+                        }
+                        winit::keyboard::NamedKey::Tab => {
                             self.find_jump(1);
                         }
                         winit::keyboard::NamedKey::ArrowDown => {
                             self.find_jump(1);
                         }
                         winit::keyboard::NamedKey::ArrowUp => {
-                            self.find_jump(-1);
+                            // Empty query + history recalls the most recent search (iTerm2 memory);
+                            // otherwise Up walks the previous match like before.
+                            if self.find_query.is_empty() {
+                                if let Some(q) = self.find_history.first().cloned() {
+                                    self.find_query = q;
+                                    self.find_recompute(None);
+                                }
+                            } else {
+                                self.find_jump(-1);
+                            }
                         }
                         winit::keyboard::NamedKey::Backspace => {
                             self.find_query.pop();
@@ -9079,6 +9104,17 @@ fn extra_named_seq(n: &winit::keyboard::NamedKey) -> Option<&'static [u8]> {
 /// Encode one SGR (mode 1006) mouse event: `ESC [ < Cb ; Cx ; Cy M` for a press/motion, `m` for a
 /// release. Coordinates are 1-based (terminal grid cells), `cb` is the xterm button/motion code
 /// with modifier bits folded in (see the helpers below). Pure so it can be unit-tested byte-for-byte.
+/// Prepend `q` to an MRU list, dropping any older equal entry so the list stays unique, capping at
+/// `cap`. No-op for an empty query. Pure so find/broadcast recall is unit-tested once.
+fn prepend_capped(hist: &mut Vec<String>, q: &str, cap: usize) {
+    if q.is_empty() {
+        return;
+    }
+    hist.retain(|h| h != q);
+    hist.insert(0, q.to_string());
+    hist.truncate(cap);
+}
+
 fn sgr_mouse(cb: u16, col: usize, row: usize, release: bool) -> Vec<u8> {
     format!(
         "\x1b[<{};{};{}{}",
@@ -9951,10 +9987,10 @@ mod tests {
         fleet_host_line, fmt_duration, fmt_reconnect_summary, format_engine_mix, fuzzy_match,
         grid_targets, grid_tile_at, group_notifications, host_color, host_engine_breakdown,
         host_tally, join_labels, move_slot, next_host_index, next_trouble_index,
-        parse_remote_attach, prev_trouble_index, reanchor_active_after_batch, recall_index,
-        scroll_top, session_indices_for_host, sgr_button_code, sgr_motion_code, sgr_mouse,
-        sgr_wheel_code, should_busy_nudge, status_accent, swap_slot, CmdShortcut, FleetMatch,
-        CHROME_BUSY, CHROME_ERR, CHROME_QUIET, CHROME_RECOVER,
+        parse_remote_attach, prepend_capped, prev_trouble_index, reanchor_active_after_batch,
+        recall_index, scroll_top, session_indices_for_host, sgr_button_code, sgr_motion_code,
+        sgr_mouse, sgr_wheel_code, should_busy_nudge, status_accent, swap_slot, CmdShortcut,
+        FleetMatch, CHROME_BUSY, CHROME_ERR, CHROME_QUIET, CHROME_RECOVER,
     };
 
     use winit::event::{ElementState, MouseButton};
@@ -10572,6 +10608,32 @@ mod tests {
         assert!(
             broadcast_bytes("").is_empty(),
             "blank must not broadcast a bare newline"
+        );
+    }
+
+    /// Find-history MRU dedups (a re-run moves to the front), caps at the max, and ignores blanks.
+    #[test]
+    fn prepend_capped_dedups_caps_and_skips_blank() {
+        let mut h: Vec<String> = vec![];
+        // Blank is ignored.
+        prepend_capped(&mut h, "", 4);
+        assert!(h.is_empty());
+        // New runs go to the front, newest first.
+        prepend_capped(&mut h, "zzz", 4);
+        prepend_capped(&mut h, "rust", 4);
+        prepend_capped(&mut h, "claude", 4);
+        assert_eq!(h, &["claude", "rust", "zzz"]);
+        // Re-running an existing query moves it to the front (dedup).
+        prepend_capped(&mut h, "rust", 4);
+        assert_eq!(h, &["rust", "claude", "zzz"]);
+        // Cap is honored: the oldest drops off when a 5th unique query arrives.
+        prepend_capped(&mut h, "codex", 4);
+        prepend_capped(&mut h, "tmux", 4);
+        assert_eq!(h.len(), 4);
+        assert_eq!(h[0], "tmux");
+        assert!(
+            !h.iter().any(|x| x == "zzz"),
+            "oldest entry should be dropped"
         );
     }
 
