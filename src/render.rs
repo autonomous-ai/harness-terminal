@@ -569,11 +569,13 @@ pub struct GlyphCache {
 }
 
 impl GlyphCache {
-    /// Load a TTF/OTF font (or macOS SF Mono) plus a best-effort matching italic face.
+    /// Load a usable monospace font (config override / `HARNESS_FONT` / macOS SF Mono) plus a
+    /// best-effort matching italic face. Degrades gracefully: a missing or corrupt configured font
+    /// falls back to a known system mono face instead of crashing the app at launch.
     pub fn load() -> Self {
-        let data = std::fs::read(font_path()).expect("system mono font not found");
-        let font = FontArc::try_from_vec(data).expect("font bytes invalid");
-        let italic = load_italic().and_then(|d| FontArc::try_from_vec(d).ok());
+        let (data, path) = usable_mono_font();
+        let font = FontArc::try_from_vec(data).expect("validated monospace font");
+        let italic = load_italic_for(&path).and_then(|d| FontArc::try_from_vec(d).ok());
         GlyphCache {
             font,
             italic,
@@ -662,7 +664,7 @@ impl GlyphCache {
     }
 }
 
-/// Best-effort path to an italic sibling face for `font_path()`. The known macOS default
+/// Best-effort path to an italic sibling face for a resolved mono font path. The known macOS default
 /// (`SFNSMono.ttf`) has a fixed `SFNSMonoItalic.ttf` neighbor; other fonts try `<stem>-Italic<ext>`
 /// and `<stem>Italic<ext>`. Returns None when no candidate exists so italic simply falls back.
 fn italic_candidate(font: &str) -> Option<String> {
@@ -687,10 +689,45 @@ fn italic_candidate(font: &str) -> Option<String> {
     None
 }
 
-/// Read the italic sibling bytes, or None when no italic face is present/readable.
-fn load_italic() -> Option<Vec<u8>> {
-    let cand = italic_candidate(&font_path())?;
+/// Read the italic sibling bytes for the *actually loaded* primary font path, or None when no
+/// italic face is present/readable. Takes the resolved primary path (which may differ from
+/// `font_path()` when the config override was invalid and the fallback chain picked another face).
+fn load_italic_for(font: &str) -> Option<Vec<u8>> {
+    let cand = italic_candidate(font)?;
     std::fs::read(cand).ok()
+}
+
+/// Pick a usable monospace font, degrading gracefully instead of panic: the configured `font_path`
+/// or `HARNESS_FONT` is validated first; when it's missing/corrupt (or SF Mono is absent on this
+/// machine) the known macOS mono faces are tried in order. Returns (bytes, resolved path). Only
+/// when no usable monospace exists at all — nothing could be rendered anyway — does this fail
+/// loudly at init rather than mid-frame.
+fn usable_mono_font() -> (Vec<u8>, String) {
+    let primary = font_path();
+    if let Some(data) = read_valid_font(&primary) {
+        return (data, primary);
+    }
+    for cand in [
+        "/System/Library/Fonts/SFNSMono.ttf",
+        "/System/Library/Fonts/Monaco.ttf",
+    ] {
+        if cand == primary {
+            continue;
+        }
+        if let Some(data) = read_valid_font(cand) {
+            return (data, cand.to_string());
+        }
+    }
+    let data = std::fs::read(&primary).expect("no usable monospace font found");
+    FontArc::try_from_vec(data).expect("font bytes invalid");
+    unreachable!()
+}
+
+/// Read `path` and return its bytes only when they parse as a usable font.
+fn read_valid_font(path: &str) -> Option<Vec<u8>> {
+    let data = std::fs::read(path).ok()?;
+    FontArc::try_from_vec(data.clone()).ok()?;
+    Some(data)
 }
 
 /// A search highlight: a match given as (absolute line, column, width).

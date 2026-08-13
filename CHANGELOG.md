@@ -13,6 +13,14 @@ entries record user-visible and architectural changes since the last tagged mile
   hot-path config I/O.
 
 ### Fixed
+- **A bad/missing configured font can no longer crash the app at launch.** `GlyphCache::load`
+  panicked (`expect`) the moment `font_path()` pointed at an unreadable or corrupt file (a typo in
+  `font_path`, a stale `HARNESS_FONT`) — the whole app died on open instead of rendering. The font is
+  now validated and, when the configured face is unusable, the known macOS mono faces are tried in
+  order (SF Mono → Monaco), so the terminal still opens with a working font. It only fails loudly
+  when no monospace at all can be loaded.
+
+### Fixed
 - **Native-tab mode no longer discards the persisted active tab on relaunch.** `sync_hosts` forced
   the focused session/window to tab 0 when it built the initial tab set, clobbering the active-tab
   that `main.rs` restores from the saved state — so a native-tab relaunch always reopened on the
