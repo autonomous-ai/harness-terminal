@@ -17,6 +17,16 @@ entries record user-visible and architectural changes since the last tagged mile
   config degrades rather than panics) — 114→116 unit tests.
 
 ### Fixed
+- **In-place terminal redraws no longer freeze the display.** The idle loop only woke when a pane's
+  *scrollback* grew (`history_len`), so any output that redraws the screen without scrolling — a vim
+  cursor move, an htop/top refresh, a TUI pane, a spinner/progress line, an agent updating in place —
+  left the terminal frozen on stale content until a key was pressed. The wake detector now also
+  tracks a rolling `visible_signature` of each session's grid (position + char + SGR flags + fg/bg +
+  cursor), so any visible change wakes the idle loop and the frame repaints. A stable screen still
+  hashes once per 120ms idle tick (0% CPU preserved), and a regression test rewrites a line in place
+  with zero scrollback growth and asserts the change is now seen.
+
+### Fixed
 - **A bad/missing configured font can no longer crash the app at launch.** `GlyphCache::load`
   panicked (`expect`) the moment `font_path()` pointed at an unreadable or corrupt file (a typo in
   `font_path`, a stale `HARNESS_FONT`) — the whole app died on open instead of rendering. The font is

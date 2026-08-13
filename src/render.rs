@@ -738,6 +738,86 @@ fn match_width(query: &str) -> usize {
     query.chars().count()
 }
 
+/// A cheap rolling signature of a session's VISIBLE grid — the same cells `draw_grid` paints — so
+/// the idle-wake detector (`about_to_wait` → `detect_content_change`) can notice output that redraws
+/// the screen in place without growing scrollback (a vim cursor move, an htop refresh, a spinner
+/// line, a TUI redrawing its pane). `history_len` alone misses those, which would leave the terminal
+/// showing stale content. Hashes position + char + SGR flags + fg/bg for every visible cell plus the
+/// cursor point (the block/beam is drawn even on an otherwise-empty screen). Returns a stable u64 —
+/// practically zero collisions across consecutive frames, and cheap at the 8fps idle tick.
+pub(crate) fn visible_signature(term: &Term<Listener>) -> u64 {
+    // FNV-1a.
+    const P: u64 = 0x0000_0100_0000_01b3;
+    let mut h: u64 = 0xcbf2_9ce4_8422_2325;
+    fn mix(h: &mut u64, v: u64) {
+        *h ^= v;
+        *h = h.wrapping_mul(P);
+    }
+    for idx in term.grid().display_iter() {
+        let p = idx.point;
+        mix(&mut h, p.line.0 as u64);
+        mix(&mut h, p.column.0 as u64);
+        mix(&mut h, idx.cell.c as u64);
+        mix(&mut h, idx.cell.flags.bits() as u64);
+        mix(&mut h, color_key(&idx.cell.fg));
+        mix(&mut h, color_key(&idx.cell.bg));
+    }
+    let c = term.grid().cursor.point;
+    mix(&mut h, c.line.0 as u64);
+    mix(&mut h, c.column.0 as u64);
+    h
+}
+
+/// Stable fold of a cell color into a signature contribution. Named colors get a fixed index (not the
+/// enum's memory layout, which is unspecified), indexed colors keep their palette index, and spec
+/// colors keep their RGB, so any color change flips the signature.
+fn color_key(c: &ansi::Color) -> u64 {
+    use ansi::Color as C;
+    match c {
+        C::Named(n) => 0x1000_0000 | named_key(*n),
+        C::Indexed(i) => 0x2000_0000 | u64::from(*i),
+        C::Spec(rgb) => {
+            0x3000_0000 | (u64::from(rgb.r) << 16) | (u64::from(rgb.g) << 8) | u64::from(rgb.b)
+        }
+    }
+}
+
+/// Stable 0-based index for every `NamedColor` variant (the struct itself has no repr).
+fn named_key(n: ansi::NamedColor) -> u64 {
+    use ansi::NamedColor as N;
+    match n {
+        N::Black => 0,
+        N::Red => 1,
+        N::Green => 2,
+        N::Yellow => 3,
+        N::Blue => 4,
+        N::Magenta => 5,
+        N::Cyan => 6,
+        N::White => 7,
+        N::BrightBlack => 8,
+        N::BrightRed => 9,
+        N::BrightGreen => 10,
+        N::BrightYellow => 11,
+        N::BrightBlue => 12,
+        N::BrightMagenta => 13,
+        N::BrightCyan => 14,
+        N::BrightWhite => 15,
+        N::Foreground => 16,
+        N::Background => 17,
+        N::Cursor => 18,
+        N::DimBlack => 19,
+        N::DimRed => 20,
+        N::DimGreen => 21,
+        N::DimYellow => 22,
+        N::DimBlue => 23,
+        N::DimMagenta => 24,
+        N::DimCyan => 25,
+        N::DimWhite => 26,
+        N::BrightForeground => 27,
+        N::DimForeground => 28,
+    }
+}
+
 /// Draw the grid rows/cols into the framebuffer. `row_px`, `col_px` are per-cell pixel sizes.
 /// The glyph `h` px is the line box; the glyph bitmap is drawn at bottom baseline.
 ///
@@ -1708,5 +1788,46 @@ mod tests {
         let spath = path.to_string_lossy().into_owned();
         assert!(read_valid_font(&spath).is_none());
         let _ = std::fs::remove_file(&path);
+    }
+
+    /// The idle-wake signature must change when a pane redraws the screen IN PLACE (no new
+    /// scrollback) — e.g. a vim cursor move or homegrown spinner — because `history_len` stays flat
+    /// for those and the old detector would leave the terminal frozen on stale output. Also asserts
+    /// an identical grid yields an identical signature (no spurious wakes) and that color changes
+    /// are seen.
+    #[test]
+    fn visible_signature_tracks_in_place_redraws_without_scrollback() {
+        use alacritty_terminal::sync::FairMutex;
+        use alacritty_terminal::term::{Config, Term};
+        use alacritty_terminal::vte::ansi::{Processor, StdSyncHandler};
+
+        let size = crate::session::TermSize { lines: 4, cols: 40 };
+        let term = FairMutex::new(Term::new(Config::default(), &size, Listener::default()));
+        fn render(t: &FairMutex<Term<Listener>>, bytes: &[u8]) {
+            let mut p: Processor<StdSyncHandler> = Processor::default();
+            p.advance(&mut *t.lock(), bytes);
+        }
+
+        // A prompt, then a carriage-return overwrite of the SAME line (like a spinner/progress row).
+        render(&term, b"$ waiting\rwaiting for agent...");
+        let g0 = term.lock();
+        let s0 = visible_signature(&g0);
+        // No scrollback was created — the same-line rewrite didn't push history.
+        assert_eq!(g0.grid().history_size(), 0);
+        drop(g0);
+
+        // A genuinely different in-place update (the spinner advances) MUST change the signature,
+        // even though history still hasn't grown.
+        render(&term, b"\rwaiting for agent  .");
+        let g2 = term.lock();
+        assert_eq!(g2.grid().history_size(), 0);
+        let s2 = visible_signature(&g2);
+        assert_ne!(s2, s0, "in-place change without scrollback must be seen");
+        drop(g2);
+
+        // A color-only change (same chars, SGR color) is also detected.
+        render(&term, b"\x1b[31mwaiting for agent  .\x1b[0m");
+        let g3 = term.lock();
+        assert_ne!(visible_signature(&g3), s2);
     }
 }

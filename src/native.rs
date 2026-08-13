@@ -216,6 +216,11 @@ struct Application {
     /// frame every tick. Kept in sync during every render so the idle detector only flags genuinely
     /// fresh content.
     detect_len: Vec<usize>,
+    /// Per-tab rolling signature of the VISIBLE grid (see `render::visible_signature`), used with
+    /// `detect_len` so the idle-wake detector also notices output that redraws the screen in place
+    /// without growing scrollback (vim/htop/TUI redraws, spinner lines). Resized to the tab count on
+    /// each detect, mirroring `detect_len`.
+    content_sig: Vec<u64>,
     /// Pending OS notifications not yet delivered this frame, (kind "busy"|"bell", session index).
     /// Queued by `poll_bells`/`activity_flags` and drained together at the end of the frame so
     /// simultaneous busy/bell events across the fleet coalesce into ONE notification instead of one
@@ -525,6 +530,7 @@ impl Application {
             grew_delta: vec![0; tab_count],
             live_busy: false,
             detect_len: Vec::new(),
+            content_sig: Vec::new(),
             pending_notify: Vec::new(),
             find_hit: None,
             find_all: Vec::new(),
@@ -1661,8 +1667,14 @@ impl Application {
         // wakes an idle loop on the next tick so fresh output is never left un-drawn.
         self.live_busy = activity.iter().any(|&b| b);
         self.detect_len.resize(self.app.tabs.len(), 0);
+        self.content_sig.resize(self.app.tabs.len(), 0);
         for (i, s) in self.app.tabs.iter().enumerate() {
             self.detect_len[i] = s.history_len();
+            let sig = {
+                let g = s.term.lock();
+                crate::render::visible_signature(&g)
+            };
+            self.content_sig[i] = sig;
         }
         self.newtab_btn = None;
         if self.focus {
@@ -4879,11 +4891,23 @@ impl Application {
         let mut changed = false;
         let n = self.app.tabs.len();
         self.detect_len.resize(n, 0);
+        self.content_sig.resize(n, 0);
         for (i, s) in self.app.tabs.iter().enumerate() {
             let h = s.history_len();
             if self.detect_len[i] != h {
                 changed = true;
                 self.detect_len[i] = h;
+            }
+            // The visible signature catches output that redraws the screen WITHOUT growing the
+            // scrollback (a vim cursor move, an htop refresh, a TUI pane) — `history_len` alone
+            // would leave the idle loop sleeping and the pane frozen on stale content.
+            let sig = {
+                let g = s.term.lock();
+                crate::render::visible_signature(&g)
+            };
+            if self.content_sig[i] != sig {
+                changed = true;
+                self.content_sig[i] = sig;
             }
         }
         changed
