@@ -6,6 +6,14 @@ entries record user-visible and architectural changes since the last tagged mile
 ## Unreleased / 0.1.0 (in progress)
 
 ### Fixed
+- **Moving a tab no longer strands its pin/mute/busy/badge state on the wrong session.** Both the
+  prefix move (`Ctrl+H` move left/right) and drag-to-reorder swapped/relocated the tab entry alone,
+  leaving the ten tab-parallel state vectors (`muted`, `pinned`, `seen_history`, `grew_delta`,
+  `last_output`, `notified`, `grid_marks`, `bell_until`, `was_down`, `recover_until`) at their old
+  indices — so after a move the wrong session showed the moved tab's pin/mute/busy/quiet indicators.
+  They now ride along with the session (guarded against transient post-close staleness), and a
+  unit test pins the alignment for both the swap and remove/insert reorder paths.
+
 - **Scrollback export never fails silently.** `prefix+export_scrollback` (`w`) silently did nothing
   when the working directory wasn't writable. It now falls back to the temp directory and always
   flashes the outcome (written path, or the write error), so an export is never a silent no-op.

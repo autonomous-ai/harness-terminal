@@ -845,6 +845,49 @@ impl Application {
         }
     }
 
+    /// Move the active tab left/right (prefix-move), keeping every tab-parallel state (pin,
+    /// mute, busy/quiet sampling, unread/bell/recover badges, notification flags) aligned with the
+    /// session that moved — not with its old slot. Mirrors what `App::move_tab` does to `tabs`.
+    fn move_tab_parallel(&mut self, delta: isize) {
+        let a = self.app.active;
+        self.app.move_tab(delta);
+        if self.app.active != a {
+            self.swap_parallel(a, self.app.active);
+        }
+    }
+
+    /// Swap two indices across every tab-parallel vector so a session's pin/mute/busy/quiet/badge
+    /// state rides along with it when tabs are swapped. Every access is length-guarded because a
+    /// parallel vector can be transiently stale (a tab just closed, `forget_tab` not yet run).
+    fn swap_parallel(&mut self, a: usize, b: usize) {
+        swap_slot(&mut self.muted, a, b);
+        swap_slot(&mut self.pinned, a, b);
+        swap_slot(&mut self.seen_history, a, b);
+        swap_slot(&mut self.grew_delta, a, b);
+        swap_slot(&mut self.last_output, a, b);
+        swap_slot(&mut self.notified, a, b);
+        swap_slot(&mut self.grid_marks, a, b);
+        swap_slot(&mut self.bell_until, a, b);
+        swap_slot(&mut self.was_down, a, b);
+        swap_slot(&mut self.recover_until, a, b);
+    }
+
+    /// Apply the same remove/insert relocation as `App::move_tab_from_to` to every tab-parallel
+    /// vector, so each session's pin/mute/busy/quiet/badge state follows it to its new slot on a
+    /// drag-to-reorder.
+    fn reorder_parallel(&mut self, from: usize, to: usize) {
+        move_slot(&mut self.muted, from, to);
+        move_slot(&mut self.pinned, from, to);
+        move_slot(&mut self.seen_history, from, to);
+        move_slot(&mut self.grew_delta, from, to);
+        move_slot(&mut self.last_output, from, to);
+        move_slot(&mut self.notified, from, to);
+        move_slot(&mut self.grid_marks, from, to);
+        move_slot(&mut self.bell_until, from, to);
+        move_slot(&mut self.was_down, from, to);
+        move_slot(&mut self.recover_until, from, to);
+    }
+
     /// Persist the current tab list to disk. Called right after a successful spawn so a freshly
     /// opened session survives a crash/force-quit (otherwise a new tab only gets saved later, on
     /// close/quit). Cheap idempotent file write; safe to call from the UI handlers only.
@@ -4316,8 +4359,8 @@ impl Application {
                     self.fleet_matches.clear();
                     self.fleet_sel = 0;
                 }
-                Some("move_left") => self.app.move_tab(-1),
-                Some("move_right") => self.app.move_tab(1),
+                Some("move_left") => self.move_tab_parallel(-1),
+                Some("move_right") => self.move_tab_parallel(1),
                 Some("copy_mode") => self.start_copy_mode(),
                 Some("help") => {
                     self.app.overlay = Overlay::Help;
@@ -5978,6 +6021,7 @@ impl Application {
             return;
         }
         self.app.move_tab_from_to(src, dst);
+        self.reorder_parallel(src, dst);
         // The dragged session landed at final index `dst`; resume dragging it from there so a
         // further move keeps the same session under the pointer.
         self.drag_tab = Some(dst);
@@ -7238,13 +7282,30 @@ fn next_host_index(hosts: &[&str], active: usize) -> Option<usize> {
         .or_else(|| hosts.iter().position(|h| *h == target))
 }
 
+/// Swap slots `a` and `b` in a tab-parallel vector, no-op when either is out of range. Used when
+/// a tab is moved (swap) so the session's pin/mute/busy/quiet/badge state follows it.
+fn swap_slot<T>(v: &mut [T], a: usize, b: usize) {
+    if a != b && a < v.len() && b < v.len() {
+        v.swap(a, b);
+    }
+}
+
+/// Relocate slot `from` to `to` in a tab-parallel vector with the same remove/insert semantics as
+/// `App::move_tab_from_to`, guarding against a vector that is transiently shorter than `tabs`.
+fn move_slot<T>(v: &mut Vec<T>, from: usize, to: usize) {
+    if from < v.len() {
+        let x = v.remove(from);
+        v.insert(to.min(v.len()), x);
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::{
         argb_to_rgb, broadcast_bytes, cmd_shortcut, collect_fleet_matches, engine_accent,
         expand_click_word, fmt_duration, fuzzy_match, group_notifications, host_color, host_tally,
-        join_labels, next_host_index, parse_remote_attach, reanchor_active_after_batch,
-        recall_index, scroll_top, CmdShortcut, FleetMatch,
+        join_labels, move_slot, next_host_index, parse_remote_attach, reanchor_active_after_batch,
+        recall_index, scroll_top, swap_slot, CmdShortcut, FleetMatch,
     };
 
     use std::sync::Arc;
@@ -7814,5 +7875,76 @@ mod tests {
         assert_eq!(next_host_index(&["x", "x", "x"], 0), None);
         // Empty tab set has nowhere to go.
         assert_eq!(next_host_index(&[], 0), None);
+    }
+    /// A tab move (swap) must keep every tab-parallel vector aligned with its session identity: if
+    /// slots a/b hold per-session flags (pin, mute, busy, badge...), swapping tabs a/b has to swap
+    /// those flags with them so they attach to the same session, not the same slot. This is the
+    /// regression that left pin/mute/busy/badges on the wrong session after prefix-move.
+    #[test]
+    fn moving_a_tab_keeps_parallel_state_aligned_with_the_session() {
+        // Three parallel vectors, each indexed by slot, whose VALUES are the session identity that
+        // was originally at that slot (pin, mute, quiet, badge flags all tag a session).
+        // Column 0 = session 0, column 1 = session 1, column 2 = session 2.
+        let mut pinned: Vec<usize> = vec![0, 1, 2];
+        let mut muted: Vec<usize> = vec![0, 1, 2];
+        let mut was_down: Vec<bool> = vec![false, true, false];
+
+        // Move (swap) slot 0 with slot 1 — like `move_tab(1)` on the active tab.
+        swap_slot(&mut pinned, 0, 1);
+        swap_slot(&mut muted, 0, 1);
+        swap_slot(&mut was_down, 0, 1);
+
+        // Whichever slot session 1 (the one originally muted/down at slot 1) lands in must keep its
+        // flags: session 1 is muted and down; session 0 is pinned; session 2 is untouched.
+        assert_eq!(
+            pinned,
+            vec![1, 0, 2],
+            "pinned flag must follow session 1 to its new slot"
+        );
+        assert_eq!(muted, vec![1, 0, 2], "mute flag must follow session 1");
+        assert_eq!(
+            was_down,
+            vec![true, false, false],
+            "busy/down flag must follow session 1"
+        );
+        // All three stay aligned slot-for-slot (no flag slid onto another session).
+        for i in 0..3 {
+            assert_eq!(
+                pinned[i] == 1,
+                muted[i] == 1,
+                "alignment broken at slot {i}"
+            );
+        }
+    }
+
+    /// A drag-reorder (remove/insert) must apply the same relocation to every parallel vector, so a
+    /// session dragged from `from` to `to` takes its flags along and neighbors shift consistently.
+    #[test]
+    fn drag_reorder_keeps_parallel_state_aligned_with_the_session() {
+        // Parallel per-slot flags tagged by original session identity.
+        let mut pinned: Vec<usize> = (0..4).collect();
+        let mut muted: Vec<usize> = (0..4).collect();
+        let mut busy: Vec<bool> = vec![false, true, false, true];
+
+        // Drag session at slot 0 to final slot 2 (same remove/insert as `move_tab_from_to(0, 2)`).
+        move_slot(&mut pinned, 0, 2);
+        move_slot(&mut muted, 0, 2);
+        move_slot(&mut busy, 0, 2);
+
+        // Session 0 moved to index 2; sessions 1,2 shifted left; session 3 stays at the end.
+        assert_eq!(pinned, vec![1, 2, 0, 3]);
+        assert_eq!(muted, vec![1, 2, 0, 3]);
+        // Session 1 (busy at old slot 1) is now at index 0; session 3 (busy) stays at index 3.
+        assert_eq!(busy, vec![true, false, false, true]);
+        // Alignment: identical pinned/muted patterns per column.
+        assert_eq!(pinned, muted);
+
+        // Out-of-range relocations are safe no-ops (never panic on stale lengths).
+        let mut v = (0..3).collect::<Vec<_>>();
+        move_slot(&mut v, 9, 0); // from out of range -> untouched
+        assert_eq!(v, vec![0, 1, 2]);
+        let mut u = (0..3).collect::<Vec<_>>();
+        move_slot(&mut u, 1, 99); // to beyond length -> appends at the end
+        assert_eq!(u, vec![0, 2, 1]);
     }
 }
