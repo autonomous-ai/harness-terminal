@@ -3748,7 +3748,7 @@ impl Application {
             ("1-9 / 0 / Tab", "switch tab (0 = last)"),
             ("x / c", "close tab / go to tab 0"),
             ("g / b", "scroll up a page / jump to bottom"),
-            ("Ctrl/Cmd+= / -", "font zoom (Ctrl/Cmd+0 reset)"),
+            ("Ctrl/Cmd+= / -", "font zoom (Ctrl+0 reset; Cmd+0 = last tab)"),
             ("Ctrl+Enter", "toggle fullscreen"),
             ("PgUp/PgDn", "scrollback"),
             ("Cmd/Ctrl+click", "open URL / file path"),

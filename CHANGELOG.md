@@ -6,6 +6,10 @@ entries record user-visible and architectural changes since the last tagged mile
 ## Unreleased / 0.1.0 (in progress)
 
 ### Fixed
+- **Correct the help row for font zoom reset.** The keys overlay claimed `Cmd+0` resets zoom, but
+  `Cmd+0` is the native "jump to last tab" binding (it's handled before the zoom path, so only
+  `Ctrl+0` actually resets zoom). The row now reads `Ctrl+0` reset / `Cmd+0` = last tab to match
+  reality; `Ctrl/Cmd+= / -` still zoom as before.
 - **Fleet-grid / peek close no longer strands a native window.** Closing a session with the
   war-room's `x` (or peek's `x`) now also drops the matching native window host. Previously, in
   `native_tabs` mode, those close paths removed the tab but left its `NSWindow` lingering as a tab
