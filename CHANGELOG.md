@@ -6,6 +6,9 @@ entries record user-visible and architectural changes since the last tagged mile
 ## Unreleased / 0.1.0 (in progress)
 
 ### Fixed
+- **Find `Shift+Tab` now goes to the previous match.** In the scrollback search (`prefix+f`),
+  `Shift+Tab` previously advanced (same as Tab); it now steps backward, matching `Shift+Enter` and
+  the other overlays' Shift+Tab-up convention, and the header hint stays truthful.
 - **Fleet-grid marks are scoped to one session.** `Space` marks persisted after closing the grid
   (Esc/Enter), so a stale mark set could later seed an unintended `b`/`C`/`R` — and especially `X`,
   a bulk close — defeating the "marks required so a stray press is never destructive" guard. Marks

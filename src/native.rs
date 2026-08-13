@@ -5815,6 +5815,11 @@ impl Application {
                         winit::keyboard::NamedKey::Enter if mods.shift_key() => {
                             self.find_jump(-1);
                         }
+                        // Shift+Tab goes to the previous match (mirroring Shift+Enter and the other
+                        // list overlays' Shift+Tab-up convention); plain Tab advances.
+                        winit::keyboard::NamedKey::Tab if mods.shift_key() => {
+                            self.find_jump(-1);
+                        }
                         winit::keyboard::NamedKey::Enter | winit::keyboard::NamedKey::Tab => {
                             self.find_jump(1);
                         }
