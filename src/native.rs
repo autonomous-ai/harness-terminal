@@ -5732,7 +5732,21 @@ impl Application {
         let tab = self.hosts[i].tab.min(self.app.tabs.len().saturating_sub(1));
         let prev = self.app.active;
         self.app.active = tab;
+        // Each window can sit on a different-density display; render and size this window at its own
+        // backing scale so a background tab on another screen isn't stuck at the focused window's
+        // density (or re-flows when you focus it). The focused window's metrics equal the current
+        // global ones, so this is a no-op for what you're looking at; a single-display setup is
+        // entirely unaffected. Restore afterward so the global metrics always stay the focused
+        // window's (overlays and subsequent focus switches read the right values).
+        let host_scale = self.hosts[i].window.scale_factor() as f32 * self.zoom;
+        let (saved_font, saved_cw, saved_ch) = (self.font_px, self.cell_w, self.cell_h);
+        self.font_px = (self.base_font * host_scale).round().clamp(8.0, 40.0) as u32;
+        self.cell_w = (8.0 * host_scale).round().max(2.0) as u32;
+        self.cell_h = (18.0 * host_scale).round().max(1.0) as u32;
         self.render_host_grid(fb, width, height, focused);
+        self.font_px = saved_font;
+        self.cell_w = saved_cw;
+        self.cell_h = saved_ch;
         self.app.active = prev;
 
         // Sync the OS window title to its session's live OSC title, falling back to the session's

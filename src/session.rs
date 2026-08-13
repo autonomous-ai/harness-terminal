@@ -605,7 +605,7 @@ impl Session {
     }
 
     /// Capture just the tail of the *visible screen* (the live rows currently on screen, newest
-    /// last) as plain text split into logical lines. Cheap — it never walks history — so it can run
+    /// first) as plain text split into logical lines. Cheap — it never walks history — so it can run
     /// every frame while a hover preview is showing. Used by the tab-bar hover tooltip to show what
     /// a session is doing right now without switching to it.
     pub fn tail(&self, n: usize) -> Vec<String> {
