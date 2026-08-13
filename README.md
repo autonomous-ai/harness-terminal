@@ -116,6 +116,7 @@ whenever the window is focused):
 | `Cmd+.` | interrupt the active session (stop the run) |
 | `Cmd+Shift+J` | jump to the next quiet (awaiting-you) agent |
 | `Cmd+Shift+K` | send Ctrl-C to every session (stop the fleet) |
+| `Cmd+Shift+Y` | peek at every session's tail (war-room) |
 | `Ctrl+Tab` / `Ctrl+Shift+Tab` | previous / next tab (browser muscle memory) |
 
 Backgrounded tabs that keep producing output are flagged with a magnitude badge in the tab bar

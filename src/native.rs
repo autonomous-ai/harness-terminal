@@ -3773,6 +3773,7 @@ impl Application {
             ("Cmd+.", "interrupt the active session (stop the run)"),
             ("Cmd+Shift+J", "jump to the next quiet (awaiting-you) agent"),
             ("Cmd+Shift+K", "send Ctrl-C to every session (stop the fleet)"),
+            ("Cmd+Shift+Y", "peek at every session's tail (war-room)"),
             (
                 "Hosts drill · r / b",
                 "reconnect this host / broadcast to this host",
@@ -5652,6 +5653,9 @@ impl Application {
             }
             CmdShortcut::InterruptAll => {
                 self.interrupt_fleet();
+            }
+            CmdShortcut::Peek => {
+                self.open_peek();
             }
             CmdShortcut::GotoTab(i) => {
                 if !self.app.tabs.is_empty() {
@@ -8777,6 +8781,9 @@ enum CmdShortcut {
     /// Cmd+Shift+K — send Ctrl-C to every session (stop the whole fleet). The shift-guarded K:
     /// one reflex to halt every runaway agent at once, like Cmd+. but fleet-wide.
     InterruptAll,
+    /// Cmd+Shift+Y — open peek, the tail of every session at once. The shift-guarded Y: a war-room
+    /// glance at all agents without dropping into the prefix chord.
+    Peek,
     /// Cmd+Shift+C — copy the active tab's whole scrollback to the clipboard, the system shortcut
     /// for prefix+copy_scrollback. Grab an agent's full session log fast, without the prefix chord.
     CopyScrollback,
@@ -8902,6 +8909,8 @@ fn cmd_shortcut(key: &Key, mods: &ModifiersState) -> CmdShortcut {
             "J" if mods.shift_key() => NextQuiet,
             // Cmd+Shift+K stops the whole fleet — Ctrl-C to every non-muted session.
             "K" if mods.shift_key() => InterruptAll,
+            // Cmd+Shift+Y opens peek — every session's tail in one war-room list.
+            "Y" if mods.shift_key() => Peek,
             // Plain Cmd+[ is left to the shell; only the Shift variant switches tabs.
             _ => None,
         },
@@ -9722,6 +9731,13 @@ mod tests {
             chars("k", s),
             CmdShortcut::None,
             "plain Cmd+K is not hijacked"
+        );
+        // Cmd+Shift+Y opens peek; plain Cmd+Y stays free.
+        assert_eq!(chars("Y", sc), CmdShortcut::Peek);
+        assert_eq!(
+            chars("y", s),
+            CmdShortcut::None,
+            "plain Cmd+Y is not hijacked"
         );
         assert_eq!(
             chars("]", s),
