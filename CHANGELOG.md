@@ -13,6 +13,11 @@ entries record user-visible and architectural changes since the last tagged mile
   hot-path config I/O.
 
 ### Fixed
+- **Pinned URL/path click expansion with regression tests.** `expand_click_word` (what `Cmd`-click
+  URL-opening and `Alt`-click-cursor-move use to find the token under the cursor) had no tests and
+  tricky boundary logic. Added an exhaustive test covering URL/path tokens, boundary columns,
+  clamped start/past-end columns, and single-character tokens (112→113 unit tests).
+
 - **Adding a session no longer risks an out-of-bounds panic.** `last_output` (the per-tab "quiet
   since" timestamp) was the only tab-indexed vector never grown when a new tab spawned — every
   other parallel vector is resized to the tab count each frame. With two or more *remote* (non-pty)

@@ -7260,4 +7260,31 @@ mod tests {
         // Sanity: empty close set leaves the active index untouched.
         assert_eq!(reanchor_active_after_batch(3, &[]), 3);
     }
+
+    /// `Cmd`/`Alt`-click word expansion: returns the contiguous run of non-boundary characters
+    /// containing the clicked column. Boundaries are whitespace and `()"\'<>[]`. Purely local, so a
+    /// click in the middle of a URL/path expands exactly that token.
+    #[test]
+    fn expand_click_word_expands_contiguous_token() {
+        // Middle of a URL.
+        assert_eq!(
+            expand_click_word("open https://a.com/path now", 8),
+            "https://a.com/path"
+        );
+        // A path token joined by non-boundaries (dashes, dots, slashes stay in the token).
+        assert_eq!(
+            expand_click_word("cd /Users/me/project-x/", 12),
+            "/Users/me/project-x/"
+        );
+        // Leading/trailing boundary stops the token exactly.
+        // Clicking on a boundary column falls back to the adjacent left token.
+        assert_eq!(expand_click_word("hello world", 5), "hello");
+        // Click on the token itself (the 'b' at index 7) expands to that token.
+        assert_eq!(expand_click_word("(go to b) ...", 7), "b");
+        // Click at the start / past-the-end column is clamped, not a panic.
+        assert_eq!(expand_click_word("abc", 0), "abc");
+        assert_eq!(expand_click_word("abc", 99), "abc");
+        // A single-character token.
+        assert_eq!(expand_click_word("[x]", 1), "x");
+    }
 }
