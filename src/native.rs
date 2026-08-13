@@ -7519,6 +7519,12 @@ impl Application {
         self.save_pin_state();
         crate::restore::save(&self.app.tab_specs());
         self.alias_active();
+        // After closing the focused tab, hand keyboard + window focus to the (clamped) active host so
+        // the next native tab actually becomes the key window — otherwise the OS can leave focus on
+        // the just-closed window until the user clicks, mirroring the new-create focus fix above.
+        if let Some(h) = self.hosts.get(self.active_host) {
+            h.window.focus_window();
+        }
         self.request_redraw();
     }
 

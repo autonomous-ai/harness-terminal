@@ -10,7 +10,9 @@ entries record user-visible and architectural changes since the last tagged mile
   Session, Remote Attach, duplicate, reopen) created a window spliced into the tab group but never
   surfaced it, so the new agent sat hidden behind the old tab until you clicked or tab-switched. Now
   the just-created tab becomes the visible, focused tab (iTerm2 behavior). Startup/restore still
-  honors the tab you left active and never steals focus.
+  honors the tab you left active and never steals focus. Symmetrically, closing the active native
+  tab (Cmd+W / traffic light) now hands keyboard focus to the next tab instead of leaving it on the
+  closed window.
 - **Typing while scrolled up now jumps to the live view and reaches the shell.** Previously, once
   you scrolled up into scrollback, any key that wasn't Page/Arrow/Escape was silently swallowed —
   so a command typed right after scrolling up vanished. Now any typing key (letters, Enter, Space,
