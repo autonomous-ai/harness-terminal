@@ -297,6 +297,16 @@ struct Application {
     /// Peek list scroll offset — how many (capped) rows to skip at the top so ALL tabs are
     /// reachable, not just the first ~10. Bumped when the selection moves below the visible window.
     peek_scroll: usize,
+    /// Peek-overlay filter text: typing after `/` narrows the peek list to matching sessions (by
+    /// host / engine / name / kind / down+up state) so a big fleet's triage can be focused on one
+    /// machine or one agent. Empty shows every session.
+    peek_q: String,
+    /// Whether the peek filter prompt is open (`/` toggled). While open, character keys build
+    /// `peek_q`; Esc/Backspace-empty close it. Filtering applies to nav (`n`, arrows) and Enter.
+    peek_filtering: bool,
+    /// Indices into `app.tabs` matching `peek_q`, recomputed each frame. `peek_sel`/`peek_scroll`
+    /// index this list; when `peek_q` is empty it is the identity mapping.
+    peek_filtered: Vec<usize>,
     /// Selected row in the host-overview overlay (`Overlay::Hosts`), an index into `host_tally`.
     hosts_sel: usize,
     /// When `Some`, the host-overview is drilled into that host, listing its sessions (this is the
@@ -613,6 +623,9 @@ impl Application {
             },
             peek_sel: 0,
             peek_scroll: 0,
+            peek_q: String::new(),
+            peek_filtering: false,
+            peek_filtered: Vec::new(),
             hosts_sel: 0,
             hosts_host: None,
             palette_q: String::new(),
@@ -3572,6 +3585,10 @@ impl Application {
                 "Hosts drill · r / b",
                 "reconnect this host / broadcast to this host",
             ),
+            (
+                "Peek · / then type",
+                "filter the peek list (host/engine/name/down) · Esc clears",
+            ),
         ] {
             all.push((k.to_string(), d.to_string()));
         }
@@ -4362,6 +4379,8 @@ impl Application {
         self.app.overlay = Overlay::Peek;
         self.peek_sel = 0;
         self.peek_scroll = 0;
+        self.peek_q.clear();
+        self.peek_filtering = false;
         let kinds: Vec<&str> = self.app.tabs.iter().map(|t| t.kind()).collect();
         let alive: Vec<bool> = self.app.tabs.iter().map(|t| t.alive()).collect();
         if let Some(i) = first_down_session(&kinds, &alive) {
@@ -4373,7 +4392,25 @@ impl Application {
         }
     }
 
+    /// Recompute `peek_filtered` (indices into `app.tabs`) matching `peek_q` via each session's
+    /// `matches_filter`, then clamp `peek_sel`/`peek_scroll` into the filtered list. An empty query
+    /// yields the identity mapping (every tab in order), so the unfiltered peek behaves exactly as
+    /// before; a query that matches nothing clamps to an empty list (no rows, never a panic).
+    fn peek_refresh_filter(&mut self) {
+        let n = self.app.tabs.len();
+        self.peek_filtered = (0..n)
+            .filter(|&i| self.app.tabs[i].matches_filter(&self.peek_q))
+            .collect();
+        if self.peek_sel >= self.peek_filtered.len() {
+            self.peek_sel = self.peek_filtered.len().saturating_sub(1);
+        }
+        if self.peek_scroll >= self.peek_filtered.len() {
+            self.peek_scroll = self.peek_filtered.len().saturating_sub(10);
+        }
+    }
+
     fn render_peek(&mut self, fb: &mut Framebuffer) {
+        self.peek_refresh_filter();
         let (base_y, line_px) = self.overlay_base_y();
         // Live fleet-health count in the header: how many panes are down right now, so the peek
         // triage reads the whole fleet's state at a glance, not just the selected row.
@@ -4386,16 +4423,32 @@ impl Application {
         // Panes that just came back (the transient `↻` badge) are worth a nod too, so the header
         // reads the fleet's whole recent state, not just what's still down.
         let rec_n = self.recover_until.iter().filter(|r| r.is_some()).count();
-        let rest = "· ↑/↓ preview · n next down · Enter jump · Esc close  ";
-        let header = if down_n > 0 && rec_n > 0 {
-            format!("  peek · {down_n} down · {rec_n} reconnected · {rest}")
-        } else if down_n > 0 {
-            format!("  peek · {down_n} down · {rest}")
-        } else if rec_n > 0 {
-            format!("  peek · {rec_n} reconnected · {rest}")
+        let total = self.app.tabs.len();
+        let shown = self.peek_filtered.len();
+        // While the `/` filter is open the header leads with the live query and match count so a
+        // diver sees exactly what the list is narrowed to (e.g. "only build05" or "just down panes").
+        let filter_prefix = if self.peek_filtering {
+            format!("  peek · /{} · {shown}/{total} match · ", self.peek_q)
         } else {
-            format!("  peek · fleet healthy · {rest}")
+            "  peek · ".to_string()
         };
+        let health = if down_n > 0 && rec_n > 0 {
+            format!("{down_n} down · {rec_n} reconnected · ")
+        } else if down_n > 0 {
+            format!("{down_n} down · ")
+        } else if rec_n > 0 {
+            format!("{rec_n} reconnected · ")
+        } else if !self.peek_filtering {
+            "fleet healthy · ".to_string()
+        } else {
+            String::new()
+        };
+        let rest = if self.peek_filtering {
+            "↑/↓ · Enter jump · Esc clear  "
+        } else {
+            "↑/↓ preview · n next down · Enter jump · Esc close  "
+        };
+        let header = format!("{filter_prefix}{health}{rest}");
         draw_text(
             fb,
             &mut self.cache,
@@ -4405,21 +4458,18 @@ impl Application {
             self.font_px,
             if down_n > 0 { CHROME_ERR } else { WHITE },
         );
-        // Cap the visible window (10 rows + preview lines), but scroll through ALL tabs: `peek_scroll`
-        // offsets the start so sessions beyond the first window are reachable, matching peek_sel.
-        // Re-clamp the selection + scroll each frame: a tab can close (Cmd+W is handled in
-        // `about_to_wait`) while the overlay is open, which would otherwise leave a stale index.
-        if !self.app.tabs.is_empty() {
-            self.peek_sel = self.peek_sel.min(self.app.tabs.len() - 1);
-            self.peek_scroll = self.peek_scroll.min(self.app.tabs.len().saturating_sub(10));
-        }
-        let rows = self.app.tabs.len().min(10);
+        // Cap the visible window (10 rows + preview lines), but scroll through ALL matches:
+        // `peek_scroll` offsets the start, matching `peek_sel`. `peek_refresh_filter` re-clamps
+        // both against the (possibly filtered) list each frame, so a tab closing while the overlay
+        // is open can't leave a stale index.
+        let rows = shown.min(10);
         for row in 0..rows {
             let i = self.peek_scroll + row;
-            if i >= self.app.tabs.len() {
+            if i >= shown {
                 break;
             }
-            let s = &self.app.tabs[i];
+            let real = self.peek_filtered[i];
+            let s = &self.app.tabs[real];
             let sel = i == self.peek_sel;
             // A down remote pane is the row worth noticing: tag it red (unless selected, when the
             // white highlight already owns it) and surface its reconnect reason so the diver knows
@@ -4455,11 +4505,11 @@ impl Application {
             // A quiet (awaiting-you) row says how long it has been parked, matching the fleet grid.
             // Down wins (its ○ reason is the more urgent signal): an idle duration only reads when
             // the pane is live and hasn't been flagged busy/active this frame.
-            let idle_tag = if !down && self.quiet_for(i) {
+            let idle_tag = if !down && self.quiet_for(real) {
                 let idle = std::time::Instant::now()
                     - self
                         .last_output
-                        .get(i)
+                        .get(real)
                         .copied()
                         .unwrap_or(std::time::Instant::now());
                 format!(" · ⌛{}", fmt_duration(idle))
@@ -5853,18 +5903,33 @@ impl Application {
                 return;
             }
             Overlay::Peek => {
+                // Recompute the (possibly filtered) list before any navigation resolves an index,
+                // so a first keypress right after the overlay opens reads fresh state.
+                self.peek_refresh_filter();
                 match key {
-                    // A picker, not a prompt: ordinary typing does nothing. `n` is the one useful
-                    // character — jump the picker to the next down pane (wrapping), the dashboard
-                    // the list already scrolls onto on open.
                     Key::Character(c) => {
-                        if c == "n" || c == "N" {
-                            let n = self.app.tabs.len();
-                            if n > 0 {
+                        if self.peek_filtering {
+                            // While the `/` filter is open, letters build the query — type "down",
+                            // "build05", "claude", etc. to narrow the fleet's triage. A second `/`
+                            // closes the prompt and keeps the query applied.
+                            if c == "/" {
+                                self.peek_filtering = false;
+                            } else {
+                                self.peek_q.push_str(c);
+                            }
+                        } else if c == "/" {
+                            self.peek_q.clear();
+                            self.peek_filtering = true;
+                        } else if c == "n" || c == "N" {
+                            // Jump to the next down pane within the (possibly filtered) list.
+                            let shown = self.peek_filtered.len();
+                            if shown > 0 {
                                 let start = self.peek_sel;
-                                for step in 1..=n {
-                                    let i = (start + step) % n;
-                                    if self.app.tabs[i].kind() != "pty" && !self.app.tabs[i].alive()
+                                for step in 1..=shown {
+                                    let i = (start + step) % shown;
+                                    let real = self.peek_filtered[i];
+                                    if self.app.tabs[real].kind() != "pty"
+                                        && !self.app.tabs[real].alive()
                                     {
                                         self.peek_sel = i;
                                         // Slide the window so the chosen row is the last visible.
@@ -5876,38 +5941,63 @@ impl Application {
                         }
                     }
                     Key::Named(n) => match n {
+                        // Backspace edits the filter query while open; an empty query ends filtering.
+                        winit::keyboard::NamedKey::Backspace => {
+                            if self.peek_filtering {
+                                self.peek_q.pop();
+                                if self.peek_q.is_empty() {
+                                    self.peek_filtering = false;
+                                }
+                            }
+                        }
                         winit::keyboard::NamedKey::ArrowDown | winit::keyboard::NamedKey::Tab
                             if !mods.shift_key() =>
                         {
-                            self.peek_sel =
-                                (self.peek_sel + 1).min(self.app.tabs.len().saturating_sub(1));
+                            let shown = self.peek_filtered.len();
+                            if shown > 0 {
+                                self.peek_sel = (self.peek_sel + 1).min(shown - 1);
+                            }
                             // Keep the selection in the visible window as it walks past the bottom.
                             if self.peek_sel >= self.peek_scroll + 10 {
                                 self.peek_scroll = self.peek_sel + 1 - 10;
                             }
                         }
                         winit::keyboard::NamedKey::Tab => {
-                            self.peek_sel = self.peek_sel.saturating_sub(1);
+                            if !self.peek_filtered.is_empty() {
+                                self.peek_sel = self.peek_sel.saturating_sub(1);
+                            }
                             // Pull the window up when the selection walks above the top.
                             if self.peek_sel < self.peek_scroll {
                                 self.peek_scroll = self.peek_sel;
                             }
                         }
                         winit::keyboard::NamedKey::ArrowUp => {
-                            self.peek_sel = self.peek_sel.saturating_sub(1);
+                            if !self.peek_filtered.is_empty() {
+                                self.peek_sel = self.peek_sel.saturating_sub(1);
+                            }
                             if self.peek_sel < self.peek_scroll {
                                 self.peek_scroll = self.peek_sel;
                             }
                         }
                         winit::keyboard::NamedKey::Enter => {
-                            if !self.app.tabs.is_empty() {
-                                self.app.active = self.peek_sel.min(self.app.tabs.len() - 1);
+                            let shown = self.peek_filtered.len();
+                            if shown > 0 {
+                                // Resolve the (possibly filtered) selection back to a real tab, then
+                                // jump and focus it as before.
+                                let real = self.peek_filtered[self.peek_sel.min(shown - 1)];
+                                self.app.active = real.min(self.app.tabs.len().saturating_sub(1));
                                 crate::restore::save_active(self.app.active);
                                 self.app.overlay = Overlay::None;
                             }
                         }
                         winit::keyboard::NamedKey::Escape => {
-                            self.app.overlay = Overlay::None;
+                            // Esc first clears an active filter (back to all sessions), then closes.
+                            if self.peek_filtering {
+                                self.peek_q.clear();
+                                self.peek_filtering = false;
+                            } else {
+                                self.app.overlay = Overlay::None;
+                            }
                         }
                         _ => {}
                     },

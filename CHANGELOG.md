@@ -6,6 +6,10 @@ entries record user-visible and architectural changes since the last tagged mile
 ## Unreleased / 0.1.0 (in progress)
 
 ### Fixed
+- **The peek overlay filters the fleet.** Press `/` in the peek, then type (host, engine, name, or
+  `down`/`up`) to narrow the triage to matching sessions; `n`, arrows and Enter all operate on the
+  filtered list, `Esc` clears back to all. Escaping a huge multi-machine fleet to "just the dead
+  panes on build05" is now a few keys.
 - **Broadcast to one whole host from the hosts drill-in.** In the hosts overview (`prefix+.` →
   `→`), `b` opens the broadcast overlay pre-scoped to every session on that machine — the fanned-out
   sibling of `r` (reconnect this host). A "redeploy / git pull / restart every agent on build05"

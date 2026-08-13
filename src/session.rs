@@ -477,6 +477,32 @@ impl Session {
         self.transport.alive()
     }
 
+    /// Whether this session matches a peek/fleet filter query `q` (case-insensitive). Empty/blank
+    /// `q` matches everything; otherwise it substrings-match the host, engine, name and transport
+    /// kind, and understands the state tokens "down" / "up" (a local live PTY is never "down").
+    /// Pure — used by the peek overlay filter and easy to unit-test.
+    pub fn matches_filter(&self, q: &str) -> bool {
+        let q = q.trim().to_lowercase();
+        if q.is_empty() {
+            return true;
+        }
+        if q == "down" {
+            return self.kind() != "pty" && !self.alive();
+        }
+        if q == "up" {
+            return self.kind() != "pty" && self.alive();
+        }
+        let hay = [
+            self.meta.host.clone(),
+            self.meta.engine.clone(),
+            self.meta.name.clone().unwrap_or_default(),
+            self.kind().to_string(),
+        ]
+        .join(" ")
+        .to_lowercase();
+        hay.contains(&q)
+    }
+
     /// Re-attach after a dropped connection. Local PTYs are a no-op. Returns an error only if the
     /// immediate re-spawn fails (e.g. tunnel daemon unreachable again) — callers retry later.
     ///
@@ -927,6 +953,35 @@ mod tests {
             "newest staged input survives the cap"
         );
         assert_eq!(s.pending_bytes(), 0);
+    }
+
+    /// The peek filter matches a session by host / engine / name / kind (case-insensitive) and by
+    /// the "up"/"down" state tokens, so a diver can focus a large fleet's triage on one machine or
+    /// on just the dead panes.
+    #[test]
+    fn matches_filter_subsets_by_host_engine_name_and_state() {
+        let (fake, alive, _writes) = FakeTransport::new();
+        let mut s = fake_session(fake);
+        s.meta.host = "build05".into();
+        s.meta.engine = "claude".into();
+        s.meta.name = Some("fix-42".into());
+        // Blank / whitespace matches everything.
+        assert!(s.matches_filter(""));
+        assert!(s.matches_filter("  "));
+        // Substring on host / engine / name / transport kind, case-insensitively.
+        assert!(s.matches_filter("build"));
+        assert!(s.matches_filter("CLAUDE"));
+        assert!(s.matches_filter("fix"));
+        assert!(s.matches_filter("fake"));
+        // A non-match.
+        assert!(!s.matches_filter("zzz"));
+        // Live remote (kind "fake" != "pty") reads as "up", not "down".
+        assert!(s.matches_filter("up"));
+        assert!(!s.matches_filter("down"));
+        // Kill it: now "down", not "up".
+        alive.store(false, Ordering::Relaxed);
+        assert!(s.matches_filter("down"));
+        assert!(!s.matches_filter("up"));
     }
 
     /// A failed reconnect records its readable reason (host unreachable, auth, timeout, …) so the
