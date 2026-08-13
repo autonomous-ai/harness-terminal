@@ -79,6 +79,7 @@ enum PaletteAction {
     FindInTab,
     SearchAll,
     CopyScrollback,
+    CopyTail,
     ExportLog,
     CopyIdentity,
     CopyFleet,
@@ -124,6 +125,7 @@ impl PaletteAction {
             ("find in current tab", FindInTab),
             ("search all sessions", SearchAll),
             ("copy whole scrollback", CopyScrollback),
+            ("copy the tab's tail (last lines)", CopyTail),
             ("export scrollback to .log file", ExportLog),
             ("copy session identity (engine@host)", CopyIdentity),
             ("copy whole fleet summary (all tabs)", CopyFleet),
@@ -1329,6 +1331,26 @@ impl Application {
                 format!("copied {n} chars of scrollback"),
                 std::time::Instant::now(),
             ));
+        }
+    }
+
+    /// `palette: copy the tab's tail`: copy the last N non-empty lines of the active session's
+    /// scrollback to the clipboard — a quick way to grab an agent's most recent output (the tail of
+    /// a long run) for pasting into a chat or issue without copying the whole log. Pure line
+    /// selection via `tail_lines`, so the count/last-few behavior is unit-tested.
+    fn copy_tail(&mut self) {
+        const TAIL: usize = 40;
+        let Some(s) = self.app.active_session() else {
+            return;
+        };
+        let text = s.capture_scrollback();
+        let tail = tail_lines(&text, TAIL);
+        if tail.is_empty() {
+            return;
+        }
+        if let Ok(mut cb) = arboard::Clipboard::new() {
+            let _ = cb.set_text(tail);
+            self.flash = Some(("copied tail".to_string(), std::time::Instant::now()));
         }
     }
 
@@ -5142,6 +5164,7 @@ impl Application {
                 self.fleet_sel = 0;
             }
             CopyScrollback => self.copy_whole_scrollback(),
+            CopyTail => self.copy_tail(),
             ExportLog => self.export_scrollback(),
             CopyIdentity => self.copy_identity(),
             CopyFleet => self.copy_fleet(),
@@ -9003,6 +9026,33 @@ fn prev_trouble_index(down: &[bool], busy: &[bool], start: usize) -> Option<usiz
     None
 }
 
+/// Return the last `n` non-empty lines of `text`, trimmed of surrounding whitespace, joined back
+/// with newlines and given a trailing newline. Pure and unit-tested so the copy-tail count/last-few
+/// behavior stays stable. Blank/whitespace-only lines are skipped when counting toward `n`.
+fn tail_lines(text: &str, n: usize) -> String {
+    if n == 0 || text.is_empty() {
+        return String::new();
+    }
+    let mut chosen: Vec<&str> = Vec::new();
+    for line in text.split('\n').rev() {
+        let trimmed = line.trim();
+        if trimmed.is_empty() {
+            continue;
+        }
+        chosen.push(trimmed);
+        if chosen.len() == n {
+            break;
+        }
+    }
+    chosen.reverse();
+    if chosen.is_empty() {
+        return String::new();
+    }
+    let mut out = chosen.join("\n");
+    out.push('\n');
+    out
+}
+
 /// Top offset of a scrolling viewport given `total` rows and a 0-based `selected` index. Keeps the
 /// highlighted row on screen and rides the bottom edge once the list is taller than `rows`, so a
 /// fleet/palette/broadcast list bigger than the window never hides rows behind an invisible
@@ -10201,8 +10251,8 @@ mod tests {
         next_trouble_index, parse_remote_attach, prepend_capped, prev_trouble_index,
         reanchor_active_after_batch, recall_index, scroll_top, session_indices_for_host,
         sgr_button_code, sgr_motion_code, sgr_mouse, sgr_wheel_code, should_busy_nudge,
-        status_accent, swap_slot, CmdShortcut, FleetMatch, CHROME_BUSY, CHROME_ERR, CHROME_QUIET,
-        CHROME_RECOVER,
+        status_accent, swap_slot, tail_lines, CmdShortcut, FleetMatch, CHROME_BUSY, CHROME_ERR,
+        CHROME_QUIET, CHROME_RECOVER,
     };
 
     use winit::event::{ElementState, MouseButton};
@@ -11503,5 +11553,19 @@ mod tests {
         assert_eq!(content_sig, vec![10, 12, 11]);
         assert_eq!(last_output, vec![t0, t2, t1]);
         assert_eq!(recover_until, vec![None, None, Some(t1)]);
+    }
+
+    /// `tail_lines` grabs the last N non-empty lines (skips blanks), tapers to fewer when the tail
+    /// is short, and returns empty for empty input / zero count.
+    #[test]
+    fn tail_lines_returns_last_n_nonempty_lines() {
+        let text = "alpha\n\nbeta\n   \ngamma\ndelta\n";
+        assert_eq!(tail_lines(text, 2), "gamma\ndelta\n");
+        assert_eq!(tail_lines(text, 3), "beta\ngamma\ndelta\n");
+        assert_eq!(tail_lines(text, 99), "alpha\nbeta\ngamma\ndelta\n");
+        assert_eq!(tail_lines(text, 0), "");
+        assert_eq!(tail_lines("", 40), "");
+        assert_eq!(tail_lines("\n  \n", 40), "");
+        assert_eq!(tail_lines("only", 5), "only\n");
     }
 }
