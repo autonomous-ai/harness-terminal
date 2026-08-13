@@ -11,6 +11,9 @@ entries record user-visible and architectural changes since the last tagged mile
   a bulk close — defeating the "marks required so a stray press is never destructive" guard. Marks
   now clear on grid close, matching the broadcast overlay's fresh-reset behavior.
 ### Added
+- **Peek triage pages with PgUp/PgDn.** The fleet triage (`prefix+s`) now jumps a full 10-row window
+  per keypress, so a large fleet is browsed without arrowing one row at a time — mirroring the
+  fleet/palette/broadcast list overlays. Header hint updated.
 - **Peek rows tint the host by machine.** The fleet triage (`prefix+s`) now draws each row's host
   in its per-host color (local → `local`), so a multi-host fleet scans by machine at a glance while
   the rest of the row keeps its status color. The selected row stays uniform white for a clean sheet.

@@ -4633,7 +4633,7 @@ impl Application {
         let rest = if self.peek_filtering {
             "↑/↓ · Enter jump · Esc clear  "
         } else {
-            "↑/↓ preview · n down · r reconnect · m mute · x close · Enter jump · Esc close  "
+            "↑/↓ preview · PgUp/Dn page · n down · r reconnect · m mute · x close · Enter jump · Esc close  "
         };
         let header = format!("{filter_prefix}{health}{rest}");
         draw_text(
@@ -6302,6 +6302,26 @@ impl Application {
                         winit::keyboard::NamedKey::ArrowUp => {
                             if !self.peek_filtered.is_empty() {
                                 self.peek_sel = self.peek_sel.saturating_sub(1);
+                            }
+                            if self.peek_sel < self.peek_scroll {
+                                self.peek_scroll = self.peek_sel;
+                            }
+                        }
+                        // PgDn/PgUp page the triage list by a full window (the same 10-row slice the
+                        // renderer shows), so a large fleet doesn't need one keypress per row —
+                        // mirroring the fleet/palette/broadcast list overlays.
+                        winit::keyboard::NamedKey::PageDown => {
+                            let shown = self.peek_filtered.len();
+                            if shown > 0 {
+                                self.peek_sel = (self.peek_sel + 10).min(shown - 1);
+                            }
+                            if self.peek_sel >= self.peek_scroll + 10 {
+                                self.peek_scroll = self.peek_sel + 1 - 10;
+                            }
+                        }
+                        winit::keyboard::NamedKey::PageUp => {
+                            if !self.peek_filtered.is_empty() {
+                                self.peek_sel = self.peek_sel.saturating_sub(10);
                             }
                             if self.peek_sel < self.peek_scroll {
                                 self.peek_scroll = self.peek_sel;
