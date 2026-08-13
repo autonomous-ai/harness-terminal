@@ -10146,13 +10146,40 @@ pub(crate) fn group_notifications(pending: &[(String, usize)]) -> Vec<(String, V
     batches
 }
 
-/// Join session labels for a coalesced-notification list. A handful reads as `a, b, c`; a fleet-wide
-/// broadcast (every host) collapses to `all N` so the popup stays short.
+/// Join session labels for a coalesced-notification list. A handful reads as `a, b, c`; a larger
+/// all-local fleet collapses to `all N sessions` (the old behaviour). But when the busy/down set spans
+/// REMOTE hosts, the popup collapses per host instead ("srv-a (2), srv-b") so a fleet Diver still
+/// sees WHICH machines are affected, not just a vague count. Pure and unit-tested.
 fn join_labels(labels: &[String]) -> String {
     if labels.len() <= 3 {
-        labels.join(", ")
+        return labels.join(", ");
+    }
+    let has_remote = labels.iter().any(|l| l.contains('@'));
+    if !has_remote {
+        return format!("all {} sessions", labels.len());
+    }
+    let mut tally: Vec<(String, usize)> = Vec::new();
+    for l in labels {
+        let host = l.rsplit_once('@').map(|(_, h)| h).unwrap_or("local");
+        match tally.iter_mut().find(|(h, _)| h.as_str() == host) {
+            Some((_, c)) => *c += 1,
+            None => tally.push((host.to_string(), 1)),
+        }
+    }
+    let parts: Vec<String> = tally
+        .iter()
+        .map(|(h, c)| {
+            if *c > 1 {
+                format!("{h} ({c})")
+            } else {
+                h.clone()
+            }
+        })
+        .collect();
+    if parts.len() > 3 {
+        format!("{}, +{} more", parts[..3].join(", "), parts.len() - 3)
     } else {
-        format!("all {} sessions", labels.len())
+        parts.join(", ")
     }
 }
 
@@ -10845,6 +10872,36 @@ mod tests {
         assert_eq!(
             join_labels(&["w".into(), "x".into(), "y".into(), "z".into()]),
             "all 4 sessions"
+        );
+    }
+
+    /// A large fleet that spans REMOTE hosts collapses per host so the Diver still sees which
+    /// machines are busy/down, instead of the old vague "all N sessions".
+    #[test]
+    fn join_labels_remote_fleet_collapses_by_host() {
+        assert_eq!(
+            join_labels(&[
+                "a@srv1".into(),
+                "b@srv1".into(),
+                "c@srv2".into(),
+                "d@srv2".into()
+            ]),
+            "srv1 (2), srv2 (2)"
+        );
+        assert_eq!(
+            join_labels(&[
+                "a@srv1".into(),
+                "b@srv2".into(),
+                "c@srv3".into(),
+                "d@srv4".into(),
+                "e@srv5".into()
+            ]),
+            "srv1, srv2, srv3, +2 more"
+        );
+        // A mixed local+remote fleet still collapses by host (localhost labeled "local").
+        assert_eq!(
+            join_labels(&["claude".into(), "claude".into(), "x@srv1".into()]),
+            "claude, claude, x@srv1"
         );
     }
 
