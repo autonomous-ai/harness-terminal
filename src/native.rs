@@ -2780,6 +2780,7 @@ impl Application {
             ("Cmd+T / Cmd+N", "new session (new native tab)"),
             ("Cmd+W", "close active tab/window"),
             ("Cmd+Shift+T", "reopen last-closed tab"),
+            ("Cmd+Shift+D", "duplicate active session"),
             ("Cmd+Q", "quit"),
             ("Cmd+Shift+[ / ]", "previous / next tab"),
             ("Ctrl+Tab / Ctrl+Shift+Tab", "previous / next tab"),
@@ -4189,6 +4190,10 @@ impl Application {
             }
             CmdShortcut::ReopenTab => {
                 self.app.reopen_last_closed();
+            }
+            CmdShortcut::Duplicate => {
+                self.duplicate_active_preserving_pin();
+                self.flash = Some(("duplicated".to_string(), std::time::Instant::now()));
             }
             CmdShortcut::GotoTab(i) => {
                 if !self.app.tabs.is_empty() {
@@ -6282,6 +6287,8 @@ enum CmdShortcut {
     GotoTab(usize),
     /// Cmd+Shift+T — reopen the last-closed tab (the browser/iTerm recovery muscle memory).
     ReopenTab,
+    /// Cmd+Shift+D — duplicate the active session (VS Code / iTerm muscle memory).
+    Duplicate,
     /// Not a Cmd shortcut we own (forward as normal).
     None,
 }
@@ -6318,6 +6325,9 @@ fn cmd_shortcut(key: &Key, mods: &ModifiersState) -> CmdShortcut {
             // Cmd+Shift+T reopens the last-closed tab (U is shift; T is shift-pressed too).
             // Must be checked for the shifted 'T' since Cmd+T alone is NewSession.
             "T" if mods.shift_key() => ReopenTab,
+            // Cmd+Shift+D duplicates the active session — the VS Code/iTerm "Duplicate" muscle
+            // memory. Plain Cmd+D stays with the session.
+            "D" if mods.shift_key() => Duplicate,
             // Plain Cmd+[ is left to the shell; only the Shift variant switches tabs.
             _ => None,
         },
@@ -6939,6 +6949,13 @@ mod tests {
         assert_eq!(chars("}", sc), CmdShortcut::NextTab, "shifted ] glyph");
         assert_eq!(chars("[", sc), CmdShortcut::PrevTab);
         assert_eq!(chars("{", sc), CmdShortcut::PrevTab, "shifted [ glyph");
+        // Cmd+Shift+D duplicates the active session; plain Cmd+D is left alone.
+        assert_eq!(chars("D", sc), CmdShortcut::Duplicate);
+        assert_eq!(
+            chars("d", s),
+            CmdShortcut::None,
+            "plain Cmd+D must not hijack"
+        );
         // Cmd+Shift+P opens the command palette; plain Cmd+P is left alone.
         assert_eq!(chars("P", sc), CmdShortcut::CommandPalette);
         assert_eq!(

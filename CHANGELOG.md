@@ -5,6 +5,12 @@ entries record user-visible and architectural changes since the last tagged mile
 
 ## Unreleased / 0.1.0 (in progress)
 
+### Added
+- **`Cmd+Shift+D` duplicates the active session** (VS Code / iTerm "Duplicate" muscle memory), reusing
+  the same fork path as `prefix+k` so it preserves the engine@host identity and pin state. Plain
+  `Cmd+D` is untouched (stays with the shell). Covered by the pure `cmd_shortcut` unit test.
+
+
 ### Fixed
 - **Native-tab windows are now distinguishable in the system tab bar even before an agent announces
   a title.** `render_host_window` only set each window's title when the session reported a live OSC
