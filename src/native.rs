@@ -341,6 +341,9 @@ struct Application {
     /// session maps to a real `NSWindow` and they're grouped into AppKit's native tab set; the
     /// framebuffer tab strip is hidden in favor of the OS chrome.
     native_tabs: bool,
+    /// Show the native-mode bottom status strip (session identity + fleet triage). Mirrors the
+    /// `native_status_bar` config; when false the native grid is full-bleed.
+    native_status_bar: bool,
     /// Monotonic instant until which a terminal-bell badge is shown for each tab (index). A bell
     /// (a long agent run finishing) shows a 🔔 badge for a few seconds, then fades on its own.
     bell_until: Vec<Option<std::time::Instant>>,
@@ -601,6 +604,7 @@ impl Application {
             key_action,
             focus: false,
             native_tabs: cfg.native_tabs.unwrap_or(false),
+            native_status_bar: cfg.native_status_bar.unwrap_or(true),
             dnd: false,
             bell_until: vec![None; tab_count],
             was_down: vec![false; tab_count],
@@ -5969,10 +5973,14 @@ impl Application {
     ) {
         let gline_px = self.cell_h as usize;
         let gcol_px = self.cell_w as usize;
-        // Reserve the bottom cell for the native status strip (iTerm2-style), across every window
-        // so the terminal size is identical whether a tab is focused or not — no resize/reflow
-        // churn when you flip between tabs.
-        let grid_lines = (height.max(2) / gline_px).saturating_sub(1).max(1);
+        // Reserve the bottom cell for the native status strip (iTerm2-style) when enabled, across
+        // every window so the terminal size is identical whether a tab is focused or not — no
+        // resize/reflow churn when you flip between tabs. Turned off, the grid is full-bleed.
+        let grid_lines = if self.native_status_bar {
+            (height.max(2) / gline_px).saturating_sub(1).max(1)
+        } else {
+            (height.max(1) / gline_px).max(1)
+        };
         let grid_cols = width.max(1) / gcol_px;
 
         // Size this window's session to its grid.
@@ -6036,8 +6044,10 @@ impl Application {
 
         // Native status strip: this window's session info on the left, the fleet triage on the
         // right — the signal the in-app status line used to carry, now that the OS tab bar owns the
-        // top chrome.
-        self.draw_native_status(fb, width, height);
+        // top chrome. Only drawn when enabled.
+        if self.native_status_bar {
+            self.draw_native_status(fb, width, height);
+        }
 
         // Overlays paint only in the focused window.
         if focused {

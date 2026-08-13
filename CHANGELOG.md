@@ -6,6 +6,9 @@ entries record user-visible and architectural changes since the last tagged mile
 ## Unreleased / 0.1.0 (in progress)
 
 ### Added
+- **The native status bar is optional.** A new `native_status_bar` config key (default `true`)
+  turns the bottom status strip on/off in native mode; `false` makes the grid full-bleed. Outside
+  native mode the key is ignored and the in-app status line is unchanged.
 - **Native mode gains an iTerm2-style status bar.** Each native tab window now keeps a slim bottom
   strip — this window's session identity + ✓/○ health (with the reconnect reason when down) on the
   left, and the whole-fleet triage (`↓N` down, `!M` busy, `⏳N` queued, `⌛N` quiet, `🔕` DND) on the

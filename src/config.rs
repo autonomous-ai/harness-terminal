@@ -74,6 +74,12 @@ pub struct Config {
     /// which is the always-works fallback.
     #[serde(default)]
     pub native_tabs: Option<bool>,
+    /// In native-tab mode (`native_tabs = true`), reserve the bottom terminal row for an
+    /// iTerm2-style status strip (session identity + fleet triage). Set `false` to make the grid
+    /// full-bleed (no chrome). Absent defaults to `true`. Ignored outside native mode, where the
+    /// in-app status line is unchanged.
+    #[serde(default)]
+    pub native_status_bar: Option<bool>,
 }
 
 /// A user-configurable color theme. Every field is optional; unset entries keep the built-in
@@ -171,6 +177,7 @@ impl Default for Config {
             keybindings: None,
             prefix_key: None,
             native_tabs: None,
+            native_status_bar: None,
         }
     }
 }

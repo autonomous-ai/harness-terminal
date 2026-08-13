@@ -98,3 +98,7 @@ default_engine = "claude"
 # the in-app tab strip. Switch config `native_tabs = true`, relaunch, and the system
 # tab bar takes over.
 native_tabs = false
+# In native-tab mode, reserve the bottom row for an iTerm2-style status strip (this window's
+# session identity + the whole-fleet triage). Set false for a full-bleed grid. Default (absent) = true.
+# Ignored outside native mode.
+# native_status_bar = true
