@@ -1046,18 +1046,14 @@ impl Application {
     /// if nothing is marked, falls back to every down pane (so a bare `R` is never a silent no-op).
     fn grid_reconnect_marked(&mut self) {
         let n = self.app.tabs.len();
-        let mut targets: Vec<usize> = (0..n)
-            .filter(|&i| self.grid_marks.get(i).copied().unwrap_or(false))
+        let down: Vec<bool> = (0..n)
+            .map(|i| {
+                let s = &self.app.tabs[i];
+                s.kind() != "pty" && !s.alive()
+            })
             .collect();
+        let mut targets = grid_targets(&self.grid_marks, Some(&down));
         self.grid_marks = vec![false; n];
-        if targets.is_empty() {
-            targets = (0..n)
-                .filter(|&i| {
-                    let s = &self.app.tabs[i];
-                    s.kind() != "pty" && !s.alive()
-                })
-                .collect();
-        }
         if targets.is_empty() {
             self.flash = Some((
                 "no marked or down panes to reconnect".to_string(),
@@ -1135,15 +1131,11 @@ impl Application {
     /// muted tabs are skipped by the fallback so a deliberately-quiet pane is never round-housed.
     fn grid_interrupt_marked(&mut self) {
         let n = self.app.tabs.len();
-        let mut targets: Vec<usize> = (0..n)
-            .filter(|&i| self.grid_marks.get(i).copied().unwrap_or(false))
+        let unmuted: Vec<bool> = (0..n)
+            .map(|i| !self.muted.get(i).copied().unwrap_or(false))
             .collect();
+        let mut targets = grid_targets(&self.grid_marks, Some(&unmuted));
         self.grid_marks = vec![false; n];
-        if targets.is_empty() {
-            targets = (0..n)
-                .filter(|&i| !self.muted.get(i).copied().unwrap_or(false))
-                .collect();
-        }
         if targets.is_empty() {
             self.flash = Some((
                 "no sessions to interrupt".to_string(),
@@ -1504,7 +1496,8 @@ impl Application {
             }
         }
 
-        self.flash = Some(("no busy tabs".to_string(), std::time::Instant::now()));
+        // Accurate phrasing: the active tab itself may be busy; we only report no OTHER tab is.
+        self.flash = Some(("no other busy tab".to_string(), std::time::Instant::now()));
     }
 
     /// Which live, backgrounded, unprotected tabs have sat silent past the quiet threshold — the
@@ -1592,7 +1585,7 @@ impl Application {
             }
         }
 
-        self.flash = Some(("no quiet tabs".to_string(), std::time::Instant::now()));
+        self.flash = Some(("no other quiet tab".to_string(), std::time::Instant::now()));
     }
 
     /// `prefix+Q`: jump to the next tab whose session is down (disconnected / in reconnect backoff),
@@ -1629,7 +1622,7 @@ impl Application {
             }
         }
 
-        self.flash = Some(("no down tabs".to_string(), std::time::Instant::now()));
+        self.flash = Some(("no other down tab".to_string(), std::time::Instant::now()));
     }
 
     /// `prefix+P`: jump to the next pinned tab (wrapping). Pinned tabs are the long-running agents
@@ -8960,15 +8953,42 @@ fn move_slot<T>(v: &mut Vec<T>, from: usize, to: usize) {
     }
 }
 
+/// Resolve which fleet-grid index a bulk action (broadcast/reconnect/interrupt) targets: every
+/// marked index, or — when nothing is marked and a `fallback` mask is given — every index where the
+/// mask is true (e.g. "all down" for reconnect, "all non-muted" for interrupt). A `None` fallback
+/// (close) means an empty mark set targets nothing. Pure so the fallback semantics are unit-tested
+/// once instead of being copy-pasted into every grid action.
+fn grid_targets(marks: &[bool], fallback: Option<&[bool]>) -> Vec<usize> {
+    let marked: Vec<usize> = marks
+        .iter()
+        .enumerate()
+        .filter(|(_, &m)| m)
+        .map(|(i, _)| i)
+        .collect();
+    if !marked.is_empty() {
+        return marked;
+    }
+    match fallback {
+        Some(mask) => mask
+            .iter()
+            .enumerate()
+            .filter(|(_, &f)| f)
+            .map(|(i, _)| i)
+            .collect(),
+        None => Vec::new(),
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::{
         argb_to_rgb, arrow_seq, broadcast_bytes, clip_dots, cmd_shortcut, collect_fleet_matches,
         copy_no_match_flash, engine_accent, expand_click_word, extra_named_seq, first_down_session,
         fleet_host_line, fmt_duration, fmt_reconnect_summary, format_engine_mix, fuzzy_match,
-        grid_tile_at, group_notifications, host_color, host_engine_breakdown, host_tally,
-        join_labels, move_slot, next_host_index, parse_remote_attach, reanchor_active_after_batch,
-        recall_index, scroll_top, session_indices_for_host, swap_slot, CmdShortcut, FleetMatch,
+        grid_targets, grid_tile_at, group_notifications, host_color, host_engine_breakdown,
+        host_tally, join_labels, move_slot, next_host_index, parse_remote_attach,
+        reanchor_active_after_batch, recall_index, scroll_top, session_indices_for_host, swap_slot,
+        CmdShortcut, FleetMatch,
     };
 
     use std::sync::Arc;
@@ -9778,6 +9798,32 @@ mod tests {
                 "alignment broken at slot {i}"
             );
         }
+    }
+
+    /// Fleet-grid bulk targets: marks win when any are set; otherwise (for non-destructive
+    /// reconnect/interrupt) the fallback mask applies; close (None fallback) targets nothing on an
+    /// empty mark set so a stray `X` can never nuke the fleet.
+    #[test]
+    fn grid_targets_resolves_marks_then_fallback() {
+        let marks = [false, true, false, true, false];
+        let fallback = [true, true, true, false, false];
+        // Marks win over any fallback.
+        assert_eq!(grid_targets(&marks, Some(&fallback)), vec![1, 3]);
+        // No marks -> fallback mask applies.
+        assert_eq!(
+            grid_targets(&[false, false, false, false, false], Some(&fallback)),
+            vec![0, 1, 2]
+        );
+        // No marks + no fallback (close) -> nothing.
+        assert_eq!(
+            grid_targets(&[false, false, false, false, false], None),
+            Vec::<usize>::new()
+        );
+        // Length mismatches are safe: marks index beyond fallback's shorter length are still taken.
+        assert_eq!(
+            grid_targets(&[true, true, true], Some(&[false, false])),
+            vec![0, 1, 2]
+        );
     }
 
     /// A drag-reorder (remove/insert) must apply the same relocation to every parallel vector, so a

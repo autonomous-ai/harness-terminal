@@ -10,6 +10,10 @@ entries record user-visible and architectural changes since the last tagged mile
   `hosts[active_host]` to honor the pin guard; if a window was dropped without the index being
   re-derived, an unclamped index could panic. It now clamps `active_host` into range before use,
   matching the other guards scattered across native mode.
+- **Fleet-grid bulk actions share one tested target rule.** `R`/`C` now resolve "marked, else
+  fallback" through a single pure `grid_targets` helper (marks win; unmuted/down mask as fallback;
+  close requires marks), unit-tested once instead of copy-pasted. Triage jump no-op messages are
+  now phrased `no other busy/quiet/down tab` for accuracy.
 - **Bulk-close marked panes from the fleet grid.** `X` prunes every marked tile at once (high→low,
   honoring the pin guard + per-tab undo) — the bulk sibling of the single-tile `x`. Unlike
   `b`/`C`/`R` it requires explicit marks (no "close everything" fallback), so a stray press can
