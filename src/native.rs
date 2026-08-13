@@ -1053,6 +1053,7 @@ impl Application {
                 s.session_id.to_lowercase().contains(&q)
                     || s.tmux_pane.to_lowercase().contains(&q)
                     || s.engine.to_lowercase().contains(&q)
+                    || s.name.to_lowercase().contains(&q)
             })
             .map(|(i, _)| i)
             .collect();
@@ -2589,11 +2590,22 @@ impl Application {
             } else {
                 s.session_id.chars().take(8).collect()
             };
+            // The daemon tags each session with its agent name/task (e.g. the harness `name`); show
+            // it so a diver can tell which agent a row is at a glance, not just engine + id.
+            let nm: String = if s.name.is_empty() {
+                String::new()
+            } else {
+                let mut n = s.name.clone();
+                if n.chars().count() > 12 {
+                    n = n.chars().take(12).collect::<String>() + "…";
+                }
+                n
+            };
             let line = format!(
-                "  {} {}  {:<9} {}{}",
+                "  {} {}  {:<12} {}{}",
                 mark,
                 eng,
-                "",
+                nm,
                 id,
                 if sel { "  ◄" } else { "" }
             );

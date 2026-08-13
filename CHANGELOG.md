@@ -6,6 +6,12 @@ entries record user-visible and architectural changes since the last tagged mile
 ## Unreleased / 0.1.0 (in progress)
 
 ### Added
+- **Fleet list shows each agent by name.** The `prefix+s` fleet overlay now surfaces the daemon's
+  per-session agent name/task (not just engine glyph + truncated id), so a diver can tell which
+  agent each row is at a glance — and the fleet filter now matches by name too, so you can type an
+  agent's label to jump straight to it.
+
+### Added
 - **Jump flashes say where you landed.** `prefix+z` (next quiet), `prefix+Q` (next down), and
   `prefix+P` (next pinned) now flash the target tab's identity (`quiet — claude@build02`) like
   `prefix+H` already did for host jumps, so a fleet triage hop is legible at a glance instead of a
