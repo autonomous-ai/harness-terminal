@@ -488,7 +488,12 @@ impl Application {
             let saved = crate::restore::load_muted();
             if !saved.is_empty() {
                 for (i, s) in app.tabs.iter().enumerate() {
-                    let key = format!("{}:{}:{}", s.kind(), s.meta.host, s.meta.engine);
+                    let key = crate::restore::mute_key(
+                        &s.kind(),
+                        &s.meta.host,
+                        &s.meta.engine,
+                        s.attach_session.as_deref(),
+                    );
                     if saved.contains(&key) {
                         muted[i] = true;
                     }
@@ -502,7 +507,12 @@ impl Application {
             let saved = crate::restore::load_pinned();
             if !saved.is_empty() {
                 for (i, s) in app.tabs.iter().enumerate() {
-                    let key = format!("{}:{}:{}", s.kind(), s.meta.host, s.meta.engine);
+                    let key = crate::restore::mute_key(
+                        &s.kind(),
+                        &s.meta.host,
+                        &s.meta.engine,
+                        s.attach_session.as_deref(),
+                    );
                     if saved.contains(&key) {
                         pinned[i] = true;
                     }
@@ -4336,13 +4346,20 @@ impl Application {
     /// Persist which tabs are muted (prefix+m) so a restart brings them back muted instead of the
     /// tab nagging again the moment the window reopens. Shared by `quit` and the close path.
     fn save_muted_state(&self) {
-        let keys: Vec<(&str, &str, &str)> = self
+        let keys: Vec<(&str, &str, &str, Option<&str>)> = self
             .app
             .tabs
             .iter()
             .enumerate()
             .filter(|(i, _)| self.muted.get(*i).copied().unwrap_or(false))
-            .map(|(_, s)| (s.kind(), s.meta.host.as_str(), s.meta.engine.as_str()))
+            .map(|(_, s)| {
+                (
+                    s.kind(),
+                    s.meta.host.as_str(),
+                    s.meta.engine.as_str(),
+                    s.attach_session.as_deref(),
+                )
+            })
             .collect();
         crate::restore::save_muted(&keys);
     }
@@ -4350,13 +4367,20 @@ impl Application {
     /// Persist which tabs are pinned (prefix+a) so a restart keeps protecting them. Shared by
     /// `quit` and the close path (a pinned tab should survive a relaunch as pinned).
     fn save_pin_state(&self) {
-        let keys: Vec<(&str, &str, &str)> = self
+        let keys: Vec<(&str, &str, &str, Option<&str>)> = self
             .app
             .tabs
             .iter()
             .enumerate()
             .filter(|(i, _)| self.pinned.get(*i).copied().unwrap_or(false))
-            .map(|(_, s)| (s.kind(), s.meta.host.as_str(), s.meta.engine.as_str()))
+            .map(|(_, s)| {
+                (
+                    s.kind(),
+                    s.meta.host.as_str(),
+                    s.meta.engine.as_str(),
+                    s.attach_session.as_deref(),
+                )
+            })
             .collect();
         crate::restore::save_pinned(&keys);
     }

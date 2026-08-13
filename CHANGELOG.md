@@ -6,13 +6,14 @@ entries record user-visible and architectural changes since the last tagged mile
 ## Unreleased / 0.1.0 (in progress)
 
 ### Fixed
-- **Distinct remote agents on one host no longer share a persisted scrollback.** Scrollback was
-  keyed only on kind+host+engine, so attaching two different tmux sessions of the same engine on
-  one host (`host/session-a` vs `host/session-b`) collapsed into a single last-writer-wins history
-  file and both restored the same pane on relaunch. The remote session name is now part of the
-  scrollback identity for attach tabs, so each `host/session` agent keeps its own history; spawned
-  panes (no attach) still map to their single `auton-<engine>` identity as before. Mute state is
-  unchanged.
+- **Distinct remote agents on one host no longer share persisted state.** Scrollback, mute, and
+  pin state were all keyed only on kind+host+engine, so attaching two different tmux sessions of
+  the same engine on one host (`host/session-a` vs `host/session-b`) collapsed them into one
+  identity: they shared a last-writer-wins scrollback file (both replayed the same pane on
+  relaunch), and muting or pinning one silently applied to the other. The remote session name is
+  now part of the identity for attach tabs across all three, so each `host/session` agent keeps
+  its own history, mute, and pin; spawned panes (no attach) still map to their single
+  `auton-<engine>` identity as before.
 
 - **Moving or drag-reordering a tab no longer leaves fleet broadcast marks or the content-change
   detector on the wrong session.** The tab-move fix covered pin/mute/busy/badge state, but three

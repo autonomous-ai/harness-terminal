@@ -377,7 +377,7 @@ pub fn cleanup_orphans(alive: &[(&str, &str, &str, Option<&str>)]) {
         .collect();
     let keep_keys: Vec<String> = alive
         .iter()
-        .map(|(k, h, e, _)| format!("{k}:{h}:{e}"))
+        .map(|(k, h, e, a)| mute_key(k, h, e, *a))
         .collect();
 
     // Scavenge the scrollback dir: delete any *.txt not backed by a live identity.
@@ -432,16 +432,27 @@ fn muted_path() -> std::path::PathBuf {
     config_dir().join("muted.json")
 }
 
-/// Persist the identities (kind+host+engine) of tabs the user has muted (prefix+m), so a tab stays
-/// muted across a restart instead of nagging again the moment the window reopens. Best-effort like
-/// the other state files; only a non-empty list is written.
-pub fn save_muted(kinds_engines: &[(&str, &str, &str)]) {
+/// The persistent identity key for a muted tab: `kind:host:engine`, plus the remote attach session
+/// name (`kind:host:engine/session`) when present, so two distinct `host/session` agents on the same
+/// host+engine keep independent mute state. Mirrors the scrollback-identity disambiguation; spawned
+/// panes (attach=None) share the single `auton-<engine>` identity as before.
+pub fn mute_key(kind: &str, host: &str, engine: &str, attach: Option<&str>) -> String {
+    match attach {
+        Some(a) if !a.trim().is_empty() => format!("{kind}:{host}:{engine}/{a}"),
+        _ => format!("{kind}:{host}:{engine}"),
+    }
+}
+
+/// Persist the identities of tabs the user has muted (prefix+m), so a tab stays muted across a
+/// restart instead of nagging again the moment the window reopens. Best-effort like the other state
+/// files; only a non-empty list is written.
+pub fn save_muted(kinds_engines: &[(&str, &str, &str, Option<&str>)]) {
     if kinds_engines.is_empty() {
         return;
     }
     let payload: Vec<String> = kinds_engines
         .iter()
-        .map(|(k, h, e)| format!("{k}:{h}:{e}"))
+        .map(|(k, h, e, a)| mute_key(k, h, e, *a))
         .collect();
     let _ = std::fs::create_dir_all(config_dir());
     let _ = std::fs::write(
@@ -450,7 +461,7 @@ pub fn save_muted(kinds_engines: &[(&str, &str, &str)]) {
     );
 }
 
-/// Load the set of muted identity keys, each "kind:host:engine". Empty set on error/missing.
+/// Load the set of muted identity keys, each `kind:host:engine[/session]`. Empty set on error/missing.
 pub fn load_muted() -> Vec<String> {
     let Ok(raw) = std::fs::read_to_string(muted_path()) else {
         return Vec::new();
@@ -516,13 +527,15 @@ fn pinned_path() -> std::path::PathBuf {
     config_dir().join("pinned.json")
 }
 
-/// Persist the identities (kind+host+engine) of tabs the user pinned (prefix+a), so a pinned
-/// agent run stays protected across a restart. Unlike muted (which skips empty), an empty list is
-/// written too — unpinning the last tab must clear the file, not leave the old set behind.
-pub fn save_pinned(kinds_engines: &[(&str, &str, &str)]) {
+/// Persist the identities (kind+host+engine[/session]) of tabs the user pinned (prefix+a), so a
+/// pinned agent run stays protected across a restart. A distinct `host/session` agent on the same
+/// host+engine keeps its own pin, mirroring the scrollback/mute disambiguation. Unlike muted (which
+/// skips empty), an empty list is written too — unpinning the last tab must clear the file, not
+/// leave the old set behind.
+pub fn save_pinned(kinds_engines: &[(&str, &str, &str, Option<&str>)]) {
     let payload: Vec<String> = kinds_engines
         .iter()
-        .map(|(k, h, e)| format!("{k}:{h}:{e}"))
+        .map(|(k, h, e, a)| mute_key(k, h, e, *a))
         .collect();
     let _ = std::fs::create_dir_all(config_dir());
     let _ = std::fs::write(
@@ -531,7 +544,7 @@ pub fn save_pinned(kinds_engines: &[(&str, &str, &str)]) {
     );
 }
 
-/// Load the set of pinned identity keys, each "kind:host:engine". Empty set on error/missing.
+/// Load the set of pinned identity keys, each `kind:host:engine[/session]`. Empty set on error/missing.
 pub fn load_pinned() -> Vec<String> {
     let Ok(raw) = std::fs::read_to_string(pinned_path()) else {
         return Vec::new();
@@ -677,7 +690,7 @@ mod tests {
     #[test]
     fn pinned_roundtrips_and_empty_clears() {
         with_isolated_dir(|_| {
-            save_pinned(&[("tmux", "box1", "claude")]);
+            save_pinned(&[("tmux", "box1", "claude", None)]);
             assert_eq!(load_pinned(), vec!["tmux:box1:claude".to_string()]);
             save_pinned(&[]);
             assert!(
@@ -845,16 +858,28 @@ mod tests {
         with_isolated_dir(|_| {
             assert!(load_muted().is_empty());
             let keys = vec![
-                ("tmux", "build-host", "claude"),
-                ("tunnel", "10.0.0.7", "codex"),
+                ("tmux", "build-host", "claude", None),
+                ("tunnel", "10.0.0.7", "codex", Some("work-a")),
             ];
             save_muted(&keys);
             let back = load_muted();
             assert_eq!(back.len(), 2);
             assert!(back.contains(&"tmux:build-host:claude".to_string()));
-            assert!(back.contains(&"tunnel:10.0.0.7:codex".to_string()));
+            assert!(
+                back.contains(&"tunnel:10.0.0.7:codex/work-a".to_string()),
+                "attach session must be part of the mute identity"
+            );
             // A stale mute for a vanished tab is harmless — restore matches on exact identity.
             assert!(!back.contains(&"pty:ghost:shell".to_string()));
+            // Two distinct agents on the same host+engine keep independent mute state.
+            save_muted(&[
+                ("tunnel", "10.0.0.7", "codex", Some("work-a")),
+                ("tunnel", "10.0.0.7", "codex", Some("work-b")),
+            ]);
+            let two = load_muted();
+            assert_eq!(two.len(), 2);
+            assert!(two.contains(&"tunnel:10.0.0.7:codex/work-a".to_string()));
+            assert!(two.contains(&"tunnel:10.0.0.7:codex/work-b".to_string()));
         });
     }
 
@@ -885,9 +910,9 @@ mod tests {
             save_scrollback("tunnel", "10.0.0.7", "codex", None, "keep this too");
             save_scrollback("pty", "ghost", "shell", None, "stale — should be deleted");
             save_muted(&[
-                ("tmux", "build-host", "claude"),
-                ("tunnel", "10.0.0.7", "codex"),
-                ("pty", "ghost", "shell"),
+                ("tmux", "build-host", "claude", None),
+                ("tunnel", "10.0.0.7", "codex", None),
+                ("pty", "ghost", "shell", None),
             ]);
             assert_eq!(
                 load_scrollback("pty", "ghost", "shell", None),
@@ -926,7 +951,7 @@ mod tests {
     fn cleanup_orphans_with_no_live_empties_state() {
         with_isolated_dir(|_| {
             save_scrollback("pty", "solo", "claude", None, "all gone");
-            save_muted(&[("pty", "solo", "claude")]);
+            save_muted(&[("pty", "solo", "claude", None)]);
             cleanup_orphans(&[]);
             assert_eq!(load_scrollback("pty", "solo", "claude", None), "");
             assert!(load_muted().is_empty());
