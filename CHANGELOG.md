@@ -6,6 +6,11 @@ entries record user-visible and architectural changes since the last tagged mile
 ## Unreleased / 0.1.0 (in progress)
 
 ### Fixed
+- **Peek overlay clamps its selection if tabs close underneath it.** `prefix+peek` could leave
+  `peek_sel` pointing past the end after a `Cmd+W` closed a tab while the overlay was open, and the
+  Enter handler then set the active tab out of range (a latent panic). It now re-clamps selection
+  and scroll each frame and on Enter, matching the fleet grid's already-safe behavior.
+
 - **Fleet search no longer panics if its targets change mid-search.** `prefix+h` / `Cmd+Shift+F`
   cached per-session match positions while the overlay was open; if a session closed (`Cmd+W`) or
   its terminal resized/streamed while searching, `render_fleet_search` could index a stale tab or

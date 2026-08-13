@@ -3548,6 +3548,12 @@ impl Application {
         );
         // Cap the visible window (10 rows + preview lines), but scroll through ALL tabs: `peek_scroll`
         // offsets the start so sessions beyond the first window are reachable, matching peek_sel.
+        // Re-clamp the selection + scroll each frame: a tab can close (Cmd+W is handled in
+        // `about_to_wait`) while the overlay is open, which would otherwise leave a stale index.
+        if !self.app.tabs.is_empty() {
+            self.peek_sel = self.peek_sel.min(self.app.tabs.len() - 1);
+            self.peek_scroll = self.peek_scroll.min(self.app.tabs.len().saturating_sub(10));
+        }
         let rows = self.app.tabs.len().min(10);
         for row in 0..rows {
             let i = self.peek_scroll + row;
@@ -4703,7 +4709,7 @@ impl Application {
                         }
                         winit::keyboard::NamedKey::Enter => {
                             if !self.app.tabs.is_empty() {
-                                self.app.active = self.peek_sel;
+                                self.app.active = self.peek_sel.min(self.app.tabs.len() - 1);
                                 crate::restore::save_active(self.app.active);
                                 self.app.overlay = Overlay::None;
                             }
