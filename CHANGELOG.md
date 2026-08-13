@@ -5,6 +5,11 @@ entries record user-visible and architectural changes since the last tagged mile
 
 ## Unreleased / 0.1.0 (in progress)
 
+### Fixed
+- **Fleet-grid marks are scoped to one session.** `Space` marks persisted after closing the grid
+  (Esc/Enter), so a stale mark set could later seed an unintended `b`/`C`/`R` — and especially `X`,
+  a bulk close — defeating the "marks required so a stray press is never destructive" guard. Marks
+  now clear on grid close, matching the broadcast overlay's fresh-reset behavior.
 ### Added
 - **Help overlay now lists the in-overlay shortcuts** (peek `r`/`n`, broadcast `Space`/`⇧Space`,
   fleet-grid marking) so the keybindings you can use inside the triage overlays are discoverable.

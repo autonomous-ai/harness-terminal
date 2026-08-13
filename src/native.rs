@@ -6202,6 +6202,12 @@ impl Application {
                                 crate::restore::save_active(self.app.active);
                                 self.app.overlay = Overlay::None;
                             }
+                            // Marks are scoped to one grid session: dive or close clears them so a
+                            // stale mark set can't silently seed a later `b`/`C`/`R`/`X` — especially
+                            // `X`, a bulk close, which would otherwise undo the "requires marks so a
+                            // stray press is never destructive" guard. Matches the broadcast overlay's
+                            // fresh-reset-on-open behavior.
+                            self.grid_marks = vec![false; self.app.tabs.len()];
                         }
                         winit::keyboard::NamedKey::Space => {
                             if let Some(m) = self.grid_marks.get_mut(self.grid_sel) {
@@ -6210,6 +6216,8 @@ impl Application {
                         }
                         winit::keyboard::NamedKey::Escape => {
                             self.app.overlay = Overlay::None;
+                            // Same one-session scope as Enter above (marks don't outlive the grid view).
+                            self.grid_marks = vec![false; self.app.tabs.len()];
                         }
                         _ => {}
                     },
