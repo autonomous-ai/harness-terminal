@@ -6,6 +6,10 @@ entries record user-visible and architectural changes since the last tagged mile
 ## Unreleased / 0.1.0 (in progress)
 
 ### Added
+- **The session palette ranks the best match on top.** Typing a query now floats the strongest hit
+  to the top of a many-tab fleet: a prefix match in the engine/name/host outranks a loose fuzzy
+  subsequence, and equally-strong hits break ties by engine recency then tab order. Previously
+  results came back in raw open order, so "clau" might not surface the Claude tab first.
 - **The fleet-grid war-room shows *why* a machine is down.** A down tile now carries the reconnect
   reason (`tunnel connect 10.0.0.4: refused`) right after its `○`, clipped to the tile's own width
   so it never spills onto a neighbor — so the at-a-glance view of every agent tells you which host

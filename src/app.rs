@@ -82,6 +82,30 @@ pub struct App {
     pub startup_offline: usize,
 }
 
+/// Rank one palette candidate against `query`: a prefix match in the engine, name, or host outranks
+/// a looser in-field hit, which outranks a bare subsequence (`fuzzy_match` only). Lets the palette
+/// float the best match to the top of a many-session fleet when several tabs fuzzy-match one query.
+/// Pure so the ranking is unit-testable; the caller breaks ties by engine recency, then tab order.
+fn palette_score(q: &str, engine: &str, host: &str, name: &str, title: &str) -> i32 {
+    if engine.starts_with(q) {
+        40
+    } else if name.starts_with(q) {
+        35
+    } else if host.starts_with(q) {
+        30
+    } else if title.starts_with(q) {
+        28
+    } else if name.contains(q) {
+        20
+    } else if engine.contains(q) {
+        15
+    } else if host.contains(q) {
+        12
+    } else {
+        5
+    }
+}
+
 impl App {
     pub fn new(size: TermSize) -> App {
         // Sweep the state dir for scrollback/mute entries that no persisted tab references. This
@@ -358,18 +382,37 @@ impl App {
     /// Recompute `filtered` (tab indices) matching the current query, substring-based.
     pub fn refresh_filter(&mut self) {
         let q = self.query.to_lowercase();
-        self.filtered = (0..self.tabs.len())
-            .filter(|&i| {
-                let s = &self.tabs[i];
-                let name = s.meta.name.clone().unwrap_or_default();
-                let hay = format!(
-                    "{} {} {} {}",
-                    s.meta.host, s.meta.engine, name, s.meta.title
+        // Rank matches so the best one sits on top of a fleet: a prefix hit in the engine/name/host
+        // outranks a loose subsequence, and equally-strong hits break ties by engine recency, then
+        // stable tab order. Without this, results came back in raw open order — typing "clau" didn't
+        // reliably float the Claude tab first when it wasn't tab 0.
+        let mut scored: Vec<(i32, u64, usize)> = Vec::new();
+        for i in 0..self.tabs.len() {
+            let s = &self.tabs[i];
+            let name = s.meta.name.clone().unwrap_or_default();
+            let engine = s.meta.engine.clone();
+            let hay =
+                format!("{} {} {} {}", s.meta.host, engine, name, s.meta.title).to_lowercase();
+            if !q.is_empty() && !crate::native::fuzzy_match(&q, &hay) {
+                continue;
+            }
+            let score = if q.is_empty() {
+                0
+            } else {
+                palette_score(
+                    &q,
+                    &engine.to_lowercase(),
+                    &s.meta.host.to_lowercase(),
+                    &name.to_lowercase(),
+                    &s.meta.title.to_lowercase(),
                 )
-                .to_lowercase();
-                q.is_empty() || crate::native::fuzzy_match(&q, &hay)
-            })
-            .collect();
+            };
+            // Higher `engine_last_used` = more recently used → floats toward the top on ties.
+            let recent = self.engine_last_used.get(&engine).copied().unwrap_or(0);
+            scored.push((score, recent, i));
+        }
+        scored.sort_by(|a, b| b.0.cmp(&a.0).then(b.1.cmp(&a.1)).then(a.2.cmp(&b.2)));
+        self.filtered = scored.into_iter().map(|(_, _, i)| i).collect();
         if self.selected >= self.filtered.len() {
             self.selected = self.filtered.len().saturating_sub(1);
         }
@@ -725,6 +768,33 @@ mod tests {
         app.selected = 99; // sentinel; will be overwritten
         app.select_default_engine();
         assert_eq!(app.engine_order()[app.selected].id, "claude");
+    }
+
+    /// `palette_score` floats a prefix-of-engine match above a prefix-of-name, above an in-field
+    /// hit, above a loose subsequence — so "clau" beats "xxxclaude" and a name prefix beats a host
+    /// match, keeping the best tab on top of a fuzzy fleet list.
+    #[test]
+    fn palette_score_ranks_prefix_over_contains_over_subsequence() {
+        // Prefix of engine beats a loose subsequence.
+        assert!(
+            palette_score("clau", "claude-code", "build02", "agent", "title")
+                > palette_score("clau", "opencode", "build02", "agent", "title")
+        );
+        // Prefix of name beats a mere in-engine hit.
+        assert!(
+            palette_score("fix", "opencode", "build02", "fix-42", "t")
+                > palette_score("fix", "neofix", "build02", "agent", "t")
+        );
+        // Prefix of host outranks a bare contains.
+        assert!(
+            palette_score("bui", "opencode", "build02", "agent", "t")
+                > palette_score("bui", "opencode", "rebuild", "agent", "t")
+        );
+        // A completely unrelated field still scores a minimal positive so it ranks after hits.
+        assert!(
+            palette_score("zzz", "opencode", "build02", "agent", "t")
+                < palette_score("code", "claude-code", "build02", "agent", "t")
+        );
     }
 
     /// No-op reorders (same slot, out of range, single tab) never change the list.
