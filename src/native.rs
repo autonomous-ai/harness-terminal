@@ -4703,13 +4703,39 @@ impl Application {
             } else {
                 String::new()
             };
+            // Per-row protection / activity badges, mirroring the fleet grid and tab-bar chrome so
+            // the triage reads a row's full shield state at a glance: busy output `!N`, muted `M`,
+            // pinned `🔒`, just-reconnected `↻`, and staged-input `⏳N`. The selected row is the one
+            // being read, so it isn't flagged busy (same rule as the grid/bar); it still shows its
+            // pin/mute/recover/queued badges.
+            let mut badges = String::new();
+            if !sel {
+                let busy_n = self.grew_delta.get(real).copied().unwrap_or(0);
+                if busy_n > 0 {
+                    badges.push_str(&format!(" · !{busy_n}"));
+                }
+            }
+            if self.recover_until.get(real).copied().flatten().is_some() {
+                badges.push_str(" ↻");
+            }
+            if self.pinned.get(real).copied().unwrap_or(false) {
+                badges.push('🔒');
+            }
+            if self.muted.get(real).copied().unwrap_or(false) {
+                badges.push_str(" M");
+            }
+            let clipped = self.app.tabs[real].pending_bytes();
+            if clipped > 0 {
+                badges.push_str(&format!(" ⏳{clipped}"));
+            }
             let line = format!(
-                "  {} · {} · {}{}{}{}",
+                "  {} · {} · {}{}{}{}{}",
                 s.meta.host,
                 name,
                 live,
                 idle_tag,
                 reason_tag,
+                badges,
                 if sel { " ◄" } else { "" }
             );
             let row_y = base_y + (row + 1) * line_px;

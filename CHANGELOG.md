@@ -11,6 +11,10 @@ entries record user-visible and architectural changes since the last tagged mile
   a bulk close — defeating the "marks required so a stray press is never destructive" guard. Marks
   now clear on grid close, matching the broadcast overlay's fresh-reset behavior.
 ### Added
+- **Peek rows carry the full shield/activity badges.** The fleet triage (`prefix+s`) now shows each
+  row's busy `!N`, muted `M`, pinned `🔒`, just-reconnected `↻`, and staged-input `⏳N` badges — the
+  same Chrome the grid and tab bar use — so a diver sees a row's mute/pin/protection state at a
+  glance instead of drilling in. The selected row stays un-flagged busy (you're reading it).
 - **Help + fleet-grid hint document the `n` triage hop.** The `prefix+?` help and the fleet grid's
   header now advertise `n` (next/prev trouble tile), so the recently-added walk matches the docs.
 - **Broadcast list pages with PgUp/PgDn.** The broadcast (`prefix+b`) target list now jumps a full
