@@ -1560,12 +1560,17 @@ impl Application {
         // glance what the pane is doing even when the window is minimized/unfocused. Only call
         // set_title when the string actually changed.
         if let Some(w) = &self.window {
-            let title = self
-                .app
-                .active_session()
-                .and_then(|s| s.live_title())
-                .unwrap_or_else(|| "harness-terminal".to_string());
-            let title = format!("{} — harness-terminal", title);
+            let title = match self.app.active_session() {
+                Some(s) => match s.live_title() {
+                    Some(t) => format!("{t} — harness-terminal"),
+                    None => s
+                        .meta
+                        .name
+                        .clone()
+                        .unwrap_or_else(|| format!("{}@{}", s.meta.engine, s.meta.host)),
+                },
+                None => "harness-terminal".to_string(),
+            };
             if title != self.window_title {
                 w.set_title(&title);
                 self.window_title = title;
@@ -5128,14 +5133,27 @@ impl Application {
         self.render_host_grid(fb, width, height, focused);
         self.app.active = prev;
 
-        // Sync the OS window title to its session's live OSC title, only when it changed (each
-        // set_title is a platform round-trip; the single-window path caches this the same way).
-        if let Some(t) = self.app.tabs.get(tab).and_then(|s| s.live_title()) {
-            let title = format!("{t} — harness-terminal");
-            if self.hosts[i].title != title {
-                self.hosts[i].window.set_title(&title);
-                self.hosts[i].title = title;
-            }
+        // Sync the OS window title to its session's live OSC title, falling back to the session's
+        // identity (custom name, else engine@host) so separate agent tabs are distinguishable in the
+        // system title-bar tab bar even before an engine announces a title. Only call set_title (a
+        // platform round-trip) when the resolved title actually changed.
+        let title = match self.app.tabs.get(tab) {
+            Some(s) => match s.live_title() {
+                Some(t) => format!("{t} — harness-terminal"),
+                None => {
+                    let label = s
+                        .meta
+                        .name
+                        .clone()
+                        .unwrap_or_else(|| format!("{}@{}", s.meta.engine, s.meta.host));
+                    format!("{label} — harness-terminal")
+                }
+            },
+            None => "harness-terminal".to_string(),
+        };
+        if self.hosts[i].title != title {
+            self.hosts[i].window.set_title(&title);
+            self.hosts[i].title = title;
         }
 
         // Present this window's own framebuffer.

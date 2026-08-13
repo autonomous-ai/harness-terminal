@@ -6,6 +6,16 @@ entries record user-visible and architectural changes since the last tagged mile
 ## Unreleased / 0.1.0 (in progress)
 
 ### Fixed
+- **Native-tab windows are now distinguishable in the system tab bar even before an agent announces
+  a title.** `render_host_window` only set each window's title when the session reported a live OSC
+  title, so otherwise every native tab just showed the generic "harness-terminal" and you couldn't
+  tell which agent was in which tab. Each window now falls back to the session's identity (custom
+  name, else `engine@host`) so separate agent tabs are readable at a glance. The single-window title
+  got the same identity fallback (and no longer reads the redundant "harness-terminal — harness-
+  terminal").
+
+
+### Fixed
 - **Mouse-wheel scroll to the bottom now returns the pane to live-follow.** The keyboard PgDn path
   cleared the "scrolled into history" pin once the view reached the live bottom, but the wheel path
   never did — so after wheel-scrolling up into history and back down to the latest line, the tab
