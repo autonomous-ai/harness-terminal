@@ -6,6 +6,9 @@ entries record user-visible and architectural changes since the last tagged mile
 ## Unreleased / 0.1.0 (in progress)
 
 ### Added
+- **The broadcast overlay shows which targets are down.** Each down row is flagged `○ down (reason)`
+  and the header counts `⏳N queued` among the selected targets, so a fan-out that will only land on
+  reconnect isn't mistaken for one every host received instantly.
 - **The hosts drill-in names why a pane is down.** Drilling into a host from the hosts overview
   (`prefix+.` → `→`) now shows each down session's reconnect reason beside it, matching the overview.
 - **The native status bar names which host is down.** When only one or two panes are down, the

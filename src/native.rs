@@ -3857,12 +3857,31 @@ impl Application {
     fn render_broadcast(&mut self, fb: &mut Framebuffer) {
         let (base_y, line_px) = self.overlay_base_y();
         let n = self.broadcast_targets.iter().filter(|&&t| t).count();
+        // How many of the currently-selected targets are down: their command won't run now, it'll be
+        // staged and flushed on reconnect. Surfacing it here prevents a silent "broadcast to 4" that
+        // a diver assumes all four received instantly.
+        let queued = self
+            .app
+            .tabs
+            .iter()
+            .enumerate()
+            .filter(|(i, s)| {
+                self.broadcast_targets.get(*i).copied().unwrap_or(false)
+                    && s.kind() != "pty"
+                    && !s.alive()
+            })
+            .count();
+        let qtag = if queued > 0 {
+            format!(" · ⏳{queued} queued")
+        } else {
+            String::new()
+        };
         let prompt = if self.broadcast_query.is_empty() {
-            format!("  send line to {n} of {} session{} (↑/↓ focus · Space=toggle · ⇧↑/⇧↓ history · Enter=broadcast · Esc=cancel)  ",
+            format!("  send line to {n} of {} session{}{qtag} (↑/↓ focus · Space=toggle · ⇧↑/⇧↓ history · Enter=broadcast · Esc=cancel)  ",
                 self.app.tabs.len(), if n == 1 { "" } else { "s" })
         } else {
             format!(
-                "  broadcast to {n} session{}: {} ▏",
+                "  broadcast to {n} session{}{qtag}: {} ▏",
                 if n == 1 { "" } else { "s" },
                 self.broadcast_query
             )
@@ -3882,9 +3901,27 @@ impl Application {
             let on = self.broadcast_targets.get(row).copied().unwrap_or(false);
             let mark = if on { "☑" } else { "☐" };
             let name = s.meta.name.clone().unwrap_or_else(|| s.meta.engine.clone());
-            let line = format!("  {} {} @ {}", mark, name, s.meta.host);
+            // A down target will only receive the command on reconnect — say so right on the row
+            // (and its reason), so the fan-out's fate is legible before Enter.
+            let down = s.kind() != "pty" && !s.alive();
+            let down_tag = if down {
+                let reason = s
+                    .down_reason()
+                    .unwrap_or_else(|| "reconnecting…".to_string());
+                let reason = clip_dots(&reason.trim().to_string(), 18);
+                if reason.is_empty() {
+                    "  ○ down".to_string()
+                } else {
+                    format!("  ○ down ({reason})")
+                }
+            } else {
+                String::new()
+            };
+            let line = format!("  {} {} @ {}{down_tag}", mark, name, s.meta.host);
             let color = if row == self.broadcast_sel {
                 WHITE
+            } else if down {
+                CHROME_ERR
             } else {
                 CHROME_DIM
             };
