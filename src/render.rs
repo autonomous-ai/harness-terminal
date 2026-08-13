@@ -1211,6 +1211,27 @@ pub fn scrollbar_geom(
     Some((thumb_top, thumb))
 }
 
+/// Map a click y-position (pixels, top-down) on the scrollbar track to the display offset that
+/// should become the view. Linear jump-to-position, iTerm2 scrollbar semantics: clicking the top
+/// shows the oldest lines (offset = history), clicking the bottom snaps to the live view
+/// (offset 0), and anywhere in between scrolls proportionally. `track_h` is the track height in
+/// px, `hist` the scrollback line count, `viewport` the visible screen lines. Returns an offset in
+/// [0, hist].
+pub fn scroll_from_track_y(y_px: f64, track_h: usize, hist: usize, viewport: usize) -> i32 {
+    if track_h == 0 || hist == 0 {
+        return 0;
+    }
+    let total = hist + viewport;
+    if total <= viewport {
+        return 0;
+    }
+    let yf = y_px.clamp(0.0, track_h as f64);
+    let scrollable = total - viewport;
+    let top = ((yf / track_h as f64) * scrollable as f64).round() as usize;
+    let scrolled = hist.saturating_sub(top).min(hist);
+    scrolled as i32
+}
+
 /// Extract the text of one grid line (history or visible) as a String, for case-insensitive search.
 fn line_text(term: &Term<Listener>, line: i32) -> String {
     let grid = term.grid();
@@ -1474,6 +1495,23 @@ mod tests {
         assert_eq!(scrollbar_geom(0, 40, 0, 0), None);
         assert!(scrollbar_geom(5, 40, 0, 600).is_some()); // tiny overflow still shows
         assert_eq!(scrollbar_geom(100, 0, 0, 600), None); // degenerate
+    }
+
+    #[test]
+    fn scroll_from_track_maps_click_to_offset() {
+        let (hist, view, track) = (4000usize, 40usize, 600usize);
+        // Top of track = oldest line (offset == hist); bottom = live (offset 0).
+        assert_eq!(scroll_from_track_y(0.0, track, hist, view), hist as i32);
+        assert_eq!(scroll_from_track_y(track as f64, track, hist, view), 0);
+        // Middle of the track scrolls to the middle, within the [0, hist] range.
+        let mid = scroll_from_track_y(track as f64 / 2.0, track, hist, view);
+        assert!((mid as usize) <= hist && mid > 0 && mid < hist as i32);
+        // No history -> always 0; degenerate track -> 0.
+        assert_eq!(scroll_from_track_y(50.0, track, 0, view), 0);
+        assert_eq!(scroll_from_track_y(50.0, 0, hist, view), 0);
+        // Clamping: a click above/off the track clamps to the top, below to the bottom.
+        assert_eq!(scroll_from_track_y(-10.0, track, hist, view), hist as i32);
+        assert_eq!(scroll_from_track_y(1e9, track, hist, view), 0);
     }
 
     #[test]

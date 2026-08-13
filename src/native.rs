@@ -7787,6 +7787,41 @@ impl Application {
         }
     }
 
+    /// A left-press on the scrollbar track jumps the view to that position (iTerm2-style), instead
+    /// of selecting text in the rightmost column. Only active in the single-window chrome path (the
+    /// scrollbar overlays the grid's right edge there); native-tab mode and focus mode are left
+    /// alone. Returns true when the click was consumed as a scrollbar jump.
+    fn scrollbar_click(&mut self, x: f64, y: f64) -> bool {
+        if self.focus || self.native_tabs {
+            return false;
+        }
+        let Some(active) = self.app.active_session() else {
+            return false;
+        };
+        // The scrollbar occupies the far right few px of the grid; widen the hit zone a little so
+        // a click aimed at it lands without needing pixel precision.
+        if x < (self.size.width as f64) - 12.0 {
+            return false;
+        }
+        let handled = {
+            let mut g = active.term.lock();
+            let hist = g.grid().history_size();
+            if hist == 0 {
+                false
+            } else {
+                let viewport = g.screen_lines().max(1);
+                let track_h = (self.size.height as usize).max(1);
+                let scrolled = crate::render::scroll_from_track_y(y, track_h, hist, viewport);
+                use alacritty_terminal::grid::Scroll;
+                let cur = g.grid().display_offset() as i32;
+                g.grid_mut().scroll_display(Scroll::Delta(scrolled - cur));
+                active.set_scrolled(true);
+                true
+            }
+        };
+        handled
+    }
+
     /// Clear the "scrolled into history" pin once the view reaches the live bottom (offset 0), so a
     /// user who wheel-scrolled down to the latest line is back in live-follow and the status label
     /// stops claiming the pane is pinned in history. A no-op when the offset can't go lower (already
@@ -9822,6 +9857,14 @@ impl ApplicationHandler for Application {
                                 }
                                 return;
                             }
+                        }
+                        // A press on the scrollbar jumps the view to that position; otherwise
+                        // fall through to text selection in the grid.
+                        if self.scrollbar_click(x, y) {
+                            if let Some(w) = &self.window {
+                                w.request_redraw();
+                            }
+                            return;
                         }
                         self.drag_tab = None;
                         self.mouse_press(x, y);

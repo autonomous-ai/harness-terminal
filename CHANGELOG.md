@@ -86,6 +86,11 @@ entries record user-visible and architectural changes since the last tagged mile
   a bulk close — defeating the "marks required so a stray press is never destructive" guard. Marks
   now clear on grid close, matching the broadcast overlay's fresh-reset behavior.
 ### Added
+- **The scrollbar is now clickable to jump (iTerm2-style).** A left-press on the right-edge thumb
+  track scrolls the view to that position — click the top to read the oldest line, the bottom to
+  snap back live, anywhere in between to skip there — instead of starting a text selection in the
+  far-right column. The click→offset mapping is a pure `scroll_from_track_y` helper, unit-tested;
+  native-tab and focus modes are untouched.
 - **Right-click fleet actions on any tab.** The context menu now offers **Interrupt (Ctrl-C)**,
   **Reconnect** (only when that pane is actually down), **Duplicate Session**, and **Mute / Unmute**
   alongside copy/paste — so a diver can stop, revive, or fork an agent without reaching for the
