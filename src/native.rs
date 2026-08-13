@@ -3518,10 +3518,20 @@ impl Application {
             self.font_px,
             CHROME_FG,
         );
+        let hint = if self.app.recent_hosts.is_empty() {
+            "  host[:port] = new engine · host[:port]/session = attach existing  ".to_string()
+        } else {
+            format!(
+                "  Tab = last {} host{} ({}) · host/session = attach existing · host = new engine  ",
+                self.app.recent_hosts.len(),
+                if self.app.recent_hosts.len() == 1 { "" } else { "s" },
+                self.app.recent_hosts.first().map(String::as_str).unwrap_or("")
+            )
+        };
         draw_text(
             fb,
             &mut self.cache,
-            "  host[:port] = new engine · host[:port]/session = attach existing  ",
+            &hint,
             32,
             base_y + 2 * line_px,
             self.font_px,
@@ -5089,6 +5099,22 @@ impl Application {
                 match key {
                     Key::Character(c) => self.app.remote_host.push_str(c),
                     Key::Named(n) => match n {
+                        // Tab cycles the host field through the remembered hosts (MRU) so a diver can
+                        // page back to a machine they connected to before without retyping the addr.
+                        winit::keyboard::NamedKey::Tab => {
+                            let hosts = &self.app.recent_hosts;
+                            if hosts.is_empty() {
+                                return;
+                            }
+                            let cur = self.app.remote_host.trim().to_string();
+                            let pos = hosts.iter().position(|h| h == &cur);
+                            let next = match pos {
+                                Some(i) => (i + 1) % hosts.len(),
+                                None => 0,
+                            };
+                            self.app.remote_host = hosts[next].clone();
+                            return;
+                        }
                         winit::keyboard::NamedKey::Enter => {
                             let raw = self.app.remote_host.trim();
                             // `host[:port]` = spawn a fresh engine; `host[:port]/session` = attach an

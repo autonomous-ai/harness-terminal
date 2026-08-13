@@ -6,6 +6,9 @@ entries record user-visible and architectural changes since the last tagged mile
 ## Unreleased / 0.1.0 (in progress)
 
 ### Added
+- **Remote-Attach lets you Tab through remembered hosts.** The overlay now cycles the host field
+  through your recent hosts (MRU) with `Tab`, and the hint names the last one — so reconnecting to a
+  machine you used before no longer requires retyping the address.
 - **Fleet-search results label renamed tabs with their engine.** Matches now read
   `name (engine)@host` (and drop the trailing `@` for local tabs), matching the peek list, so a
   cross-session search stays attributable after renaming.
