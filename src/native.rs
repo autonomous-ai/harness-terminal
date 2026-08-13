@@ -5133,58 +5133,80 @@ impl Application {
                         // Editing a fresh line leaves history recall.
                         self.hist_sel = None;
                     }
-                    Key::Named(n) => match n {
-                        winit::keyboard::NamedKey::Enter => {
-                            // Fan the line out to the MARKED sessions only, then close. Unchecked
-                            // sessions are left untouched — the whole point of targeting.
-                            let bytes = broadcast_bytes(&self.broadcast_query);
-                            if !bytes.is_empty() {
-                                for (i, s) in self.app.tabs.iter().enumerate() {
-                                    if self.broadcast_targets.get(i).copied().unwrap_or(false) {
-                                        s.write(&bytes);
+                    Key::Named(n) => {
+                        match n {
+                            winit::keyboard::NamedKey::Enter => {
+                                // Fan the line out to the MARKED sessions only, then close. Unchecked
+                                // sessions are left untouched — the whole point of targeting.
+                                let bytes = broadcast_bytes(&self.broadcast_query);
+                                if !bytes.is_empty() {
+                                    let mut sent = 0usize;
+                                    let mut queued = 0usize;
+                                    for (i, s) in self.app.tabs.iter().enumerate() {
+                                        if self.broadcast_targets.get(i).copied().unwrap_or(false) {
+                                            // Count live vs down targets so the confirm below can say
+                                            // how many landed now vs are staged for reconnect.
+                                            if s.alive() {
+                                                sent += 1;
+                                            } else {
+                                                queued += 1;
+                                            }
+                                            s.write(&bytes);
+                                        }
                                     }
+                                    // Confirm the fan-out right away. A command to a live pane ran now;
+                                    // one to a down pane is staged and flushes on reconnect — the diver
+                                    // shouldn't assume every target received it instantly.
+                                    self.flash = Some((
+                                        if queued > 0 {
+                                            format!("broadcast to {sent} · {queued} queued on reconnect")
+                                        } else {
+                                            format!("broadcast to {sent}")
+                                        },
+                                        std::time::Instant::now(),
+                                    ));
+                                    // Remember what we sent so the next broadcast pre-fills it (a repeat
+                                    // command to every host doesn't need retyping).
+                                    self.last_broadcast = self.broadcast_query.clone();
+                                    crate::restore::save_last_broadcast(&self.last_broadcast);
+                                    // Push it onto the MRU history (dedup + front + cap 16).
+                                    self.broadcast_hist.retain(|h| h != &self.broadcast_query);
+                                    self.broadcast_hist.insert(0, self.broadcast_query.clone());
+                                    self.broadcast_hist.truncate(16);
+                                    crate::restore::save_broadcast_history(&self.broadcast_hist);
                                 }
-                                // Remember what we sent so the next broadcast pre-fills it (a repeat
-                                // command to every host doesn't need retyping).
-                                self.last_broadcast = self.broadcast_query.clone();
-                                crate::restore::save_last_broadcast(&self.last_broadcast);
-                                // Push it onto the MRU history (dedup + front + cap 16).
-                                self.broadcast_hist.retain(|h| h != &self.broadcast_query);
-                                self.broadcast_hist.insert(0, self.broadcast_query.clone());
-                                self.broadcast_hist.truncate(16);
-                                crate::restore::save_broadcast_history(&self.broadcast_hist);
+                                self.broadcast_query.clear();
+                                self.hist_sel = None;
+                                self.app.overlay = Overlay::None;
                             }
-                            self.broadcast_query.clear();
-                            self.hist_sel = None;
-                            self.app.overlay = Overlay::None;
-                        }
-                        winit::keyboard::NamedKey::ArrowDown => {
-                            if mods.shift_key() {
-                                // Shift+Down recalls newer history.
-                                self.hist_down();
-                            } else {
-                                self.broadcast_sel = (self.broadcast_sel + 1)
-                                    .min(self.app.tabs.len().saturating_sub(1));
+                            winit::keyboard::NamedKey::ArrowDown => {
+                                if mods.shift_key() {
+                                    // Shift+Down recalls newer history.
+                                    self.hist_down();
+                                } else {
+                                    self.broadcast_sel = (self.broadcast_sel + 1)
+                                        .min(self.app.tabs.len().saturating_sub(1));
+                                }
                             }
-                        }
-                        winit::keyboard::NamedKey::ArrowUp => {
-                            if mods.shift_key() {
-                                // Shift+Up recalls older history.
-                                self.hist_up();
-                            } else {
-                                self.broadcast_sel = self.broadcast_sel.saturating_sub(1);
+                            winit::keyboard::NamedKey::ArrowUp => {
+                                if mods.shift_key() {
+                                    // Shift+Up recalls older history.
+                                    self.hist_up();
+                                } else {
+                                    self.broadcast_sel = self.broadcast_sel.saturating_sub(1);
+                                }
                             }
+                            winit::keyboard::NamedKey::Backspace => {
+                                self.broadcast_query.pop();
+                                self.hist_sel = None;
+                            }
+                            winit::keyboard::NamedKey::Escape => {
+                                self.broadcast_query.clear();
+                                self.app.overlay = Overlay::None;
+                            }
+                            _ => {}
                         }
-                        winit::keyboard::NamedKey::Backspace => {
-                            self.broadcast_query.pop();
-                            self.hist_sel = None;
-                        }
-                        winit::keyboard::NamedKey::Escape => {
-                            self.broadcast_query.clear();
-                            self.app.overlay = Overlay::None;
-                        }
-                        _ => {}
-                    },
+                    }
                     _ => {}
                 }
                 return;

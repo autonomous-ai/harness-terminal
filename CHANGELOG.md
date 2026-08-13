@@ -6,6 +6,10 @@ entries record user-visible and architectural changes since the last tagged mile
 ## Unreleased / 0.1.0 (in progress)
 
 ### Added
+- **Broadcast confirms the fan-out.** After `prefix+a`/`b`, a one-line flash says exactly how many
+  targets got the command now (`broadcast to N`) and — when any target is down — how many are staged
+  to flush on reconnect (`broadcast to N · M queued on reconnect`), so a command to a dead host is
+  never assumed lost or silently dropped.
 - **Down panes say *why* they're down.** `prefix+i` info now shows the last reconnect failure's
   reason (e.g. `tunnel connect 10.0.0.4: refused`), so a dropped agent reads as host-unreachable /
   auth-rejected / timeout instead of just "reconnect 3 · retry in 10s". The tab-bar/status line
