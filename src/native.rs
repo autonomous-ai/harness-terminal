@@ -4160,11 +4160,18 @@ impl Application {
             .iter()
             .filter(|t| t.kind() != "pty" && !t.alive())
             .count();
-        let header = if down_n > 0 {
-            format!("  peek · {down_n} down · ↑/↓ preview · n next down · Enter jump · Esc close  ")
+        // Panes that just came back (the transient `↻` badge) are worth a nod too, so the header
+        // reads the fleet's whole recent state, not just what's still down.
+        let rec_n = self.recover_until.iter().filter(|r| r.is_some()).count();
+        let rest = "· ↑/↓ preview · n next down · Enter jump · Esc close  ";
+        let header = if down_n > 0 && rec_n > 0 {
+            format!("  peek · {down_n} down · {rec_n} reconnected · {rest}")
+        } else if down_n > 0 {
+            format!("  peek · {down_n} down · {rest}")
+        } else if rec_n > 0 {
+            format!("  peek · {rec_n} reconnected · {rest}")
         } else {
-            "  peek · fleet healthy · ↑/↓ preview · n next down · Enter jump · Esc close  "
-                .to_string()
+            format!("  peek · fleet healthy · {rest}")
         };
         draw_text(
             fb,

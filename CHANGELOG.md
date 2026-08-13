@@ -6,6 +6,9 @@ entries record user-visible and architectural changes since the last tagged mile
 ## Unreleased / 0.1.0 (in progress)
 
 ### Added
+- **The peek header counts panes that just reconnected too.** Alongside the down count it now reads
+  `N reconnected` while the transient `↻` badge is showing, so the header tracks the fleet's recent
+  recovery, not just what's still down.
 - **Reconnect a whole host from its drill-in.** In the hosts drill-in (`prefix+.` → `→`), `r`
   force-reconnects every down pane on that host at once (the per-machine cousin of reconnect-all),
   and the header names the shortcut.
