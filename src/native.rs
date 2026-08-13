@@ -33,6 +33,13 @@ const CHROME_FG: (u8, u8, u8) = (0xcc, 0xcc, 0xcc);
 const CHROME_DIM: (u8, u8, u8) = (0x66, 0x66, 0x66);
 /// Muted red for the fleet-triage "N panes down" count — a host went dark, not a busy signal.
 const CHROME_ERR: (u8, u8, u8) = (0xf0, 0x6a, 0x6a);
+/// Status accent for a session that is actively producing output (busy) — warm amber so it reads
+/// as "in motion" from across the war-room, distinct from the attention blue and outage red.
+const CHROME_BUSY: (u8, u8, u8) = (0xf2, 0xb0, 0x4f);
+/// Status accent for a session that has gone quiet and is awaiting you (⌛) — attention blue.
+const CHROME_QUIET: (u8, u8, u8) = (0x6a, 0x9f, 0xf2);
+/// Status accent for a session that just reconnected (↻) — recovery green, all clear.
+const CHROME_RECOVER: (u8, u8, u8) = (0x4f, 0xc0, 0x7a);
 const WHITE: (u8, u8, u8) = (0xff, 0xff, 0xff);
 /// Elevated chrome surfaces (tab bar / status line panels) so the shell chrome reads as designed
 /// panels rather than text floating on the terminal background. Slightly darker than the theme's
@@ -3806,7 +3813,11 @@ impl Application {
         // details — a one-host micro-overview from a single tab's info panel.
         let host_norm = {
             let h = s.meta.host.clone();
-            if h.is_empty() { "local".to_string() } else { h }
+            if h.is_empty() {
+                "local".to_string()
+            } else {
+                h
+            }
         };
         let same = session_indices_for_host(
             self.app
@@ -4385,9 +4396,17 @@ impl Application {
             if ty + th > fb.height {
                 break;
             }
-            // A thin highlight border for the focused tile.
+            // A thin highlight border for the focused tile, tinted by the session's status so the
+            // war-room is scannable at a glance (down=red, busy=amber, quiet=blue, reconnecting=green).
+            // A local PTY reports no transport status and stays neutral; unaccented tiles fall back
+            // to the white active / dim idle border used before.
             let selected = idx == self.grid_sel;
-            let border = if selected { WHITE } else { CHROME_DIM };
+            let is_down = !s.alive() && s.kind() != "pty";
+            let busy_accent = idx != self.grid_sel && activity[idx];
+            let quiet_accent = idx != self.grid_sel && self.quiet_for(idx);
+            let recovering = self.recover_until.get(idx).copied().flatten().is_some();
+            let accent = status_accent(is_down, busy_accent, quiet_accent, recovering);
+            let border = accent.unwrap_or(if selected { WHITE } else { CHROME_DIM });
             for (bord_x, color) in [(tx, border), (tx + tw.saturating_sub(1), border)] {
                 for yy in ty..ty + th {
                     fb.set(bord_x, yy, argb(0xff, color.0, color.1, color.2));
@@ -4409,7 +4428,6 @@ impl Application {
             // `🔒` pinned, `M` muted.
             // Quiet and busy are mutually exclusive; down wins over both. The focused tile is the
             // one you're actively reading, so it's never flagged busy/quiet (same rule as the bar).
-            let is_down = !s.alive() && s.kind() != "pty";
             // A down tile should say *why* in the war-room, not just flash `○`: the reason the
             // hover tooltip carries (host unreachable / auth rejected / timeout) clipped to the
             // tile's own width. Local PTYs have no transport to diagnose and are skipped.
@@ -4492,7 +4510,7 @@ impl Application {
                 tx + 2,
                 ty + grow,
                 self.font_px,
-                if selected { WHITE } else { CHROME_DIM },
+                accent.unwrap_or(if selected { WHITE } else { CHROME_DIM }),
             );
             // Live near-tail lines, reversed (tail() is newest-first) so the tile reads top-to-bottom
             // as a terminal would — newest sits on the bottom row. Uses the grid's own foreground.
@@ -8009,6 +8027,25 @@ fn argb_to_rgb(argb: u32) -> (u8, u8, u8) {
     )
 }
 
+/// Map a fleet tile's status to its accent color, used to tint the focused tile's header/border so
+/// the war-room is scannable at a glance (down=red, busy=amber, quiet=blue, reconnecting=green).
+/// Precedence is down > busy > quiet so a dark pane is never mistaken for merely busy; a session
+/// flagged as both busy and awaiting you reads as busy. Local PTYs have no transport and report no
+/// down/quiet state, so they return the neutral `None`. Pure so the ordering rules are unit-tested.
+fn status_accent(is_down: bool, busy: bool, quiet: bool, recovering: bool) -> Option<(u8, u8, u8)> {
+    if is_down {
+        Some(CHROME_ERR)
+    } else if busy {
+        Some(CHROME_BUSY)
+    } else if quiet {
+        Some(CHROME_QUIET)
+    } else if recovering {
+        Some(CHROME_RECOVER)
+    } else {
+        None
+    }
+}
+
 fn host_color(host: &str) -> (u8, u8, u8) {
     // FNV-1a over the host; pick a hue from the warm-to-cool range and keep it readable on black.
     let h = host.bytes().fold(0x811c_9dc5u32, |acc, b| {
@@ -9168,8 +9205,8 @@ mod tests {
         grid_targets, grid_tile_at, group_notifications, host_color, host_engine_breakdown,
         host_tally, join_labels, move_slot, next_host_index, parse_remote_attach,
         reanchor_active_after_batch, recall_index, scroll_top, session_indices_for_host,
-        should_busy_nudge, swap_slot,
-        CmdShortcut, FleetMatch,
+        should_busy_nudge, status_accent, swap_slot, CmdShortcut, FleetMatch, CHROME_BUSY,
+        CHROME_ERR, CHROME_QUIET, CHROME_RECOVER,
     };
 
     use std::sync::Arc;
@@ -9747,6 +9784,26 @@ mod tests {
         );
         // Empty fleet → no hosts.
         assert!(host_tally(std::iter::empty()).is_empty());
+    }
+
+    /// Status accents follow a strict precedence so a dark pane is never mistaken for busy, and the
+    /// mapping stays scannable: down=red, busy=amber, quiet=blue, reconnecting=green, nothing
+    /// neutral. Recovering means the pane came back, so it tints even when otherwise quiet.
+    #[test]
+    fn status_accent_precedence() {
+        // Down always wins over busy / quiet / recovering — a dead pane reads as dead.
+        assert_eq!(status_accent(true, true, true, true), Some(CHROME_ERR));
+        assert_eq!(status_accent(true, false, false, false), Some(CHROME_ERR));
+        // Busy beats quiet, and recovering alone names itself.
+        assert_eq!(status_accent(false, true, true, false), Some(CHROME_BUSY));
+        assert_eq!(status_accent(false, true, false, false), Some(CHROME_BUSY));
+        assert_eq!(status_accent(false, false, true, false), Some(CHROME_QUIET));
+        assert_eq!(
+            status_accent(false, false, false, true),
+            Some(CHROME_RECOVER)
+        );
+        // Fully idle local session → neutral.
+        assert_eq!(status_accent(false, false, false, false), None);
     }
 
     /// Idle-age formatting stays compact and readable at every scale — seconds, minutes, hours,

@@ -11,6 +11,9 @@ entries record user-visible and architectural changes since the last tagged mile
   a bulk close — defeating the "marks required so a stray press is never destructive" guard. Marks
   now clear on grid close, matching the broadcast overlay's fresh-reset behavior.
 ### Added
+- **Fleet grid is color-coded by session status.** Each tile's border and header are tinted so the
+  war-room is scannable at a glance: down = red, busy/output = amber, quiet/awaiting-you = blue,
+  just-reconnected = green, idle local = neutral. The precedence (down > busy > quiet) is unit-tested.
 - **Info panel shows fleet context for the active machine.** `session_info` now reports how many
   sessions are open on the active session's host and how many are down, turning the per-tab details
   into a one-host micro-overview (for `build02` a diver sees the whole machine at a glance).
