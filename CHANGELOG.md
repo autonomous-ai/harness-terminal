@@ -6,6 +6,14 @@ entries record user-visible and architectural changes since the last tagged mile
 ## Unreleased / 0.1.0 (in progress)
 
 ### Fixed
+- **War-room and peek now show the same lingering unread count as the tab bar.** Previously the
+  fleet grid (`Ctrl+H e`) and peek (`Ctrl+H y`) only surfaced an agent's `!N` while it was producing
+  output *that very frame*, so a settled agent with output you hadn't seen vanished from the triage
+  lists (its `!N` lived only in the tab bar). Both now use the cumulative `unread` count, so a war-
+  room scan (and the peek list) expose every agent with something to read, matching the tab bar.
+  The live "producing now" signal stays on the grid's amber border accent; quiet tiles that also
+  have unread show `!N` first (the actionable "go look" signal), with the idle duration still in the
+  peek row and hover tooltip. Idle CPU is unaffected.
 - **The `!N` unread badge now actually means "new lines since you last looked."** Previously the
   count was a per-frame delta gated on the tab producing output *that very frame*, so a burst that
   settled (an agent that wrote 43 lines and paused) flashed `!43` for a split second and then

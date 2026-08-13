@@ -4545,17 +4545,17 @@ impl Application {
             } else {
                 String::new()
             };
-            let busy = activity
-                .get(idx)
-                .copied()
-                .unwrap_or(false)
-                .then_some(self.grew_delta.get(idx).copied().unwrap_or(0))
-                .unwrap_or(0);
+            // The `!N` glyph uses the cumulative unread count (like the tab-bar badge), not the
+            // per-frame delta: while a tile is streaming it still shows immediately, and once it
+            // settles the count lingers so a war-room scan exposes output you haven't seen even
+            // after the agent stopped writing. The live per-frame signal stays on the border accent
+            // (`busy_accent`) so "producing right now" still reads as motion.
+            let busy = self.unread.get(idx).copied().unwrap_or(0);
             let clipped = s.pending_bytes();
             let glyph = if is_down {
                 "○".to_string()
-            } else if idx != self.grid_sel && activity[idx] {
-                format!("!{}", busy)
+            } else if idx != self.grid_sel && busy > 0 {
+                format!("!{}", busy.min(999))
             } else if idx != self.grid_sel && self.quiet_for(idx) {
                 // A quiet tile says HOW long it's been awaiting you (⌛3m) — more legible in the
                 // war-room than a bare ⌛, so a diver sees at a glance which agents have been parked.
@@ -4810,9 +4810,12 @@ impl Application {
             // pin/mute/recover/queued badges.
             let mut badges = String::new();
             if !sel {
-                let busy_n = self.grew_delta.get(real).copied().unwrap_or(0);
+                // Lingering unread count (like the tab-bar `!N` badge), so a settled agent whose
+                // output you haven't seen still reads `!N` here rather than dropping the instant it
+                // stops writing — one triage list for every agent with something to show.
+                let busy_n = self.unread.get(real).copied().unwrap_or(0);
                 if busy_n > 0 {
-                    badges.push_str(&format!(" · !{busy_n}"));
+                    badges.push_str(&format!(" · !{}", busy_n.min(999)));
                 }
             }
             if self.recover_until.get(real).copied().flatten().is_some() {
