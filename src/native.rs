@@ -5600,9 +5600,11 @@ impl Application {
                                     self.grid_sel = i;
                                 }
                             }
-                        } else if let Some(m) = self.grid_marks.get_mut(self.grid_sel) {
-                            *m = !*m;
                         } else if ch == Some('b') {
+                            // `b` opens the broadcast overlay pre-scoped to the marked tiles (Space
+                            // is the only mark toggle, handled above). Without this explicit match
+                            // the letter was swallowed by a stray mark-toggle and broadcast-marked
+                            // was unreachable.
                             self.grid_broadcast_marked();
                         }
                     }

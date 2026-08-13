@@ -6,6 +6,9 @@ entries record user-visible and architectural changes since the last tagged mile
 ## Unreleased / 0.1.0 (in progress)
 
 ### Added
+- **Fixed: `b` in the fleet grid actually broadcasts the marked tiles.** It was dead code — a stray
+  branch toggled a tile's mark on any letter, so `b` never fired. Now, after marking tiles with
+  Space, `b` opens the broadcast overlay scoped to exactly those marked sessions.
 - **The broadcast overlay shows which targets are down.** Each down row is flagged `○ down (reason)`
   and the header counts `⏳N queued` among the selected targets, so a fan-out that will only land on
   reconnect isn't mistaken for one every host received instantly.
