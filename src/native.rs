@@ -4087,7 +4087,15 @@ impl Application {
             } else if idx != self.grid_sel && activity[idx] {
                 format!("!{}", busy)
             } else if idx != self.grid_sel && self.quiet_for(idx) {
-                "⌛".to_string()
+                // A quiet tile says HOW long it's been awaiting you (⌛3m) — more legible in the
+                // war-room than a bare ⌛, so a diver sees at a glance which agents have been parked.
+                let idle = std::time::Instant::now()
+                    - self
+                        .last_output
+                        .get(idx)
+                        .copied()
+                        .unwrap_or(std::time::Instant::now());
+                format!("⌛{}", fmt_duration(idle))
             } else {
                 String::new()
             };

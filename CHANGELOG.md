@@ -6,6 +6,9 @@ entries record user-visible and architectural changes since the last tagged mile
 ## Unreleased / 0.1.0 (in progress)
 
 ### Added
+- **The fleet grid shows how long a quiet tab has been waiting.** A `⌛` tile now reads `⌛3m`
+  (or `5s`/`2h`/`1d`), so the war-room tells you at a glance which agents have been parked the
+  longest — not just that one is idle.
 - **Copy-mode search says when there's no match.** `n`/`N` (and Enter after `/`) with a query that
   hits nothing now flash `copy: no match /…` instead of silently doing nothing, so a skipped jump is
   explained rather than leaving the diver wondering.
