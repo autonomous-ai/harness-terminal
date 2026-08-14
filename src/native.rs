@@ -2880,6 +2880,18 @@ impl Application {
         // recedes and the overlay's own text is readable instead of fighting bright agent output.
         if self.app.overlay != Overlay::None {
             fb.dim(0.38);
+            // After dimming, lay down a fully-opaque panel across the content region so the shell /
+            // agent text underneath is hidden entirely (not just dimmed to 38%). Without this, bright
+            // content (e.g. a `claude Code` banner, a build log) bleeds straight through at 38% and
+            // overlaps the overlay's own rows, making it unreadable — exactly the "overlay text sits
+            // on top of other text" report. The panel spans everything between the tab bar and the
+            // status line so it stays correct for overlays of any height.
+            let top = self.chrome_top();
+            let h = fb
+                .height
+                .saturating_sub(top)
+                .saturating_sub(self.chrome_bottom());
+            fill_rect(fb, 0, top, fb.width, h, CHROME_BG);
         }
         match self.app.overlay {
             Overlay::Palette => self.render_palette(fb),
