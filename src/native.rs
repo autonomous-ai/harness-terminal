@@ -373,6 +373,10 @@ struct Application {
     /// Last OS window title we set, so we only call set_title when it changes (each call is a
     /// platform round-trip).
     window_title: String,
+    /// Whether we've already honored a one-shot `HARNESS_DUMP_FRAME` write this run (frame dumps
+    /// are a debug/visual-review aid; we snapshot once so the hot path never rewrites a PNG every
+    /// frame).
+    dumped_frame: bool,
     /// Base font scale (1.0 = 14px). Zoom multiplies font/margins; persisted in restore.
     zoom: f32,
     /// Base font size in px from config (the size a fresh window opens at, before display-scale
@@ -660,6 +664,7 @@ impl Application {
             over_link: false,
             last_press: None,
             window_title: String::new(),
+            dumped_frame: false,
             zoom: crate::restore::load_zoom(),
             base_font,
             seen_history,
@@ -2189,6 +2194,10 @@ impl Application {
         // Render into the CPU framebuffer first (doesn't borrow the surface).
         self.frame = self.frame.wrapping_add(1);
         self.render(&mut fb);
+        if !self.dumped_frame {
+            crate::render::dump_fb_if_requested(&fb);
+            self.dumped_frame = true;
+        }
 
         // Sync the OS window title to the active tab's live OSC title so the fleet Diver sees at a
         // glance what the pane is doing even when the window is minimized/unfocused. Only call
@@ -7387,6 +7396,11 @@ impl Application {
         let mut fb = std::mem::take(&mut self.scratch_fb);
         for i in 0..n {
             self.render_host_window(i, i == active, &mut fb);
+            // One-shot `HARNESS_DUMP_FRAME` snapshot of the focused window for visual review.
+            if i == active && !self.dumped_frame {
+                crate::render::dump_fb_if_requested(&fb);
+                self.dumped_frame = true;
+            }
         }
         self.scratch_fb = fb;
         self.alias_active();

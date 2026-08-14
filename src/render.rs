@@ -24,6 +24,135 @@ pub const fn argb(a: u8, r: u8, g: u8, b: u8) -> Pixel {
     ((a as u32) << 24) | ((r as u32) << 16) | ((g as u32) << 8) | (b as u32)
 }
 
+// ── minimal PNG encoder (debug / visual-review aid) ─────────────────────────
+// Zero-dependency runtime image export: a `Framebuffer` is rendered to a valid RGB PNG using
+// *stored* (uncompressed) deflate blocks. This exists so a rendered frame can be dumped to disk
+// (`HARNESS_DUMP_FRAME=/path.png`) and inspected/reviewed, since the GUI can't be screenshotted
+// headlessly. Never touched on the hot path — it only runs when the env var is set. Pure and
+// round-trip unit-tested, so the emitted bytes are guaranteed loadable PNGs.
+
+fn png_crc32(data: &[u8]) -> u32 {
+    let mut crc: u32 = 0xffff_ffff;
+    for &b in data {
+        crc ^= b as u32;
+        for _ in 0..8 {
+            let m = (crc & 1) != 0;
+            crc >>= 1;
+            if m {
+                crc ^= 0xedb8_8320;
+            }
+        }
+    }
+    !crc
+}
+
+fn zlib_adler32(data: &[u8]) -> u32 {
+    const MOD: u32 = 65521;
+    let mut a: u32 = 1;
+    let mut b: u32 = 0;
+    for &byte in data {
+        a = (a + byte as u32) % MOD;
+        b = (b + a) % MOD;
+    }
+    (b << 16) | a
+}
+
+/// Compress `data` into a zlib stream using stored (uncompressed) deflate blocks — correct and
+/// dependency-free, at the cost of output size (fine for one-off frame dumps).
+fn zlib_stored(data: &[u8]) -> Vec<u8> {
+    let mut out = Vec::with_capacity(data.len() + data.len() / 65535 * 5 + 64);
+    out.push(0x78); // deflate, smallest window
+    out.push(0x01); // no preset dict, lowest compression flag
+    let mut pos = 0;
+    loop {
+        let remaining = data.len() - pos;
+        let chunk = remaining.min(65535);
+        let last = pos + chunk >= data.len();
+        // Stored block header: 1 byte (BFINAL + BTYPE=00), LEN (LE), NLEN (LE, ~LEN).
+        out.push(if last { 0x01 } else { 0x00 });
+        out.extend_from_slice(&(chunk as u16).to_le_bytes());
+        out.extend_from_slice(&(!(chunk as u16)).to_le_bytes());
+        out.extend_from_slice(&data[pos..pos + chunk]);
+        pos += chunk;
+        if last {
+            break;
+        }
+    }
+    out.extend_from_slice(&zlib_adler32(data).to_be_bytes());
+    out
+}
+
+/// Encode `rgb` (3 bytes/pixel, row-major, top-left origin) as a standalone PNG. Returns `None` if
+/// the buffer is too small for `width*height` pixels.
+pub fn encode_png_rgb(width: u32, height: u32, rgb: &[u8]) -> Option<Vec<u8>> {
+    let w = width as usize;
+    let h = height as usize;
+    if rgb.len() < w * h * 3 {
+        return None;
+    }
+    // Each scanline is prefixed by one filter byte (0 = None).
+    let mut raw = Vec::with_capacity(h * (w * 3 + 1));
+    for row in 0..h {
+        raw.push(0);
+        raw.extend_from_slice(&rgb[row * w * 3..(row + 1) * w * 3]);
+    }
+    fn chunk(out: &mut Vec<u8>, typ: &[u8; 4], data: &[u8]) {
+        out.extend_from_slice(&(data.len() as u32).to_be_bytes());
+        out.extend_from_slice(typ);
+        out.extend_from_slice(data);
+        let mut c = Vec::with_capacity(4 + data.len());
+        c.extend_from_slice(typ);
+        c.extend_from_slice(data);
+        out.extend_from_slice(&png_crc32(&c).to_be_bytes());
+    }
+    let mut out = Vec::with_capacity(raw.len() + 128);
+    out.extend_from_slice(&[0x89, b'P', b'N', b'G', 0x0d, 0x0a, 0x1a, 0x0a]);
+    let mut ihdr = Vec::with_capacity(13);
+    ihdr.extend_from_slice(&width.to_be_bytes());
+    ihdr.extend_from_slice(&height.to_be_bytes());
+    ihdr.push(8); // bit depth
+    ihdr.push(2); // colour type: truecolour RGB
+    ihdr.push(0); // compression method
+    ihdr.push(0); // filter method
+    ihdr.push(0); // interlace: none
+    chunk(&mut out, b"IHDR", &ihdr);
+    let idat = zlib_stored(&raw);
+    chunk(&mut out, b"IDAT", &idat);
+    chunk(&mut out, b"IEND", &[]);
+    Some(out)
+}
+
+/// Convert a `Framebuffer`'s ARGB pixels to RGB (dropping the alpha byte) and encode as PNG bytes.
+pub fn encode_fb_png(fb: &Framebuffer) -> Option<Vec<u8>> {
+    let w = fb.width;
+    let h = fb.height;
+    if w == 0 || h == 0 {
+        return None;
+    }
+    let mut rgb = Vec::with_capacity(w * h * 3);
+    for &p in &fb.pixels {
+        rgb.push(((p >> 16) & 0xff) as u8);
+        rgb.push(((p >> 8) & 0xff) as u8);
+        rgb.push((p & 0xff) as u8);
+    }
+    encode_png_rgb(w as u32, h as u32, &rgb)
+}
+
+/// If `HARNESS_DUMP_FRAME` names a non-empty path, write `fb` there as a PNG. A no-op otherwise —
+/// call once per process (the caller owns the once-per-run guard), since a running app reuses this
+/// buffer every frame.
+pub fn dump_fb_if_requested(fb: &Framebuffer) {
+    let Ok(path) = std::env::var("HARNESS_DUMP_FRAME") else {
+        return;
+    };
+    if path.is_empty() {
+        return;
+    }
+    if let Some(bytes) = encode_fb_png(fb) {
+        let _ = std::fs::write(&path, bytes);
+    }
+}
+
 /// A CPU framebuffer. `[y*width + x]`.
 #[derive(Default)]
 pub struct Framebuffer {
@@ -2136,5 +2265,125 @@ mod tests {
         render(&term, b"\x1b[31mwaiting for agent  .\x1b[0m");
         let g3 = term.lock();
         assert_ne!(visible_signature(&g3), s2);
+    }
+
+    /// A tiny framebuffer round-trips through the PNG encoder byte-for-byte: the IDAT inflates back
+    /// to the exact scanlines (filter byte + RGB), the header is structurally valid, and it is
+    /// standard truecolour 8-bit. This guarantees `dump_fb_if_requested` output is always loadable.
+    fn inflate_stored(data: &[u8]) -> Vec<u8> {
+        let mut out = Vec::new();
+        let mut pos = 2; // skip 2-byte zlib header
+        loop {
+            let bfinal = data[pos] & 1;
+            let btype = (data[pos] >> 1) & 3;
+            assert_eq!(btype, 0, "pnf encoder emits stored (BTYPE=00) blocks");
+            pos += 1;
+            let len = u16::from_le_bytes([data[pos], data[pos + 1]]) as usize;
+            pos += 4; // skip LEN's NLEN
+            out.extend_from_slice(&data[pos..pos + len]);
+            pos += len;
+            if bfinal == 1 {
+                break;
+            }
+        }
+        out
+    }
+
+    #[test]
+    fn png_encoder_roundtrips_rgb_pixels() {
+        let (w, h) = (3u32, 2u32);
+        let rgb = vec![
+            255, 0, 0, 0, 255, 0, 0, 0, 255, // red, green, blue
+            255, 255, 0, 0, 255, 255, 255, 0, 255, // yellow, cyan, magenta
+        ];
+        let png = encode_png_rgb(w, h, &rgb).unwrap();
+        assert_eq!(&png[..8], &[0x89, b'P', b'N', b'G', 0x0d, 0x0a, 0x1a, 0x0a]);
+        // Walk chunks.
+        let mut pos = 8;
+        let mut idat = Vec::new();
+        let mut saw_ihdr = false;
+        let mut saw_iend = false;
+        while pos + 8 <= png.len() {
+            let len =
+                u32::from_be_bytes([png[pos], png[pos + 1], png[pos + 2], png[pos + 3]]) as usize;
+            let typ = &png[pos + 4..pos + 8];
+            let data = &png[pos + 8..pos + 8 + len];
+            match typ {
+                b"IHDR" => {
+                    assert_eq!(&data[..4], &w.to_be_bytes());
+                    assert_eq!(&data[4..8], &h.to_be_bytes());
+                    assert_eq!(data[8], 8);
+                    assert_eq!(data[9], 2); // truecolour RGB
+                    saw_ihdr = true;
+                }
+                b"IDAT" => idat.extend_from_slice(data),
+                b"IEND" => saw_iend = true,
+                _ => {}
+            }
+            pos += 12 + len;
+        }
+        assert!(saw_ihdr && saw_iend, "PNG must have IHDR and IEND");
+        let raw = inflate_stored(&idat);
+        let mut expected = Vec::new();
+        for row in 0..h as usize {
+            expected.push(0);
+            expected.extend_from_slice(&rgb[row * (w as usize) * 3..(row + 1) * (w as usize) * 3]);
+        }
+        assert_eq!(raw, expected);
+    }
+
+    /// Debug/visual-review aid: render a small representative fleet grid and, when
+    /// `HARNESS_DUMP_FRAME` names a path, write it there as a PNG. Normal test runs skip it.
+    #[test]
+    fn dump_sample_grid_frame_when_requested() {
+        use alacritty_terminal::sync::FairMutex;
+        use alacritty_terminal::term::{Config, Term};
+        use alacritty_terminal::vte::ansi::{Processor, StdSyncHandler};
+        let size = crate::session::TermSize { lines: 20, cols: 88 };
+        let term = FairMutex::new(Term::new(Config::default(), &size, Listener::default()));
+        let mut bytes: Vec<u8> = Vec::new();
+        bytes.extend_from_slice(
+            "\x1b[1;38;2;120;120;255mHARNESS-TERMINAL  fleet grid  \u{2022} 4 sessions\x1b[0m\r\n"
+                .as_bytes(),
+        );
+        let palette = [31u8, 32, 33, 34, 35, 36];
+        for (i, m) in [
+            "claude@alpha  idling  \u{2014} waiting for input",
+            "codex@beta   BUSY     \u{2014} 12 unread (linting the diff)",
+            "pi@gamma     quiet    \u{2014} 3 unread",
+            "hermes@delta down     \u{2014} retry in 11s",
+        ]
+        .iter()
+        .enumerate()
+        {
+            bytes.extend_from_slice(format!("\x1b[{color}m\u{25cf} {m}\x1b[0m\r\n", color = palette[i]).as_bytes());
+        }
+        bytes.extend_from_slice(b"\x1b[38;2;255;200;0m$ \x1b[0mclaude review the diff\r\n");
+        bytes.extend_from_slice("\x1b[32m\u{2713} 12 files linted, 0 errors\r\n\x1b[0m".as_bytes());
+        bytes.extend_from_slice(b"\x1b[31mo codex@beta  DISCONNECTED\r\n\x1b[0m");
+        {
+            let mut p: Processor<StdSyncHandler> = Processor::default();
+            p.advance(&mut *term.lock(), &bytes);
+        }
+        let (cw, ch) = (10u32, 20u32);
+        let mut fb = Framebuffer::new(size.cols * cw as usize, size.lines * ch as usize);
+        let mut cache = GlyphCache::load();
+        {
+            let g = term.lock();
+            draw_grid(
+                &mut fb,
+                &g,
+                cw,
+                ch,
+                14,
+                &mut cache,
+                &Colors::default(),
+                None,
+                &[],
+                None,
+                None,
+            );
+        }
+        dump_fb_if_requested(&fb);
     }
 }
